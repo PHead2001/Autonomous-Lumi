@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-The pixel-confidence correction is implemented: intended geometry-assisted handles and `inspect` are retained, with confidence calibrated from paired actual RGB/private-mask evidence. Weak/dim/small/cluttered eligible candidates remain LOW/uncertain; hidden/out-of-view geometry stays ineligible. **248/248 offline tests**, lint/build and actual attention **2/2** passed. Independent renderer/consumer reviews are clean. Latest hosted review is pending. No new paid calls were made, and all six existing paid bundles still replay with exact canonical results.
+The pixel-confidence correction is implemented: intended geometry-assisted handles and `inspect` are retained, with confidence calibrated from paired actual RGB/private-mask evidence. Weak/dim/small/cluttered eligible candidates remain LOW/uncertain; hidden/out-of-view geometry stays ineligible. **248/248 offline tests**, lint/build and actual attention **2/2** passed before the final low-signal correction; its affected checks are recorded below. Independent renderer/consumer reviews are clean. Hosted review of source `9fc8dbb` completed **PASS**, with no findings and no unresolved findings. Subsequent `fe5e04c` is documentation-only and is not claimed as reviewed source. PR #8 remains open and unmerged. No new paid calls were made, and all six existing paid bundles still replay with exact canonical results.
 
 ## Pixel-confidence correction: actual evidence
 
@@ -28,7 +28,7 @@ A focused review found a low-signal loophole: luminance 40/4 gave absolute contr
 | Existing paid artifacts | Six ZIPs exact offline canonical **PASS**; no new paid calls |
 | Renderer verification after correction | Initial **7/8**: one outdated test expected grounding without pixel metadata, not cleanup/runtime failure. Corrected affected test **1/1 PASS** with admitted RGB/mask/camera/complete-qualification proof; no full clean 8/8 rerun claimed |
 | Low-signal review correction | 24 affected checks, actual pixel **2/2**, delayed **1/1**, TypeScript/lint and targeted review clean; `pixel-confidence-review-fix-unit.log`, `pixel-confidence-actual-review-fix.log`, `pixel-confidence-delayed-capture-review-fix.log` |
-| Latest hosted review | **PENDING** for the new patch; previous hosted approval below applies to historical code |
+| Latest hosted review | **PASS**, source `9fc8dbb`: no findings or unresolved findings; later `fe5e04c` documentation-only, not claimed as reviewed source |
 
 Paths without a prefix in this table are under `diagnostics/`. Missing/corrupt paired evidence produces zero handles and an explicit operational failure, rather than falling back to geometry-only confidence. The private mask never becomes model evidence. Controlled fixtures demonstrate this bounded heuristic, not broad perceptual accuracy.
 
@@ -36,7 +36,7 @@ Cleanup diagnosis passed **13/13** focused checks (actual Windows query **469 ms
 
 ## Previous profile acceptance (historical)
 
-Previous paid acceptance passed: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. That review and acceptance apply to the previous profile; the current correction has separate checks above and its latest hosted review remains pending. Merging remains the owner's action.
+Previous paid acceptance passed: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. That review and acceptance apply to the previous profile; the current correction has separate checks above and clean hosted review of source `9fc8dbb`. Merging remains the owner's action.
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
