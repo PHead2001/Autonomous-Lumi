@@ -47,7 +47,7 @@ async function fixture(probe=false){
   const clock={now:1000};
   const cognition=new CognitionCoordinator(settings,providers,manager,()=>current,'mock-history',()=>clock.now);
   const automatic=new AutomaticCaptureCoordinator(manager,()=>current,()=>clock.now,(r,i)=>cognition.selectedCapture(r,i));
-  return {directory,runtime,renderer,manager,providers,cognition,automatic,clock,retire:()=>{current=false;},close:async()=>{automatic.close();cognition.close([runtime]);await manager.close();await runtime.close();await rm(directory,{recursive:true,force:true});}};
+  return {directory,runtime,renderer,manager,providers,cognition,automatic,clock,settings,retire:()=>{current=false;},close:async()=>{automatic.close();cognition.close([runtime]);await manager.close();await runtime.close();await rm(directory,{recursive:true,force:true});}};
 }
 async function selected(f:Awaited<ReturnType<typeof fixture>>){
   f.automatic.pump([f.runtime]);const request=f.manager.view(f.runtime.target).latest!;
@@ -118,6 +118,23 @@ test('MOCK terminal result waits for ordered queue capacity without dropping or 
     assert.equal(f.runtime.simulation.checkpoint().pendingInputs.filter(i=>i.command.type==='cognition_result').length,1);
     f.runtime.simulation.step();const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5)throw new Error();assert.equal(cp.cognition.requests[0].result?.outcome,'success');assert.equal(f.providers.calls.length,1);
   }finally{await f.close();}
+});
+test('MOCK restored host derives configured world cadence from accepted checkpoint requests',async()=>{
+  const f=await fixture();let restored:BranchRuntime|undefined;
+  try{
+    f.settings.limits.minWorldIntervalSeconds=20;
+    await selected(f);f.cognition.pump([f.runtime]);f.runtime.simulation.step();f.cognition.pump([f.runtime]);f.providers.finish();await turn();f.runtime.simulation.step();
+    while(f.runtime.simulation.state.tick<100)f.runtime.simulation.step();
+    restored=new BranchRuntime({worldId:f.runtime.target.worldId,branchId:f.runtime.target.branchId,historyId:'mock-history',mode:'EXPERIMENT',checkpoint:f.runtime.checkpoint(),directory:f.directory});await restored.prepare();
+    const fresh=new CognitionCoordinator(f.settings,f.providers,f.manager,()=>true,'mock-history',()=>1_000_000);
+    const intent={id:2,createdTick:100,expiresTick:900,reasons:['activity_outcome' as const],triggers:[{reason:'activity_outcome' as const,tick:100,parentSequence:null}],parentSequence:null,status:'pending' as const,captureId:null,requestedTick:null};
+    const before=restored.simulation.checkpoint();if(before.schemaVersion!==5)throw new Error();assert.ok(before.tick>=before.cognition.nextRequestTick,'fixed local cooldown has elapsed');
+    assert.equal(fresh.selectedCapture(restored,intent),false,'a new host must retain the configured 20-second world request interval');
+    const nextTick=before.cognition.requests[0].requestedTick+20*before.config.hz;
+    while(restored.simulation.state.tick<nextTick)restored.simulation.step();
+    assert.equal(fresh.selectedCapture(restored,{...intent,createdTick:nextTick}),true,'a fresh eligible capture becomes available at the recorded request deadline');
+    assert.equal(f.providers.calls.length,1,'cadence inspection never redispatches the completed request');fresh.close([restored]);
+  }finally{await restored?.close();await f.close();}
 });
 test('MOCK changed 256 probe obtains an ordered selected 512 followup before interpretation',async()=>{
   const f=await fixture(true);

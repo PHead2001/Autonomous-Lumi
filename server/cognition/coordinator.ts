@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BranchRuntime } from '../branch-runtime.js';
+import type { CheckpointV5 } from '../simulation.js';
 import { hashCanonical } from '../canonical.js';
 import type { CaptureManager } from '../vision/capture-manager.js';
 import type { ActiveTarget } from '../../shared/lab-protocol.js';
@@ -30,10 +31,14 @@ export class CognitionCoordinator {
     const cp=runtime.simulation.checkpoint();
     return cp.schemaVersion===5&&(intent.reasons.some(reason=>selectedReasons.includes(reason))||intent.reasons.includes('uncertainty_probe')&&cp.cognition.observationRequestedTick!==null&&intent.createdTick>=cp.cognition.observationRequestedTick);
   }
+  private lastMainRequestWorld(runtime:BranchRuntime,checkpoint:CheckpointV5):number {
+    const recorded=checkpoint.cognition.requests.reduce((latest,state)=>state.request.purpose==='interpretation'?Math.max(latest,state.requestedTick/checkpoint.config.hz):latest,-Infinity);
+    return Math.max(recorded,this.lastWorld.get(key(runtime.target))??-Infinity);
+  }
   selectedCapture(runtime:BranchRuntime,intent:CaptureIntent):boolean {
     if(this.closed||!runtime.recorder||!this.permittedRuntime(runtime)||!this.config.main.available||!this.current(runtime.target)||!this.eligible(runtime,intent))return false;
-    const cp=runtime.simulation.checkpoint(),now=this.monotonicMs(),scope=key(runtime.target);
-    return cp.schemaVersion===5&&runtime.simulation.state.tick>=cp.cognition.nextRequestTick&&this.work.size<this.config.limits.maxConcurrent+this.config.limits.maxQueued&&now-this.lastRealMs>=this.config.limits.minRealIntervalMs&&runtime.simulation.state.time-(this.lastWorld.get(scope)??-Infinity)>=this.config.limits.minWorldIntervalSeconds;
+    const cp=runtime.simulation.checkpoint(),now=this.monotonicMs();
+    return cp.schemaVersion===5&&runtime.simulation.state.tick>=cp.cognition.nextRequestTick&&this.work.size<this.config.limits.maxConcurrent+this.config.limits.maxQueued&&now-this.lastRealMs>=this.config.limits.minRealIntervalMs&&runtime.simulation.state.time-this.lastMainRequestWorld(runtime,cp)>=this.config.limits.minWorldIntervalSeconds;
   }
   private submit(runtime:BranchRuntime,result:CognitionResultCommand):boolean {
     if(!this.current(runtime.target))return false;
@@ -79,7 +84,7 @@ export class CognitionCoordinator {
         }catch{this.lastFailure='selected_observation_unavailable';this.seen.set(scope,capture.captureId);continue;}
       }
       const now=this.monotonicMs();
-      if(runtime.simulation.state.tick<cp.cognition.nextRequestTick||now-this.lastRealMs<this.config.limits.minRealIntervalMs||runtime.simulation.state.time-(this.lastWorld.get(scope)??-Infinity)<this.config.limits.minWorldIntervalSeconds)continue;
+      if(runtime.simulation.state.tick<cp.cognition.nextRequestTick||now-this.lastRealMs<this.config.limits.minRealIntervalMs||runtime.simulation.state.time-this.lastMainRequestWorld(runtime,cp)<this.config.limits.minWorldIntervalSeconds)continue;
       this.seen.set(scope,capture.captureId);
       try{
         const identity={...runtime.target,historyId:runtime.summary().historyId??this.historyId,mode:runtime.mode};

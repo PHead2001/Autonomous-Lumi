@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Offline implementation and an actual-renderer **MOCK provider** workflow have been verified. The latest supplied full offline run passed **231 tests**, lint and build; real Chromium attention checks passed **2/2**. Chrome inspected the normal dashboard and exported a COMPLETE replayable experiment bundle. **Actual OpenRouter image capability, positive provider-backed temporary LIVE admission/restart and the optional Decisions comparison remain unverified.** Mock evidence does not satisfy those acceptance requirements.
+Offline implementation and an actual-renderer **MOCK provider** workflow have been verified. The latest supplied full offline run passed **231 tests**, lint and build; real Chromium attention checks passed **2/2**. Chrome inspected the normal dashboard and exported a COMPLETE replayable experiment bundle. **Actual OpenRouter image capability, positive provider-backed temporary LIVE admission/restart and the optional Decisions comparison remain unverified.** Mock evidence does not satisfy those acceptance requirements. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) is open and unmerged with these paid-acceptance gaps explicit; no hosted review is claimed.
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
@@ -16,7 +16,7 @@ See [Multimodal interpretation and experience](multimodal-experience.md) for con
 
 The actual attention/image check measured decoded RGB difference approximately **0.0133** for visible material change; the observed automatic frame was captured at tick **1** and received at tick **115**. This is actual rendering and scheduling evidence, not a provider interpretation result.
 
-Independent Astra review/fix/re-review accepted the queued-result delivery and selected 256→512 visual follow-up boundaries. A model-head action that incorrectly granted developer priority was fixed and passed **37 affected tests**, with clean targeted re-review. A subsequent provider world-scope fix passed **13 focused tests** and scoped lint; its affected host checks are still pending. The paid CLI's ordinary review also remains pending. The earlier full-suite result is not presented as a completed final verification of those pending follow-ups.
+Independent Astra review/fix/re-review accepted the queued-result delivery and selected 256→512 visual follow-up boundaries. A model-head action that incorrectly granted developer priority was fixed and passed **37 affected tests**, with clean targeted re-review. A subsequent provider world-scope fix passed **13 focused tests** and scoped lint. The CLI acceptance correction passed **9 host/verification tests**, TypeScript and lint, with clean targeted re-review. The latest restart/configured-world-cadence correction passed **8/8 host tests**, lint and TypeScript, with clean targeted re-review. The earlier full-suite result and these later affected checks are distinct evidence, rather than a claimed fresh full-suite rerun.
 
 ## Actual renderer plus explicitly MOCK interpretation
 
@@ -35,7 +35,9 @@ The accepted Chrome walkthrough selected experiment **mock-observation**, inspec
 
 Its capture tick was **6**, attention tick **26**, request tick **27**, and encoding tick **28**. The normalized `continue` action was executed locally, independently of successful experiment encoding. “Executed” means the local action started/continued or an intention was queued; it does not prove a completed physical outcome. The request's original capture is shown rather than whichever image became latest.
 
-The browser used the normal **Export diagnostic ZIP** control and received a COMPLETE result. This walkthrough does not establish an actual provider response or positive LIVE encoding. The full walking/audio/reconnect browser regression has not yet been performed for Phase 2c and is not claimed here.
+The browser used the normal **Export diagnostic ZIP** control and received a COMPLETE result. This walkthrough does not establish an actual provider response or positive LIVE encoding.
+
+The unchanged room viewer showed an upright fox girl with visible ears, tail, arms and hands. An idle “Taking a breath” state at **3:06** transitioned to wandering with changed position at **3:13**. The normal slam button enabled audio, but playback was not independently heard and transient door/ear motion was not captured reliably; no new rendered proof of those transients is claimed. Normal disconnect at **3:14** followed by reconnect returned to the same advancing world at **3:47**, with wandering continuing and no reset. The shortest remaining audio/transient check is to press **Slam the door**, listen for the impact and watch the door and ears.
 
 ## Actual dashboard bundle and exact offline replay
 
@@ -79,12 +81,12 @@ The harness bounds paid work to at most six main calls covering five image cases
 | Acceptance | Status |
 | --- | --- |
 | `2c-1` actual OpenRouter 512×512 visible/partial/dark/absent/hidden cases | **UNVERIFIED**, credential-dependent |
-| `2c-2` local action/outage boundary | Offline and mock integration coverage passed; affected provider world-scope host follow-up pending |
+| `2c-2` local action/outage boundary | Offline/mock and affected provider/host/CLI checks passed; targeted CLI and restart/cadence re-reviews clean |
 | `2c-3` inspected bundle and exact offline replay | **PASS for actual-renderer/MOCK experiment**; real-provider sequence not yet exercised |
 | `2c-4` actual provider-backed temporary LIVE admission/restart | **UNVERIFIED**; mock experiment encoding is not a substitute |
 | Optional Decisions comparison | **UNVERIFIED**; no benefit/adoption conclusion, normal LIVE use remains disabled |
-| Original viewer browser regression | Full Phase 2c walking/audio/reconnect pass pending |
-| Final independent/hosted review | Core boundary re-reviews clean; CLI ordinary review and final integrated review pending |
+| Original viewer browser regression | Upright avatar, walking/idle and advancing-world reconnect observed; audio unverified and no reliable new door/ear transient capture |
+| Final independent/hosted review | Core/CLI and restart/cadence targeted re-reviews clean. Draft PR #8 open/unmerged; hosted review not yet claimed |
 
 ## Material limits
 
