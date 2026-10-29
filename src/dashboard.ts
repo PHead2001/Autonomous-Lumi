@@ -6,6 +6,8 @@ import { runCapturedControl } from './dashboard-control';
 import type { WorldState } from '../shared/protocol';
 import type { HeadAction } from '../shared/vision-protocol';
 import type { CaptureMetadata, CaptureView } from '../shared/capture-protocol';
+import type { AttentionState } from '../shared/attention-protocol';
+import { eyePose } from '../shared/eye-pose';
 import { VisionCaptureDeadline, VisionRequestGate, displayedCapture, validateCaptureViewScope, visionScopeKey } from './dashboard-vision';
 
 interface TimelineRecord {
@@ -21,6 +23,7 @@ interface RecoveryStatus { historyId: string; status: 'fresh' | 'recovered' | 'o
 interface SavedCheckpoint { worldId: string; branchId: string; id: string; tick: number; mode: 'LIVE' | 'EXPERIMENT'; historyId: string | null; legacy: boolean }
 interface CheckpointCatalog { checkpoints: SavedCheckpoint[]; errors: { source: string; error: string }[] }
 interface DashboardBranch extends BranchSummary { state?: WorldState }
+interface AttentionView extends ActiveTarget { attention: AttentionState | null; automatic: Record<string, unknown> }
 
 const key = (target: { worldId: string; branchId: string }) => `${target.worldId}/${target.branchId}`;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -32,7 +35,7 @@ export function mountDashboard(): void {
   document.getElementById('app')!.innerHTML = `
     <header class="lab-header"><a class="brand" href="/">lumi<span> / experiment laboratory</span></a><a class="lab-return" href="/">Open LIVE viewer ↗</a></header>
     <main class="lab-main">
-      <div class="lab-heading"><div><p class="eyebrow">PHASE 2a · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, first-person sensor evidence, and the evidence behind them.</p></div><span class="lab-local">Local / private</span></div>
+      <div class="lab-heading"><div><p class="eyebrow">PHASE 2b · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, hearing, selective attention, and first-person sensor evidence.</p></div><span class="lab-local">Local / private</span></div>
       <div id="lab-message" class="lab-message" role="status" aria-live="polite">Connecting to the laboratory…</div>
       <section class="lab-selection lab-panel" aria-label="World and branch selection">
         <label class="lab-field lab-select-field">World / branch<select id="lab-branch" aria-label="World and branch"></select></label>
@@ -46,8 +49,18 @@ export function mountDashboard(): void {
         <article class="lab-panel lab-metric"><p class="lab-label">GENERIC ACTIVITY</p><strong id="lab-activity">—</strong><progress id="lab-progress" max="1" value="0"></progress><span id="lab-activity-detail">No activity</span></article>
         <article class="lab-panel lab-metric"><p class="lab-label">MODEL RESPONSE METRIC</p><strong>N/A</strong><span>world_seconds_per_model_response</span><small>No model calls exist.</small></article>
       </section>
+      <section class="lab-panel lab-attention" aria-labelledby="lab-attention-heading">
+        <div class="lab-section-title"><div><h2 id="lab-attention-heading">Hearing & selective attention</h2><p class="lab-note">Local sensor and motor decisions. Hearing a sound or obtaining an image does not identify its source or encode personal experience.</p></div><span id="lab-attention-status" class="lab-badge">Waiting</span></div>
+        <p id="lab-attention-scope" class="lab-note">Select a current branch/run.</p><p id="lab-attention-error" class="lab-note warning" role="status"></p>
+        <div class="lab-columns">
+          <div><h3>Received evidence · SIMULATED HEARING</h3><p id="lab-heard-summary" class="lab-note">No received sound in this run.</p><p id="lab-reflex-summary" class="lab-note">No reflex evidence loaded.</p><details><summary>Receiver-facing sound evidence</summary><pre id="lab-heard-json">No received evidence.</pre></details><details class="lab-attention-truth"><summary>Private source & propagation truth</summary><p class="lab-note">Exact positions, source identities and barriers are developer measurements. They are excluded from the received evidence above. Recorded traces may lag the current state while the writer flushes.</p><pre id="lab-sound-truth">No recorded source evidence loaded.</pre></details></div>
+          <div><h3>Local attention</h3><p id="lab-attention-decision" class="lab-note">No attention decision yet.</p><p id="lab-attention-commitment" class="lab-note">No commitment evidence.</p><p id="lab-attention-action" class="lab-note">No automatic head action.</p><details><summary>Decision factors & bounded adaptation</summary><pre id="lab-attention-json">No attention state.</pre></details></div>
+        </div>
+        <div class="lab-divider"></div><h3>Automatic capture policy</h3><p id="lab-auto-intent" class="lab-note">No capture intention.</p><p id="lab-auto-result" class="lab-note">No automatic sensor result.</p><div class="lab-auto-preview"><img id="lab-auto-image" alt="Frame associated with the latest automatic sensor result" hidden><p id="lab-auto-image-empty" class="lab-note">No successful automatic frame.</p></div><p id="lab-auto-frame" class="lab-note">Associated frames retain their original capture tick.</p><details><summary>Host admission, quotas & logical capture state</summary><pre id="lab-auto-json">No automatic capture state.</pre></details>
+        <details><summary>Experiment sound fixture</summary><p class="lab-note">Emit a labelled TEST STUB world sound only in the selected experiment. It propagates through the physical scene before the reflex and attention evaluate it. Coordinates below are private room units; strength and onset are normalized 0–1 game values. A paused experiment must step or resume to apply the queued emission.</p><button id="lab-sound-place" class="lab-button text experiment">Place source 1 unit ahead of the listening pose</button><div class="lab-inline"><label class="lab-field">Source X<input id="lab-sound-x" type="number" min="-20" max="20" step="0.1" value="0"></label><label class="lab-field">Source Y<input id="lab-sound-y" type="number" min="-20" max="20" step="0.1" value="2.4"></label><label class="lab-field">Source Z<input id="lab-sound-z" type="number" min="-20" max="20" step="0.1" value="0"></label><label class="lab-field">Strength<input id="lab-sound-intensity" type="number" min="0" max="1" step="0.05" value="1"></label><label class="lab-field">Suddenness<input id="lab-sound-suddenness" type="number" min="0" max="1" step="0.05" value="1"></label><label class="lab-field">Private fixture ID<input id="lab-sound-id" value="test-cue" maxlength="100" pattern="[A-Za-z0-9_-]+"></label><button id="lab-sound-emit" class="lab-button secondary experiment">Emit experiment sound</button></div><p class="lab-note">Repeat the same perceived cue to inspect habituation. Change its received strength, direction or onset to test renewed attention; changing only its private ID does not make it perceptually novel.</p></details>
+      </section>
       <section class="lab-panel lab-vision" aria-labelledby="lab-vision-heading">
-        <div class="lab-section-title"><div><h2 id="lab-vision-heading">Virtual Eyes</h2><p class="lab-note">An explicit capture from Lumi’s physical viewpoint. No model calls, attention, interpretation or personal memory are created.</p></div><span id="lab-vision-status" class="lab-badge">No capture</span></div>
+        <div class="lab-section-title"><div><h2 id="lab-vision-heading">Virtual Eyes</h2><p class="lab-note">Manual and bounded automatic captures from Lumi’s physical viewpoint. Sensor evidence can inform local attention; no semantic interpretation or personal memory is created.</p></div><span id="lab-vision-status" class="lab-badge">No capture</span></div>
         <p id="lab-vision-scope" class="lab-note">Select a current branch/run.</p>
         <div class="lab-vision-columns">
           <div>
@@ -106,6 +119,9 @@ export function mountDashboard(): void {
   let visionView: CaptureView | null = null, visionScope = '', visionDirty = true, visionLoading = false, visionError = '';
   const visionDeadline = new VisionCaptureDeadline();
   let visionAbort: AbortController | undefined;
+  const attentionGate = new VisionRequestGate();
+  let attentionView: AttentionView | null = null, attentionTrace: TimelineRecord[] = [], attentionScope = '', attentionLoading = false, attentionError = '', autoCaptureIdentity = '';
+  let attentionAbort: AbortController | undefined;
   const message = (value: string, error = false) => { text('lab-message', value); el('lab-message').classList.toggle('error', error); };
   const active = (): ActiveTarget => {
     if (!current) throw new Error('Select a branch first.');
@@ -131,6 +147,66 @@ export function mountDashboard(): void {
     // Applying selection is independent of rebuilding options: a restore response can
     // arrive after an overlapping refresh has already populated the new run.
     select.value = values.some(item => item.value === preferred) ? preferred : values[0]?.value ?? '';
+  }
+  function renderAttention() {
+    const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
+    if (identity !== attentionScope) {
+      attentionAbort?.abort(); attentionAbort = undefined; attentionLoading = false;
+      attentionScope = identity; attentionGate.select(target); attentionView = null; attentionTrace = []; attentionError = ''; autoCaptureIdentity = '';
+    }
+    const attention = attentionView?.attention, heard = attention?.lastReceived, decision = attention?.lastDecision, tick = current?.tick ?? 0;
+    text('lab-attention-scope', target ? `${target.worldId} / ${target.branchId} / ${target.runId} · current tick ${tick}` : 'No current branch/run selected.');
+    text('lab-attention-status', attentionError ? 'Evidence unavailable' : decision?.outcome ?? (attention ? 'Listening' : 'Waiting'));
+    el('lab-attention-status').classList.toggle('warning', !!attentionError);
+    text('lab-attention-error', attentionError);
+    text('lab-heard-summary', heard ? `Tick ${heard.tick} · received intensity ${format(heard.intensity, 3)} / onset ${format(heard.suddenness, 3)} · ${heard.bearingDegrees === null ? 'direction unresolved' : `bearing ${format(heard.bearingDegrees, 0)}° ± ${format(heard.directionUncertaintyDegrees, 0)}° relative to the listening head`} · distance ${heard.distanceBand}, uncertainty ${format(heard.distanceUncertainty, 2)}` : 'No received sound evidence in this run.');
+    text('lab-heard-json', heard ? JSON.stringify(heard, null, 2) : 'No received evidence. Exact source identity and coordinates are not supplied to hearing.');
+    const reflex = attentionTrace.filter(item => item.event_type === 'REFLEX_DECISION' || item.event_type === 'REFLEX_STATE');
+    text('lab-reflex-summary', reflex.length ? reflex.map(item => `Tick ${item.world_tick} · ${item.event_type}: ${item.outcome} · ${JSON.stringify(item.data)}`).join('\n') : 'No recent recorded reflex decision loaded. Reflexes evaluate received evidence immediately, independently of attention and rendering.');
+    text('lab-sound-truth', JSON.stringify(attentionTrace.filter(item => ['ACOUSTIC_EVENT', 'ACOUSTIC_PROPAGATION'].includes(item.event_type)), null, 2));
+    text('lab-attention-decision', decision ? `Tick ${decision.tick} · ${decision.outcome}: ${decision.reason} · score ${format(decision.score, 3)} · observation ${decision.observationId}` : 'No local attention decision yet.');
+    text('lab-attention-commitment', attention ? `Commitment ${Math.max(0, attention.commitmentUntilTick - tick)} ticks · attention cooldown ${Math.max(0, attention.cooldownUntilTick - tick)} ticks · developer priority ${Math.max(0, attention.developerUntilTick - tick)} ticks · ${attention.exposures.length} bounded exposure summaries.` : 'Attention state unavailable for this world version.');
+    const actionResult = attentionTrace.filter(item => item.event_type === 'ATTENTION_ACTION' || item.event_type.startsWith('HEAD_')).at(-1);
+    text('lab-attention-action', attention?.automaticActionId !== null && attention?.automaticActionId !== undefined ? `Automatic head action ${attention.automaticActionId} · originating observation ${attention.automaticObservationId ?? 'unavailable'}${attention.resumeActivity ? ' · generic activity will resume after investigation' : ''}` : actionResult ? `Latest recorded head outcome · tick ${actionResult.world_tick} · ${actionResult.event_type}: ${actionResult.outcome} · ${JSON.stringify(actionResult.data)}` : 'No automatic head action is currently active. Head outcomes remain in the scoped causal timeline.');
+    text('lab-attention-json', attention ? JSON.stringify({ decision, exposures: attention.exposures, commitmentUntilTick: attention.commitmentUntilTick, cooldownUntilTick: attention.cooldownUntilTick, developerUntilTick: attention.developerUntilTick, automaticActionId: attention.automaticActionId, automaticObservationId: attention.automaticObservationId, resumeActivity: attention.resumeActivity }, null, 2) : 'No attention state.');
+    const pending = attention?.pending, result = attention?.lastCapture;
+    text('lab-auto-intent', (pending ? `Intention ${pending.id} · ${pending.status} · reasons: ${pending.reasons.join(', ')}${pending.reasons.length > 1 ? ' (coalesced)' : ''} · created tick ${pending.createdTick}, expires ${pending.expiresTick}${pending.captureId ? ` · capture ${pending.captureId}` : ''}` : 'No pending automatic capture intention.') + (attention?.deferred ? ` Deferred intention ${attention.deferred.id} · reasons ${attention.deferred.reasons.join(', ')} · created tick ${attention.deferred.createdTick}.` : '') + (attention?.lastSuppression ? ` Latest suppression · tick ${attention.lastSuppression.tick}: ${attention.lastSuppression.reason} / ${attention.lastSuppression.cause}.` : ''));
+    text('lab-auto-result', result ? `Intention ${result.intentId} · ${result.outcome} · ${result.freshness} · captured tick ${result.capturedTick}, received tick ${result.receivedTick} · image difference ${result.difference === null ? 'N/A' : format(result.difference, 4)} · reasons ${result.reasons.join(', ')}` : 'No automatic result yet. A failed or stale frame does not establish that a source is absent.');
+    text('lab-auto-json', attentionView ? JSON.stringify({ host: attentionView.automatic, pending: pending ?? null, deferred: attention?.deferred ?? null, lastResult: result ?? null, lastSuppression: attention?.lastSuppression ?? null, captureCooldownUntilTick: attention?.captureCooldownUntilTick, capturesInWindow: attention?.capturesInWindow, windowStartTick: attention?.captureWindowStartTick, retryAfterTick: attention?.retryAfterTick, failureCount: attention?.failureCount, nextProbeTick: attention?.nextProbeTick, baselineCapturedTick: attention?.baseline?.capturedTick ?? null, config: attention?.config }, null, 2) : 'No automatic capture state.');
+    const latestAutomatic = pending?.captureId ?? result?.captureId ?? '';
+    const automaticIdentity = latestAutomatic ? `${identity}/${latestAutomatic}/${pending?.status ?? ''}/${result?.outcome ?? ''}` : '';
+    if (automaticIdentity !== autoCaptureIdentity) { autoCaptureIdentity = automaticIdentity; if (latestAutomatic) visionDirty = true; }
+    const autoImage = el<HTMLImageElement>('lab-auto-image'), hasFrame = !!target && !!result?.captureId && result.outcome === 'success';
+    if (hasFrame && target && result) {
+      const url = `/api/vision/frame?${new URLSearchParams({ ...target, captureId: result.captureId! })}`;
+      if (autoImage.getAttribute('src') !== url) {
+        autoImage.hidden = false; el('lab-auto-image-empty').hidden = true;
+        autoImage.src = url;
+      }
+      text('lab-auto-frame', `Associated capture ${result.captureId} · original tick ${result.capturedTick} · ${result.freshness} for the attention decision at receipt tick ${result.receivedTick}. This historical image is never relabelled as the current scene.`);
+    } else {
+      autoImage.removeAttribute('src'); autoImage.hidden = true; el('lab-auto-image-empty').hidden = false;
+      text('lab-auto-image-empty', 'No successful automatic frame for this result.');
+      text('lab-auto-frame', 'Missing, failed or stale evidence does not identify or exclude a sound source. Successful historical frames remain inspectable while retained.');
+    }
+  }
+  async function loadAttention() {
+    if (!current || attentionLoading || stopped) return;
+    const token = attentionGate.begin(), controller = new AbortController(); attentionAbort = controller; attentionLoading = true;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const params = new URLSearchParams({ ...token.target });
+      const [view, trace] = await Promise.all([
+        request<AttentionView>(`/api/attention?${params}`, undefined, controller.signal),
+        request<TimelineResponse>(`/api/timeline?${new URLSearchParams({ ...token.target, limit: '80' })}`, undefined, controller.signal),
+      ]);
+      if (!attentionGate.accepts(token) || stopped) return;
+      if (visionScopeKey(view) !== visionScopeKey(token.target) || visionScopeKey(trace.scope) !== visionScopeKey(token.target) || trace.records.some(item => item.world_id !== token.target.worldId || item.branch_id !== token.target.branchId || item.run_id !== token.target.runId)) throw new Error('Hearing evidence does not match the selected world, branch and run.');
+      attentionView = view; attentionTrace = trace.records.filter(item => /^(ACOUSTIC_|SOUND_|REFLEX_|ATTENTION_|HEAD_|CAPTURE_|VISUAL_CHANGE)/.test(item.event_type)).slice(-24); attentionError = '';
+      renderAttention(); if (visionDirty) await loadVision();
+    } catch (error) {
+      if (attentionGate.accepts(token) && !stopped) { attentionError = error instanceof Error ? error.message : 'Hearing and attention evidence unavailable.'; renderAttention(); }
+    } finally { clearTimeout(timeout); if (attentionGate.accepts(token)) { attentionLoading = false; attentionAbort = undefined; } }
   }
   function renderVision() {
     const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
@@ -162,7 +238,7 @@ export function mountDashboard(): void {
     if (frame && target) {
       const url = `/api/vision/frame?${new URLSearchParams({ ...target, captureId: frame.captureId })}`;
       if (image.getAttribute('src') !== url) image.src = url;
-      text('lab-vision-caption', `${display.previous || visionError ? 'PREVIOUS successful capture' : 'Captured sensor frame'} · tick ${frame.tick} · ${frame.width} × ${frame.height} · ${frame.captureId}. ${display.previous ? 'This is not the result of the latest capture request.' : 'The world may have advanced since this image.'}`);
+      text('lab-vision-caption', `${display.previous || visionError ? 'PREVIOUS successful capture' : 'Captured sensor frame'} · original tick ${frame.tick} · reason ${frame.reason} · ${frame.width} × ${frame.height} · ${frame.captureId}. ${display.previous ? 'This is not the result of the latest capture request.' : 'The world may have advanced since this image.'}`);
     } else {
       image.removeAttribute('src'); text('lab-vision-empty', latest ? 'No successful image is available for this run.' : 'No image has been captured for this run.');
       text('lab-vision-caption', 'Missing images are missing observations; no world-truth substitute is provided.');
@@ -193,7 +269,7 @@ export function mountDashboard(): void {
       if (!visionGate.accepts(token) || stopped) return;
       validateCaptureViewScope(result, token.target); visionView = result; visionError = ''; visionDirty = false;
       visionDeadline.observe(result.latest);
-      renderVision();
+      renderAttention(); renderVision();
     } catch (error) {
       if (visionGate.accepts(token) && !stopped) { visionDirty = false; visionError = error instanceof Error ? error.message : 'Visual sensor unavailable.'; renderVision(); }
     } finally {
@@ -206,7 +282,7 @@ export function mountDashboard(): void {
     if (!current) {
       document.querySelectorAll<HTMLButtonElement>('.experiment, .vision-control, #lab-save, #lab-fork, #lab-export, #lab-reopen').forEach(button => { button.disabled = true; });
       text('lab-state', 'Selected branch unavailable');
-      renderVision();
+      renderAttention(); renderVision();
       return;
     }
     const c = current, health = record(c.logging), experiment = c.mode === 'EXPERIMENT';
@@ -258,7 +334,7 @@ export function mountDashboard(): void {
       renderedIdentity = identity;
     }
     if (document.activeElement !== el('lab-speed')) el<HTMLInputElement>('lab-speed').value = String(c.speed);
-    renderVision();
+    renderAttention(); renderVision();
   }
   function filters(): Record<string, string> {
     const values: Record<string, string> = { runId: val('lab-filter-run') || current?.runId || '', limit: '150' };
@@ -302,7 +378,7 @@ export function mountDashboard(): void {
         return;
       }
       options(branches, summaries.map(item => ({ value: key(item), label: `${item.mode} · ${item.branchId} · ${item.worldId}` })), selected);
-      render(); await Promise.all([loadTimeline(), loadVision(showMessage)]); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
+      render(); await Promise.all([loadTimeline(), loadVision(showMessage), loadAttention()]); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
     } catch (error) { if (generation === refreshGeneration) message(error instanceof Error ? error.message : 'Laboratory unavailable', true); }
   }
   async function loadCatalog() {
@@ -386,6 +462,22 @@ export function mountDashboard(): void {
       await operation('Queue experiment scene configuration', async target => { await request('/api/scene', { ...target, action }); });
     } catch (error) { message(error instanceof Error ? error.message : 'Scene configuration failed', true); }
   });
+  bind('lab-sound-emit', async () => {
+    try {
+      const sourceId = val('lab-sound-id').trim();
+      if (!/^[A-Za-z0-9_-]{1,100}$/.test(sourceId)) throw new Error('Use 1–100 letters, numbers, underscores or hyphens for the private sound fixture ID.');
+      const action = { type: 'emit_sound', x: number('lab-sound-x', -20, 20, false), y: number('lab-sound-y', -20, 20, false), z: number('lab-sound-z', -20, 20, false), intensity: number('lab-sound-intensity', 0, 1, false), suddenness: number('lab-sound-suddenness', 0, 1, false), sourceId };
+      await operation('Queue experiment sound fixture', async target => { await request('/api/sound', { ...target, action }); });
+    } catch (error) { message(error instanceof Error ? error.message : 'Sound emission failed', true); }
+  });
+  bind('lab-sound-place', () => {
+    try {
+      if (!current?.state || current.mode !== 'EXPERIMENT') throw new Error('Select a current experiment first.');
+      const pose = eyePose(current.state), heading = pose.bodyHeading + pose.headYaw;
+      for (const [id, value] of [['lab-sound-x', pose.position[0] + Math.sin(heading)], ['lab-sound-y', pose.position[1]], ['lab-sound-z', pose.position[2] + Math.cos(heading)]] as const) el<HTMLInputElement>(id).value = value.toFixed(3);
+      message(`Fixture position copied from the private listening pose at tick ${current.tick}. Press Emit experiment sound to queue it.`);
+    } catch (error) { message(error instanceof Error ? error.message : 'Fixture placement failed', true); }
+  });
   bind('lab-pause', () => control('Pause', () => ({ type: 'pause' })));
   bind('lab-resume', () => control('Resume', () => ({ type: 'resume' })));
   bind('lab-step', () => control('Single tick', () => ({ type: 'step' })));
@@ -428,11 +520,12 @@ export function mountDashboard(): void {
     lastExports.set(`${key(target)}/${selectedFilters.runId}`, `${result.manifest.evidence_status} · ${result.manifest.evidence_status === 'COMPLETE' ? 'replay verified' : 'evidence gaps; replay not certified'}`);
   }));
   bind('lab-refresh', () => { catalogLoaded = false; return refresh(true); });
-  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void Promise.all([loadTimeline(), loadVision()]); message('Selected branch changed. Controls now target this branch’s current run.'); };
+  el<HTMLImageElement>('lab-auto-image').onerror = () => { el<HTMLImageElement>('lab-auto-image').hidden = true; el('lab-auto-image-empty').hidden = false; text('lab-auto-image-empty', 'This associated image is no longer retained or is unavailable. Its captured tick and recorded result remain visible.'); };
+  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void Promise.all([loadTimeline(), loadVision(), loadAttention()]); message('Selected branch changed. Controls now target this branch’s current run.'); };
   el<HTMLFormElement>('lab-filters').onsubmit = event => { event.preventDefault(); void loadTimeline(); render(); };
   bind('lab-clear-filters', () => { for (const id of ['lab-category', 'lab-component', 'lab-severity', 'lab-causal', 'lab-from', 'lab-to', 'lab-search', 'lab-event-type']) el<HTMLInputElement | HTMLSelectElement>(id).value = ''; if (current) el<HTMLSelectElement>('lab-filter-run').value = current.runId; void loadTimeline(); render(); });
   async function poll() { if (!busy) await refresh(); if (!stopped) setTimeout(() => { void poll(); }, 1200); }
-  window.addEventListener('pagehide', () => { stopped = true; visionAbort?.abort(); });
+  window.addEventListener('pagehide', () => { stopped = true; visionAbort?.abort(); attentionAbort?.abort(); });
   window.addEventListener('pageshow', event => { if (event.persisted && stopped) { stopped = false; void poll(); } });
   void refresh(true).then(() => { if (!stopped) setTimeout(() => { void poll(); }, 1200); });
 }

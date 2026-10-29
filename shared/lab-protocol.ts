@@ -20,6 +20,7 @@ export type ControlAction =
 export interface SubjectiveClock { estimateSeconds: number; uncertaintySeconds: number; lastCalibrationTick: number | null; driftPpm: number; uncertaintyGrowthPerSecond: number }
 export interface ActivityState { status: 'idle' | 'running' | 'paused' | 'complete'; cursor: number; totalTicks: number; appliedMilestones: number[]; completionCount: number; activityId: number }
 export interface BranchSummary extends ActiveTarget {
+  attention?:import('./attention-protocol.js').AttentionState;
   historyId?: string; playback: PlaybackReport;
   mode: WorldMode; tick: number; time: number; paused: boolean; speed: number; fastForwardRemaining: number;
   subjective: SubjectiveClock; activity: ActivityState; stateHash: string; eventHash: string; runtimeHash: string;

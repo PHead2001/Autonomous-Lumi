@@ -69,6 +69,8 @@ const dataKeys = new Set([
   'fromSchema','toSchema','fromRules','toRules','actionId','yaw','pitch','targetYaw','targetPitch','sceneRevision','illumination','fixture','fixtureColor','doorOpenRadians','frameHash','capturedTick',
   'captureId','stateVersion','dynamicRevision','renderRevision','captureReason','width','height','bodyHeading','headYaw','headPitch','eyeX','eyeY','eyeZ','horizontalFovDegrees','backend','webglRenderer','visibleCount','validationTick','durationMs','completionUtc',
   'format','chromium','webglVendor','webglVersion',
+  'y','sourceX','sourceY','sourceZ','sourceId','listenerX','listenerY','listenerZ','distance','transmission','barriers','barrierGroups','distanceFalloff','wallTransmission','doorTransmission','objectTransmission',
+  'bearingDegrees','directionUncertaintyDegrees','distanceBand','distanceUncertainty','score','novelty','exposure','commitment','switchingCost','untilTick','intentId','reasons','expiresTick','receivedTick','freshness','difference','stage','cause','createdTick','captureReasons','originSequence',
 ]);
 const safeLabel = (value: string) => value.replace(/[^A-Za-z0-9_. :/-]/g, '_').slice(0, 160);
 export function sanitizeData(data: Record<string, Primitive> = {}): Record<string, Primitive> {
@@ -200,7 +202,7 @@ export class FlightRecorder {
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
     try {
-    const command = validateCommand(input.command,true);
+    const command = validateCommand(input.command,true,true);
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
       schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
@@ -213,7 +215,7 @@ export class FlightRecorder {
   }
   recordEvent(event: DeterministicEvent): void {
     const experienceEligible=this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
-    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_') ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
+    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||['hearing','attention'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
       eventType: event.type, component: event.component, outcome: event.outcome, eventSequence: event.sequence,
       inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true,experienceEligible);
   }

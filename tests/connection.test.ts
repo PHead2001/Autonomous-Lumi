@@ -52,7 +52,8 @@ test('slam reaches multiple clients; malformed commands do not reset world', { t
     a.socket.send(JSON.stringify({ type: 'slam' }));
     const [stateA, stateB] = await Promise.all([heardA, heardB]);
     assert.equal(stateA.worldId, a.state.worldId); assert.equal(stateA.door.slamCount, 1);
-    assert.equal(stateB.reflex.start, stateA.door.lastSlam); assert.equal(stateB.reflex.strength, 1);
+    assert.equal(stateB.reflex.start, stateA.door.lastSlam);
+    assert.ok(stateB.reflex.strength>0&&stateB.reflex.strength<1,'normal slam retains an immediate received-intensity reflex');assert.equal(stateB.reflex.strength,stateA.reflex.strength);
   } finally { await app.close(); }
 });
 

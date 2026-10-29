@@ -39,6 +39,11 @@ export interface PhysicalSceneSnapshot {
   illumination: number;
   boxes: PhysicalBox[];
 }
+/** Deliberate acoustic surfaces: decorative panels, trim, cutaway flags and navigation
+ * clearance volumes never create extra acoustic walls. Door pose is the shared real leaf. */
+export function acousticBarriers(state:WorldState):{box:PhysicalBox;material:'wall'|'door'|'object';group:string}[] {
+  return physicalSceneSnapshot(state).boxes.flatMap<{box:PhysicalBox;material:'wall'|'door'|'object';group:string}>(box=>box.id.startsWith('wall-')?[{box,material:'wall',group:box.id.startsWith('wall-back-')?'wall-back':box.id}]:box.id==='door-leaf'?[{box,material:'door',group:'door'}]:box.id==='fixture-screen'?[{box,material:'object',group:'fixture-screen'}]:[]);
+}
 export function defaultPhysicalSceneState(): PhysicalSceneState {
   return { revision: 0, illumination: 1, fixture: 'none', fixtureColor: '#ed6050', doorOpenRadians: null };
 }
@@ -157,4 +162,34 @@ export function canMoveCharacter(scene: PhysicalSceneState, fromX: number, fromZ
   for (const [id, depth] of next) if (depth > (previous.get(id) ?? 0) + 1e-12) return false;
   for (const [id, depth] of previous) if ((next.get(id) ?? 0) < depth - 1e-12) improved = true;
   return improved;
+}
+/** Strict interior segment test. A tangent or endpoint merely touching the
+ * expanded collider is allowed; crossing even a thin interior is not. */
+function segmentEntersRectangle(ax:number,az:number,bx:number,bz:number,hx:number,hz:number):boolean {
+  if(hx<=0||hz<=0)return false;
+  let enter=0,leave=1;
+  for(const [start,end,half] of [[ax,bx,hx],[az,bz,hz]]) {
+    const delta=end-start;
+    if(Math.abs(delta)<1e-14){if(Math.abs(start)>=half)return false;continue;}
+    const t1=(-half-start)/delta,t2=(half-start)/delta;
+    enter=Math.max(enter,Math.min(t1,t2));leave=Math.min(leave,Math.max(t1,t2));
+    if(enter>=leave-1e-14)return false;
+  }
+  return enter<leave-1e-14;
+}
+/** Current-rules swept movement. Preserve the historical endpoint-only helper
+ * above for exact V3 replay. The whole segment must avoid new overlap or any
+ * deeper part of a migrated overlap; its endpoint must still escape monotonically. */
+export function canSweepCharacter(scene:PhysicalSceneState,fromX:number,fromZ:number,x:number,z:number):boolean {
+  if(!canMoveCharacter(scene,fromX,fromZ,x,z))return false;
+  const previous=characterCollisionDepths(scene,fromX,fromZ,true);if(!previous)return false;
+  const state={scene,time:0,door:{lastSlam:-100,slamCount:0}} as WorldState;
+  const boxes=physicalSceneSnapshot(state).boxes;if(scene.doorOpenRadians===null)boxes.push(animatedDoorKeepout());
+  for(const b of boxes) {
+    if(!b.collides||b.position[1]+b.size[1]/2<=.06||b.position[1]-b.size[1]/2>=3.45)continue;
+    const local=(px:number,pz:number)=>{const dx=px-b.position[0],dz=pz-b.position[2];return [dx*Math.cos(b.yaw)-dz*Math.sin(b.yaw),dx*Math.sin(b.yaw)+dz*Math.cos(b.yaw)];};
+    const [ax,az]=local(fromX,fromZ),[bx,bz]=local(x,z),depth=(previous.get(b.id)??0)+1e-12;
+    if(segmentEntersRectangle(ax,az,bx,bz,b.size[0]/2+CHARACTER_CLEARANCE_RADIUS-depth,b.size[2]/2+CHARACTER_CLEARANCE_RADIUS-depth))return false;
+  }
+  return true;
 }

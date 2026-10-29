@@ -14,7 +14,10 @@ import type { ActiveTarget, Target } from '../shared/lab-protocol.js';
 import type { RecoveryStore } from './recovery-store.js';
 import { createVisionApi } from './vision/http-api.js';
 import { validateCommand } from './simulation.js';
-export interface WorldServerOptions {seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;historyId?:string;recoveryStore?:RecoveryStore;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[]}
+import { validateSensoryCommand } from '../shared/attention-protocol.js';
+import { AutomaticCaptureCoordinator } from './vision/auto-capture.js';
+import type { FrameRenderer } from './vision/renderer.js';
+export interface WorldServerOptions {seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;historyId?:string;recoveryStore?:RecoveryStore;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[];renderer?:FrameRenderer;automaticCaptures?:boolean}
 const loopback=(name:string)=>['127.0.0.1','localhost','[::1]'].includes(name);
 function localHost(host:string|undefined){try{if(!host)return false;const u=new URL('http://'+host);return loopback(u.hostname)&&!u.username&&!u.password&&u.pathname==='/';}catch{return false;}}
 async function body(req:IncomingMessage):Promise<Record<string,unknown>>{if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']??''))throw new Error('JSON content type required');let size=0;const chunks:Buffer[]=[];for await(const chunk of req){const b=Buffer.from(chunk);size+=b.length;if(size>8192)throw new Error('Request exceeds 8 KiB');chunks.push(b);}const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('JSON object required');return value;}
@@ -33,8 +36,9 @@ export function createWorldServer(options:WorldServerOptions={}) {
     }
   };
   let shuttingDown=false;
-  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true,beforeRetireRuntime:runtime=>vision.manager.retire(runtime.target)});
-  const vision=createVisionApi({registry});
+  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true,beforeRetireRuntime:runtime=>{automatic.retire(runtime.target);vision.manager.retire(runtime.target);}});
+  const vision=createVisionApi({registry,renderer:options.renderer});
+  const automatic=new AutomaticCaptureCoordinator(vision.manager,scope=>{try{return registry.get(scope).target.runId===scope.runId;}catch{return false;}},options.clock?()=>options.clock!.monotonicMs():undefined);
   if(options.schedulerConfig&&Object.keys(options.schedulerConfig).length)throw new Error('Scheduler configuration is restored through complete runtime checkpoints');
   const root=resolve('dist');const downloads=new Map<string,{target:ActiveTarget;file:string}>();
   const allowedOrigins=new Set(['http://127.0.0.1:5173','http://localhost:5173',...(options.viewerOrigins??[])]);
@@ -50,6 +54,11 @@ export function createWorldServer(options:WorldServerOptions={}) {
         const result=await vision.get(pathname,query);if(result){if(result.bytes){res.writeHead(result.status,{'Content-Type':result.contentType??'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(result.bytes);}else json(result.status,result.body);return;}
       }
       if(pathname==='/health'){const live=registry.live;json(200,{worldId:live.target.worldId,historyId:registry.historyId,runId:live.target.runId,time:live.simulation.state.time,tick:live.simulation.state.tick,viewers:subscriptions.size,scheduler:live.scheduler.config,logging:live.recorder?.health(),recovery:options.recoveryStore?.status()??null});return;}
+      if(pathname==='/api/attention'&&req.method==='GET'){
+        if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}
+        const scope=active(query),runtime=registry.active(scope),checkpoint=runtime.simulation.checkpoint();
+        json(200,{...scope,attention:checkpoint.schemaVersion===4?checkpoint.attention:null,automatic:automatic.summary(scope)});return;
+      }
       if(pathname==='/api/branches'&&req.method==='GET'){json(200,{branches:[...registry.branches.values()].map(scopedSummary),recovery:options.recoveryStore?.status()??null});return;}
       if(pathname==='/api/recovery'&&req.method==='GET'){json(200,options.recoveryStore?.status()??null);return;}
       if(pathname==='/api/checkpoints'&&req.method==='GET'){json(200,await registry.catalog());return;}
@@ -66,6 +75,11 @@ export function createWorldServer(options:WorldServerOptions={}) {
         if(pathname==='/api/control'){runtime.applyControl(input.action);broadcast();json(200,scopedSummary(runtime));return;}
         if(pathname.startsWith('/api/vision')){const result=await vision.post(pathname,runtime,input);if(result!==null){json(200,result);return;}}
         if(pathname==='/api/scene'){const command=validateCommand(input.action,true);if(command.type!=='configure_scene')throw new Error('Scene configuration required');runtime.enqueue(command);json(200,{queued:true});return;}
+        if(pathname==='/api/sound'){
+          if(runtime.mode!=='EXPERIMENT')throw new Error('Controlled sound emitters are experiment-only');
+          const command=validateSensoryCommand(input.action);if(command.type!=='emit_sound')throw new Error('Controlled sound emission required');
+          const admitted=runtime.enqueue(command);json(200,{input:admitted.input,queued:admitted.input.admission==='queued'});return;
+        }
         if(pathname==='/api/export'){
           const selectedRunId=input.selectedRunId??scope.runId;if(!validId(selectedRunId))throw new Error('Invalid export run');const selected={...scope,runId:selectedRunId},runDirectory=registry.runDirectory(selected);let snapshot;if(selectedRunId===runtime.target.runId){runtime.capture();snapshot=await runtime.recorder!.snapshotForExport();}
           if(downloads.size>=32)throw new Error('Local export limit reached (32)');const exportId='incident-'+randomUUID(),directory=join(registry.directory,scope.worldId,scope.branchId,'exports');await mkdir(directory,{recursive:true});const out=join(directory,exportId+'.zip');
@@ -88,12 +102,12 @@ export function createWorldServer(options:WorldServerOptions={}) {
     });
   });
   function broadcast(){for(const [socket,sub]of subscriptions){const runtime=registry.get(sub.target);send(socket,{type:'state',state:runtime.viewerState()});}}
-  let pumps=0,started=false;const timer=options.autoSchedule===false?undefined:setInterval(()=>{if(!started)return;for(const runtime of registry.branches.values())runtime.pump();broadcast();if(++pumps%900===0)for(const runtime of registry.branches.values())runtime.capture();},1000/30);
+  let pumps=0,started=false;const timer=options.autoSchedule===false?undefined:setInterval(()=>{if(!started)return;for(const runtime of registry.branches.values())runtime.pump();if(options.automaticCaptures!==false)automatic.pump(registry.branches.values());broadcast();if(++pumps%900===0)for(const runtime of registry.branches.values())runtime.capture();},1000/30);
   const saveRecovery=async()=>{if(!options.recoveryStore)return;const cp=registry.live.capture();try{await options.recoveryStore.save(cp);registry.live.recorder?.record({tick:cp.simulation.tick,category:'OPERATIONAL_REPLAY',eventType:'RECOVERY_COMMITTED',component:'recovery',outcome:'committed',data:{checkpointTick:cp.simulation.tick,historyId:registry.historyId,generation:options.recoveryStore.status().lastCommitted?.generation??0}});}catch{registry.live.recorder?.record({tick:cp.simulation.tick,category:'OPERATIONAL_REPLAY',eventType:'RECOVERY_SAVE_FAILED',component:'recovery',severity:'error',outcome:'previous_checkpoint_retained',data:{checkpointTick:cp.simulation.tick}});throw new Error('LIVE recovery save failed; inspect /health recovery.saveError');}};
   let saving=false;const recoveryTimer=options.recoveryStore?setInterval(()=>{if(!started||saving)return;saving=true;void saveRecovery().catch(()=>{}).finally(()=>{saving=false;});},options.recoveryStore.status().intervalMs):undefined;recoveryTimer?.unref();
   let closing:Promise<void>|undefined;const ready=(async()=>{await registry.live.prepare();await registry.initializeLiveCheckpoints();const status=options.recoveryStore?.status();if(status)registry.live.recorder?.record({tick:registry.live.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:status.status==='recovered'?'LIVE_RECOVERED':'LIVE_INITIALIZED',component:'recovery',outcome:status.fallback?'previous_generation_fallback':status.status,data:{historyId:registry.historyId,checkpointTick:status.recovered?.tick??registry.live.simulation.state.tick,fallback:status.fallback,checkpointAgeMs:status.checkpointAgeMs??0,classification:'checkpoint_age_upper_bound_no_catchup'}});await saveRecovery();if(!shuttingDown){registry.live.activate();started=true;}})();
-  return {server,registry,sockets,vision,get simulation(){return registry.live.simulation;},get scheduler(){return registry.live.scheduler;},get recorder(){return registry.live.recorder!;},
+  return {server,registry,sockets,vision,automatic,get simulation(){return registry.live.simulation;},get scheduler(){return registry.live.scheduler;},get recorder(){return registry.live.recorder!;},
     listen:(port=3001)=>new Promise<number>((resolvePort,reject)=>{void ready.then(()=>{if(shuttingDown){reject(new Error("Server is shutting down"));return;}server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.removeListener('error',reject);const address=server.address();resolvePort(typeof address==='object'&&address?address.port:port);});},reject);}),
-    close:()=>closing??=(async()=>{shuttingDown=true;started=false;clearInterval(timer);clearInterval(recoveryTimer);let failure:unknown;try{await ready;await saveRecovery();}catch(e){failure=e;}for(const client of sockets.clients)client.terminate();await new Promise<void>(done=>sockets.close(()=>done()));await new Promise<void>(done=>server.close(()=>done()));try{await vision.close();await registry.close();}catch(e){failure??=e;}if(failure)throw failure;})(),
+    close:()=>closing??=(async()=>{shuttingDown=true;started=false;automatic.close();clearInterval(timer);clearInterval(recoveryTimer);let failure:unknown;try{await ready;await saveRecovery();}catch(e){failure=e;}for(const client of sockets.clients)client.terminate();await new Promise<void>(done=>sockets.close(()=>done()));await new Promise<void>(done=>server.close(()=>done()));try{await vision.close();await registry.close();}catch(e){failure??=e;}if(failure)throw failure;})(),
   };
 }

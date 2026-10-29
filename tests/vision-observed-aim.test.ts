@@ -20,7 +20,7 @@ const close=(actual:number,expected:number)=>assert.ok(Math.abs(actual-expected)
 const step=(s:VisionSimulation,n:number)=>{for(let i=0;i<n;i++)s.step();};
 const fakeRenderer=():FrameRenderer=>({render:async()=>({bytes:new Uint8Array([137,80,78,71]),backend:{configuration:'angle-d3d11',chromium:'TEST STUB',webglVendor:'TEST STUB',webglRenderer:'TEST STUB',version:'TEST STUB',flags:[]}}),close:async()=>{}});
 function fixtureRuntime(moving=false,directory?:string) {
-  const initial=new BranchRuntime({worldId:'aim-test',branchId:'fixture',mode:'EXPERIMENT',offline:true}),cp=initial.checkpoint(),fixture=createVisibilityFixture();
+  const initial=new BranchRuntime({worldId:'aim-test',branchId:'fixture',mode:'EXPERIMENT',offline:true}),base=initial.checkpoint(),cp={...base,schemaVersion:2 as const,simulation:new VisionSimulation({mode:'EXPERIMENT'}).checkpoint()},fixture=createVisibilityFixture();
   if(cp.simulation.schemaVersion!==3)throw new Error('Vision checkpoint required');
   cp.simulation.character={...fixture.character,moving};cp.simulation.head=fixture.head!;cp.simulation.scene=fixture.scene!;cp.simulation.pauseUntilTick=moving?0:10000;
   const runtime=new BranchRuntime({worldId:'aim-test',branchId:'fixture',mode:'EXPERIMENT',offline:!directory,directory,checkpoint:cp});runtime.applyControl({type:'pause'});return runtime;
@@ -118,19 +118,19 @@ test('rules upgrade preserves the saved pose and queue, archives its source, and
   const initial=new VisionSimulation({mode:'LIVE'}).checkpoint();initial.rulesVersion='lumi-eyes-v1';delete initial.head.observedAim;initial.pauseUntilTick=10000;
   const legacy=new VisionSimulation({mode:'LIVE',checkpoint:initial,historical:true});legacy.enqueue({type:'turn_head',yawDelta:.7,pitchDelta:0,sceneRevision:0});step(legacy,3);
   legacy.enqueue({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence:{observationId:'old-observation',handle:'old-handle',frameHash:'b'.repeat(64),capturedTick:3,captureWidth:512,captureHeight:512,engineTargetId:'fixture-missing'}});
-  const old=legacy.checkpoint(),base=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',offline:true}).checkpoint(),envelope={...base,simulation:old};
+  const old=legacy.checkpoint(),base=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',offline:true}).checkpoint(),envelope={...base,schemaVersion:2 as const,simulation:old};
   const historicalRuntime=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',offline:true,checkpoint:envelope});assert.equal(hashRuntimeCheckpoint(historicalRuntime.checkpoint()),hashRuntimeCheckpoint(envelope));
   const historicalEnd=new VisionSimulation({mode:'LIVE',checkpoint:old,historical:true});assert.ok(historicalEnd.step().some(e=>e.data.reason==='target_no_longer_visible'));
   assert.equal(replay(old,[],old.tick+1).stateHash,hashCheckpoint(historicalEnd.checkpoint()));
   const {store}=await RecoveryStore.open({directory});await store.save(envelope);const manifest=JSON.parse(await readFile(join(store.directory,'committed.json'),'utf8'));
   const loaded=await RecoveryStore.open({directory}),active=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',directory,checkpoint:loaded.checkpoint,historyId:store.historyId});
   try {
-    const upgraded=active.checkpoint();assert.equal(upgraded.simulation.rulesVersion,'lumi-eyes-v2');if(upgraded.simulation.schemaVersion!==3)throw new Error('Vision required');
-    const preserved=structuredClone(upgraded.simulation);preserved.rulesVersion='lumi-eyes-v1';delete preserved.head.observedAim;assert.deepEqual(preserved,old);
+    const upgraded=active.checkpoint();assert.equal(upgraded.simulation.rulesVersion,'lumi-attention-v1');if(upgraded.simulation.schemaVersion!==4)throw new Error('Attention required');
+    const preserved=structuredClone(upgraded.simulation) as unknown as Record<string,unknown>;delete preserved.attention;delete preserved.genericSoundCount;preserved.schemaVersion=3;preserved.rulesVersion='lumi-eyes-v1';delete (preserved.head as {observedAim?:unknown}).observedAim;assert.deepEqual(preserved,old);
     const events=active.simulation.step();assert.ok(events.some(e=>e.data.reason==='legacy_observation_evidence'));assert.equal(active.simulation.snapshot().head!.observedAim,null);assert.equal(active.simulation.snapshot().head!.status,'turning');
     for(let i=0;i<4;i++){active.simulation.step();await loaded.store.save(active.checkpoint());}
     const archive='pre-vision-rules-v1-'+manifest.latest.file;assert.ok((await readdir(store.directory)).includes(archive));const payload=JSON.parse(await readFile(join(store.directory,archive),'utf8'));assert.equal(hashRuntimeCheckpoint(payload.checkpoint),hashRuntimeCheckpoint(envelope));
-    await active.recorder!.flush();const migration=(await readRun(active.recorder!.runDirectory)).records.find(r=>r.event_type==='STATE_RULES_MIGRATED');assert.equal(migration?.data.fromRules,'lumi-eyes-v1');assert.equal(migration?.data.toRules,'lumi-eyes-v2');
+    await active.recorder!.flush();const migration=(await readRun(active.recorder!.runDirectory)).records.find(r=>r.event_type==='STATE_RULES_MIGRATED');assert.equal(migration?.data.fromRules,'lumi-eyes-v1');assert.equal(migration?.data.toRules,'lumi-attention-v1');
     assert.throws(()=>active.enqueue({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence:{observationId:'old-observation',handle:'old-handle',frameHash:'b'.repeat(64),capturedTick:3,captureWidth:512,captureHeight:512,engineTargetId:'fixture-missing'}}),/Legacy observation/);
   }finally{await active.close();await historicalRuntime.close();}
 });

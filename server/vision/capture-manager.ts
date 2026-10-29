@@ -6,8 +6,9 @@ import type { WorldState } from '../../shared/protocol.js';
 import { eyePose } from '../../shared/eye-pose.js';
 import { PHYSICAL_SCENE_VERSION, RENDER_REVISION } from '../../shared/physical-scene.js';
 import { HEAD_LIMITS, observedHeadTarget, validateHeadAction, type CapturedBearingEvidence, type HeadAction } from '../../shared/vision-protocol.js';
-import type { CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
-import { CAPTURE_LIMITS } from '../../shared/capture-protocol.js';
+import type { AutomaticCaptureAssociation, CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
+import { CAPTURE_LIMITS, MANUAL_CAPTURE_REASONS } from '../../shared/capture-protocol.js';
+import { AUTOMATIC_CAPTURE_REASONS } from '../../shared/attention-protocol.js';
 import { groundSnapshot, filterVisibleGrounding } from './grounding.js';
 import { ChromiumRenderer, RendererFailure, type FrameRenderer } from './renderer.js';
 
@@ -18,7 +19,7 @@ const exact = (value: unknown, keys: string[]) => !!value && typeof value === 'o
 export function validateCaptureOptions(raw: unknown): Required<CaptureOptions> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid capture options');
   const o = raw as Record<string, unknown>;
-  if (Object.keys(o).some(key => !['reason', 'width', 'height'].includes(key)) || !['developer', 'diagnostic', 'benchmark'].includes(o.reason as string)) throw new Error('Invalid capture reason or fields');
+  if (Object.keys(o).some(key => !['reason', 'width', 'height'].includes(key)) || ![...MANUAL_CAPTURE_REASONS, ...AUTOMATIC_CAPTURE_REASONS].includes(o.reason as CaptureOptions['reason'])) throw new Error('Invalid capture reason or fields');
   const width = o.width ?? 512, height = o.height ?? 512;
   if (typeof width !== 'number' || typeof height !== 'number' || !Number.isInteger(width) || !Number.isInteger(height) || width < 128 || width > 1024 || height < 128 || height > 1024) throw new Error('Capture dimensions must be integers from 128 through 1024');
   return { reason: o.reason as CaptureOptions['reason'], width, height };
@@ -34,6 +35,7 @@ export class CaptureManager {
   private cleanupFailure: string | null = null;
   readonly capacity = CAPTURE_LIMITS.capacity; readonly maxRetainedFrames = 16; readonly maxFramesPerRun = 4;
   constructor(private readonly current: (target: ActiveTarget) => boolean, private readonly renderer: FrameRenderer = new ChromiumRenderer(), readonly timeoutMs: number = CAPTURE_LIMITS.timeoutMs, readonly cleanupTimeoutMs: number = CAPTURE_LIMITS.cleanupTimeoutMs) {}
+  get queued(): number { return this.queue.length + Number(!!this.running); }
   private async cleanupRenderer(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -44,18 +46,20 @@ export class CaptureManager {
   }
   private record(entry: Entry, eventType: string, outcome: string, extra: Record<string, string | number | boolean | null> = {}) {
     const m = entry.metadata;
-    entry.runtime.recorder?.record({ tick: m.tick, category: 'PRIVATE_SENSOR', eventType, component: 'virtual_eyes', outcome, severity: ['failed', 'timeout', 'unavailable', 'stale'].includes(outcome) ? 'warn' : 'info', data: { captureId: m.captureId, observationId: m.observationId, capturedTick: m.tick, stateVersion: m.stateVersion, stateHash: m.stateHash, sceneRevision: m.sceneRevision, dynamicRevision: m.dynamicRevision, renderRevision: m.renderRevision, captureReason: m.reason, width: m.width, height: m.height, bodyHeading: m.camera.bodyHeading, headYaw: m.camera.headYaw, headPitch: m.camera.headPitch, eyeX: m.camera.position[0], eyeY: m.camera.position[1], eyeZ: m.camera.position[2], horizontalFovDegrees: m.camera.horizontalFovDegrees, ...extra } });
+    entry.runtime.recorder?.record({ tick: m.tick, category: 'PRIVATE_SENSOR', eventType, component: 'virtual_eyes', outcome, severity: ['failed', 'timeout', 'unavailable', 'stale'].includes(outcome) ? 'warn' : 'info', ...(m.automatic?.parentSequence != null ? {parentSequence:m.automatic.parentSequence} : {}), data: { captureId: m.captureId, observationId: m.observationId, capturedTick: m.tick, stateVersion: m.stateVersion, stateHash: m.stateHash, sceneRevision: m.sceneRevision, dynamicRevision: m.dynamicRevision, renderRevision: m.renderRevision, captureReason: m.reason, ...(m.automatic ? {intentId:m.automatic.intentId,captureReasons:m.automatic.reasons.join(' '),originSequence:m.automatic.parentSequence??0}:{}), width: m.width, height: m.height, bodyHeading: m.camera.bodyHeading, headYaw: m.camera.headYaw, headPitch: m.camera.headPitch, eyeX: m.camera.position[0], eyeY: m.camera.position[1], eyeZ: m.camera.position[2], horizontalFovDegrees: m.camera.horizontalFovDegrees, ...extra } });
   }
-  request(runtime: BranchRuntime, raw: CaptureOptions): CaptureMetadata {
+  request(runtime: BranchRuntime, raw: CaptureOptions, automatic?: AutomaticCaptureAssociation): CaptureMetadata {
     if (this.closed) throw new Error('Capture manager is closed');
     if (!this.current(runtime.target)) throw new Error('Capture target is retired');
     const options = validateCaptureOptions(raw);
+    if (automatic && (!Number.isSafeInteger(automatic.intentId) || automatic.intentId < 1 || !automatic.reasons.length || automatic.reasons.length > AUTOMATIC_CAPTURE_REASONS.length || new Set(automatic.reasons).size !== automatic.reasons.length || automatic.reasons.some(reason => !AUTOMATIC_CAPTURE_REASONS.includes(reason)) || (automatic.parentSequence !== null && (!Number.isSafeInteger(automatic.parentSequence) || automatic.parentSequence < 1)))) throw new Error('Invalid automatic capture association');
     if (this.queue.length + Number(!!this.running) >= this.capacity) throw new Error('Capture queue is full (4)');
     const snapshot = structuredClone(runtime.viewerState());
     if (!snapshot.head || !snapshot.scene) throw new Error('Capture requires the current vision state schema');
     const checkpoint = runtime.simulation.checkpoint();
     const id = randomUUID();
     const metadata: CaptureMetadata = { ...runtime.target, captureId: id, observationId: id, tick: snapshot.tick, stateVersion: checkpoint.schemaVersion, stateHash: hashCanonical(checkpoint), sceneRevision: PHYSICAL_SCENE_VERSION, dynamicRevision: snapshot.scene.revision, renderRevision: RENDER_REVISION, camera: eyePose(snapshot, options.width, options.height), reason: options.reason, width: options.width, height: options.height, format: 'image/png', status: 'queued', requestedAt: new Date().toISOString(), completedAt: null, durationMs: null, frameHash: null, backend: null, error: null };
+    if (automatic) metadata.automatic = structuredClone(automatic);
     let complete!: () => void; const completion = new Promise<void>(done => { complete = done; });
     const entry: Entry = { metadata, snapshot, grounding: null, handles: new Map(), runtime, completion, complete, retired: false, requestedMono: performance.now() };
     this.entries.set(id, entry); this.latest.set(scopeKey(runtime.target), id);
