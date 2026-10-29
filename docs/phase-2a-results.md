@@ -2,7 +2,7 @@
 
 Virtual Eyes extends the existing fox-girl viewer and isolated laboratory with a shared physical scene, server-owned head/eye pose, deterministic turn/look/scan actions, an isolated on-demand Chromium renderer, and sight-limited spatial evidence. Operating instructions are in the [README](../README.md), [Virtual Eyes guide](virtual-eyes.md), and [renderer comparison](renderer-benchmarks.md).
 
-The runtime, renderer, diagnostic export/replay and final normal checks below have completed. Independent local review and targeted re-review have no actionable findings remaining. Draft PR **#6** is open; hosted Codex review has been requested and remains pending.
+Phase 2a is complete: implementation, renderer comparison, browser checks, refreshed diagnostic export/replay and the proportionate normal checks below passed. Actionable review findings were corrected with focused regressions; independent targeted review and the final hosted Codex re-review found no remaining actionable findings. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
 
 ## Run and try it
 
@@ -45,13 +45,13 @@ npm.cmd run vision:benchmark -- --out diagnostics/vision-benchmarks/my-run
 npm.cmd run vision:verify
 ```
 
-The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. The actual renderer verification passed **6/6**, including physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, and contained cleanup failure. The first actual frame was visually inspected.
+The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. The actual renderer verification passed its original **six cases**, including physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, and contained cleanup failure. After the camera-clearance correction, those checks were rerun and a **seventh actual case** separately passed: an eye inside an opaque occluder produces an explicit failed capture and a subsequent safe capture succeeds. These are seven verified cases across the recorded runs, not a claim that one command reported 7/7. The first actual frame was visually inspected.
 
 ## Browser and continuity evidence
 
 The actual dashboard/viewer walkthrough used separate temporary test data, preserving the owner’s saved LIVE history. Lumi’s upright walking and idle transitions remained visible. The door control enabled browser audio; an articulated ear flick was visibly inspected in a paused experiment at tick **2241**. Audible output was not independently heard during this pass; the owner previously confirmed audio passes.
 
-The final dashboard check recovered the saved head yaw of **−6°**, queued a directional look toward **−75°**, then advanced **25 fixed ticks**. An observed-target request outside the head’s limits was visibly rejected; this is rejection-path evidence, not a claim that target admission succeeded through the UI. A dark capture at tick **2265** produced zero eligible shapes; the lit capture at **2266** produced one. The inspected dashboard reported no console errors. The local private screenshot is `diagnostics/vision/phase2a-dashboard.png`.
+The initial dashboard acceptance check recovered the saved head yaw of **−6°**, queued a directional look toward **−75°**, then advanced **25 fixed ticks**. An observed-target request outside the head’s limits was visibly rejected; this is rejection-path evidence, not a claim that target admission succeeded through the UI. A dark capture at tick **2265** produced zero eligible shapes; the lit capture at **2266** produced one. The inspected dashboard reported no console errors. The local private screenshot is `diagnostics/vision/phase2a-dashboard.png`. These checks are distinct from the refreshed post-review bundle below.
 
 The normal spectator slam control in the paused experiment also showed the door open at the first stepped tick **2267** and closed at **2270**. The upright two-legged avatar remained visible with the idle caption “taking a breath”; the viewer console error list was empty. The earlier tick-2241 inspection remains the articulated ear-flick evidence. These observations add no independent audible-output claim.
 
@@ -61,17 +61,25 @@ Historical Phase 1.5b and 1.5c diagnostic artifacts both replayed successfully w
 
 ## Diagnostic deliverable and final checks
 
-The actual final dashboard export is **`diagnostics/phase-2a-virtual-eyes.zip`** (14,882 bytes, 13 entries), scoped to world `lumi`, branch `eyes-final`, run `9414a1b0-c050-4e62-8aae-7d800910fb1a`. It reports **COMPLETE** retained evidence for ticks **2238–2266**: 40 records, 3 ordered inputs and 11 deterministic events, with no declared gaps, drops or writer failures.
+The actual final dashboard export is **`diagnostics/phase-2a-virtual-eyes.zip`** (14,625 bytes, 13 expected text/JSON entries), scoped to world `lumi`, branch `eyes-reviewed`, run `f6437afa-1c77-4a3e-959a-41836aae00bc`. It reports **COMPLETE** retained evidence for ticks **2238–2265**: 37 records, 3 ordered inputs and 11 deterministic events, with zero gaps, dropped/critical-dropped records, writer failures or evictions. The previous artifact is preserved separately as `diagnostics/phase-2a-pre-clearance.zip`.
 
-The ZIP’s reproduction notes, saved head/scene state, directional-look input, 25-tick fast-forward, capture metadata and assertions were inspected. Captures at ticks **2263**, **2265** and **2266** carry 512-square PNG format/hash/pose and the actual Chrome 156 / RTX 5070 Ti / ANGLE-D3D11 backend identity. Eligible-shape counts are **1 / 0 / 1**; the tick-2263 target request is explicitly rejected for exceeding head limits. No experience was encoded. The archive contains no raw image files or base64 pixel payloads. Generated diagnostics and raw private frames remain ignored by Git.
+The reproduction guidance, saved head/scene checkpoints and all 13 archive entries were inspected. Three 512-square PNG captures report the actual ANGLE/D3D11 / Chrome 156 / RTX 5070 Ti backend:
 
-The documented offline command passed, ending at tick **2266**, with exact hashes:
+| Captured tick | Illumination | Eligible shapes | Actual frame SHA-256 |
+|---|---|---:|---|
+| 2263 | Lit | 1 | `845d332feec825b15534f96e2150ab162e451415ffddedec631c815261a6e637` |
+| 2264 | Dark | 0 | `9df7f9e9f29c47591d050a8ab4aff403dc1dfd94e5bb1ae18de02ec78238b2ea` |
+| 2265 | Lit | 1 | `a7846647529c29427caacadb3c142c325714fd80dfa803373c3a3fce62f27dbe` |
+
+The final bundle contains no target-rejection event; the earlier target-rejection browser observation remains a separate valid check. Both saved checkpoints contain zero experiences, no `FOX_EXPERIENCE` record was produced, and the archive contains no raw image or base64 payload. Generated diagnostics and private frames remain ignored by Git.
+
+The documented CLI replay passed at tick **2265**, with exact hashes:
 
 | Evidence | SHA-256 |
 |---|---|
-| Complete runtime/control state | `6bd5c6b59c3b5bacf4c4df935a653c89c250d661692e6f9b5822a4ef915bb3e0` |
-| Simulation state | `fff294efd2f7015373bde661896d6fc6c6679dcbba543765d382149163563373` |
-| Deterministic events | `10cc4390af149da71c65226bbb1dddbc817ff14ee034cacb90003cc407bc8266` |
+| Complete runtime/control state | `512cd09324ee54da29ca6a9abe6be14a166f2cc15d957744b41ac841af0b6742` |
+| Simulation state | `9531f27cd9cf72e54e56358a4b06445c0ffa4c72f632fe99878f66c8945f79cc` |
+| Deterministic events | `70ed6baa8319c117a2861f6f3202de398e9a7b39d6692569b61eff5f0a8043f5` |
 
 Offline replay reconstructs the recorded simulation and action path without a renderer. Capture metadata identifies the original image evidence; replay does not claim to regenerate pixels. Bundle completeness applies to its stated retained interval, not all prior history or browser hearing.
 
@@ -82,17 +90,20 @@ npm run lint
 npm run build
 ```
 
-Final normal checks passed:
+Normal checks and affected post-fix checks passed:
 
-- `npm test`: **120/120**, approximately **9.78 seconds**.
+- `npm test`: **130/130**, approximately **11.2 seconds**, recorded in `diagnostics/phase2a-tests-final.txt` after the explicit invalid-camera failure-metadata correction.
 - `npm run lint`: **PASS**.
-- `npm run build`: **PASS**, including TypeScript checking. Vite retains the existing nonblocking chunk-size advisory above 500 kB.
+- `npm run build`: **PASS**, including TypeScript checking. Vite retains the existing nonblocking approximately 540 kB viewer-chunk advisory above 500 kB.
+- After the final dashboard deadline correction, **10/10 affected CLI/dashboard tests**, targeted ESLint and the full build passed. Those regressions include automatic completion after 95 seconds, a bounded 105-second deadline, and fresh budgets for later captures after an earlier deadline or terminal result. The 130-test and 10-test results are separate runs.
 
-The actual local logs are `diagnostics/phase2a-final-test-storage-fix.log`, `diagnostics/phase2a-final-lint-storage-fix.log` and `diagnostics/phase2a-final-build-storage-fix.log`. Passing results were reused; the logging benchmark matrix from the previous milestone was not rerun.
+The renderer benchmark remains valid and was reused; the logging benchmark matrix from the previous milestone was not rerun.
 
-Independent ordinary UI review and the architect’s final targeted re-review found no actionable defects remaining after corrections. A real recorder concurrency failure—ENOENT/Windows EPERM during concurrent retention and publication—was fixed with a branch-scoped, process-local filesystem serializer. Its meaningful regression exercises eight writers across twenty flush rounds and compression. The final normal checks above include that fix. The serializer coordinates writers within the application process; existing data-directory ownership/lease protections remain the boundary against competing server processes.
+Independent ordinary UI review accepted the dashboard. A real recorder concurrency failure—ENOENT/Windows EPERM during concurrent retention and publication—was fixed with a branch-scoped, process-local filesystem serializer. Its meaningful regression exercises eight writers across twenty flush rounds and compression. The serializer coordinates writers within the application process; existing data-directory ownership/lease protections remain the boundary against competing server processes.
 
-Draft [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) has been pushed and hosted `@codex` review requested. Hosted review is pending and is not reported as passed here. The owner retains the final merge decision.
+Hosted Codex review of [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) initially raised two P2 findings: the CLI wait needed to cover admitted queue delay and cleanup, and camera/near-plane clearance needed to prevent a viewpoint clipping through opaque geometry. Both were corrected, retained focused regressions, and passed independent architect re-review. A subsequent review found that the dashboard still used a shorter deadline. The CLI and dashboard now import one shared **105-second** queue/cleanup/transport calculation; the dashboard associates its deadline with the capture ID and clears it on a terminal result, so the next capture cannot inherit an old expired budget.
+
+Navigation reserves approximately **0.498 world units** for the baseline head/eye/near-plane envelope and the normal door’s future slam sweep; actual captures validate their clipping volume against the physical scene. Saved schema-2 positions/history survive migration, with deterministic escape from a newly introduced future-only reserve instead of resetting or teleporting the character. Invalid capture geometry now records an explicit request/snapshot/failure/timing path without rendering, exposing a frame or encoding experience. The final admission correction passed independent architect re-review. Independent targeted UI review accepted the dashboard deadline correction. The final hosted Codex re-review reported **no findings and no unresolved findings**; the three superseded GitHub review threads were resolved after their fixes and that clean result were verified.
 
 ## Material limits
 
@@ -100,4 +111,4 @@ There are zero model calls. A successful frame does not establish attention, und
 
 Geometric visibility uses multiple samples and a conservative illumination/projected-size proxy. It is not a calibrated retinal model, exact visible-pixel fraction or semantic confidence. Engine identities and exact private geometry are confined to developer/replay evidence; filtered sensory output contains unknown shapes and scoped handles.
 
-Rendering is not cross-GPU byte deterministic. PNG hashes identify actual returned bytes; canonical simulation state/event replay remains exact. The renderer comparison is short and sequential on one Windows desktop; no long-soak, hosting-cost, GPU-utilization or cross-platform resource guarantee is claimed. Renderer absence, timeout, crash or frame eviction is an explicit missing/stale observation while the simulation continues.
+Rendering is not cross-GPU byte deterministic. PNG hashes identify actual returned bytes; canonical simulation state/event replay remains exact. The renderer comparison is short and sequential on one Windows desktop; no long-soak, hosting-cost, GPU-utilization or cross-platform resource guarantee is claimed. Renderer absence, timeout, crash or frame eviction is an explicit missing/stale observation while the simulation continues. The conservative clipping-volume bounding-sphere guard can reject unusual lens configurations; it fails visibly rather than granting an unsafe view.
