@@ -80,6 +80,25 @@ test('existing missing/corrupt ledger fails closed and cross-instance reservatio
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('reported debt above the admission bound persists and late overages cannot be refunded', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lumi-debt-')), directory = join(root, 'ledger');
+  try {
+    const budget = new DurableBudget(directory);
+    await budget.reserve('reported', 0.1); await budget.settle('reported', 10001, 'reported');
+    const restarted = new DurableBudget(directory);
+    assert.equal((await restarted.snapshot()).reportedUsd, 10001);
+    await assert.rejects(restarted.reserve('blocked', 0.01), fails('budget_exhausted'));
+    const abandonedDirectory = join(root, 'abandoned');
+    await new DurableBudget(abandonedDirectory, 1, () => 1000).reserve('abandoned', 0.1, { ttlMs: 100 });
+    const afterExpiry = new DurableBudget(abandonedDirectory, 1, () => 1100);
+    assert.equal((await afterExpiry.snapshot()).unknown, 1);
+    await afterExpiry.settle('abandoned', 1.5, 'reported');
+    await afterExpiry.settle('abandoned', 0, 'reported');
+    assert.equal((await afterExpiry.snapshot()).accountedUsd, 1.5);
+    await assert.rejects(afterExpiry.reserve('blocked', 0.01), fails('budget_exhausted'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('budget enforces application-wide real cadence across a new controller', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lumi-frequency-')), directory = join(root, 'ledger');
   try {
@@ -139,6 +158,24 @@ test('strict parser rejects privileged fields, fabricated handles, refusal and p
   }
 });
 
+test('reported OpenRouter overage overrides cheap token estimates and blocks the next request', async () => {
+  let calls = 0;
+  const fixture = await setup(async () => {
+    calls++;
+    return Response.json({ ...envelope(), usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.2 } });
+  }, { LUMI_COGNITION_BUDGET_USD: '0.15' });
+  try {
+    const result = await fixture.providers.interpret(input());
+    assert.equal(result.status, 'ok'); assert.ok(result.reservedUsd < 0.2);
+    assert.equal(result.costBasis, 'reported'); assert.equal(result.costUsd, 0.2);
+    assert.equal((await fixture.budget.snapshot()).reportedUsd, 0.2);
+    assert.equal((await new DurableBudget(fixture.config.budget.directory, 0.15).snapshot()).accountedUsd, 0.2);
+    await new Promise(resolve => setTimeout(resolve, 110));
+    assert.equal((await fixture.providers.interpret(input('after_overage', 30))).status, 'budget_exhausted');
+    assert.equal(calls, 1);
+  } finally { await fixture.close(); }
+});
+
 test('invalid/missing/private sensory input never dispatches, and disabled keys alone do not run', async () => {
   let calls = 0; const fixture = await setup(async () => { calls++; return Response.json(envelope()); });
   try {
@@ -158,6 +195,28 @@ test('timeouts do not wait for ignored aborts, charge unknown usage and block la
     assert.equal((await fixture.budget.snapshot()).unknown, 1);
     const second = await new CognitionProviders(fixture.config, new DurableBudget(fixture.config.budget.directory, 0.15), async () => { calls++; return Response.json(envelope()); }).interpret(input('request2', 30));
     assert.equal(second.status, 'budget_exhausted'); assert.equal(calls, 1);
+  } finally { await fixture.close(); }
+});
+
+test('an abort-ignoring late response increases durable debt without a second result or further admission', async () => {
+  let release: ((response: Response) => void) | undefined, calls = 0, results = 0;
+  const fixture = await setup(async () => { calls++; return await new Promise<Response>(resolve => { release = resolve; }); }, { LUMI_COGNITION_DEADLINE_MS: '200', LUMI_COGNITION_BUDGET_USD: '0.3' });
+  let accountingDone: (() => void) | undefined;
+  const lateAccounting = new Promise<void>(resolve => { accountingDone = resolve; });
+  const recordLate = fixture.budget.recordLateReportedCost.bind(fixture.budget);
+  fixture.budget.recordLateReportedCost = async (id, cost) => { await recordLate(id, cost); accountingDone!(); };
+  try {
+    const result = await fixture.providers.interpret(input()).then(value => { results++; return value; });
+    assert.equal(result.status, 'timeout'); assert.equal(result.content, null); assert.equal(result.costBasis, 'unknown');
+    assert.equal((await fixture.budget.snapshot()).accountedUsd, result.reservedUsd);
+    assert.ok(release);
+    release(Response.json({ ...envelope(), usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.35 } }));
+    await lateAccounting;
+    assert.equal((await fixture.budget.snapshot()).accountedUsd, 0.35);
+    assert.equal((await new DurableBudget(fixture.config.budget.directory, 0.3).snapshot()).accountedUsd, 0.35);
+    assert.equal(result.status, 'timeout'); assert.equal(result.content, null); assert.equal(result.costUsd, null); assert.equal(results, 1);
+    assert.equal((await fixture.providers.interpret(input('after_late_overage', 30))).status, 'budget_exhausted');
+    assert.equal(calls, 1); assert.equal(results, 1);
   } finally { await fixture.close(); }
 });
 

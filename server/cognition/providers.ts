@@ -143,12 +143,19 @@ export class CognitionProviders {
         if (record(rawUsage)) {
           usage.input = tokens(provider === 'openrouter' ? rawUsage.prompt_tokens : rawUsage.input_tokens) ? (provider === 'openrouter' ? rawUsage.prompt_tokens : rawUsage.input_tokens) as number : null;
           usage.output = tokens(provider === 'openrouter' ? rawUsage.completion_tokens : rawUsage.output_tokens) ? (provider === 'openrouter' ? rawUsage.completion_tokens : rawUsage.output_tokens) as number : null;
-          if (provider === 'openrouter' && typeof rawUsage.cost === 'number' && Number.isFinite(rawUsage.cost) && rawUsage.cost >= 0 && rawUsage.cost <= reserve) { usage.cost = rawUsage.cost; usage.basis = 'reported'; }
+          // A reported overage is still a known charge; never replace it with a cheaper token estimate.
+          if (provider === 'openrouter' && typeof rawUsage.cost === 'number' && Number.isFinite(rawUsage.cost) && rawUsage.cost >= 0) { usage.cost = rawUsage.cost; usage.basis = 'reported'; }
           // Token-derived cost is a conservative admission estimate, never a bill.
           else if (usage.input !== null && usage.output !== null && usage.input <= (provider === 'openrouter' ? this.config.main.maxInputTokens : 1_050_000)) {
             usage.cost = provider === 'openrouter' ? (usage.input * this.config.main.inputUsdPerMillion + usage.output * this.config.main.outputUsdPerMillion) / 1_000_000 : usage.input * 0.275 / 1_000_000;
             if (usage.cost <= reserve) usage.basis = 'estimated'; else { usage.cost = null; usage.basis = 'unknown'; }
           }
+        }
+        if (controller.signal.aborted) {
+          // Promise.race has already delivered timeout. Only increase durable accounting;
+          // never deliver this late interpretation or refund its unknown reservation.
+          if (usage.basis === 'reported' && usage.cost !== null) await this.budget.recordLateReportedCost(id, usage.cost);
+          return { status: 'timeout' } as const;
         }
         if (typeof payload.model !== 'string' || payload.model !== base.model) return { status: 'malformed' } as const;
         if (provider === 'openrouter') {
@@ -169,7 +176,7 @@ export class CognitionProviders {
       return { ...base, status, attempts: reserved ? 1 : 0, reservedUsd: reserved ? reserve : 0, latencyMs: elapsed() };
     } finally {
       if (timer) clearTimeout(timer);
-      if (reserved) await this.budget.settle(id, usage.cost, usage.basis).catch(() => { /* Existing pending reservation remains charged and fails closed. */ });
+      if (reserved) await this.budget.settle(id, controller.signal.aborted ? null : usage.cost, controller.signal.aborted ? 'unknown' : usage.basis).catch(() => { /* Existing pending reservation remains charged and fails closed. */ });
       const next = this.waiters.shift(); if (next) next(); else this.active--;
     }
   }

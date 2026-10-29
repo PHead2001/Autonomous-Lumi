@@ -7,6 +7,8 @@ type Entry = { id: string; reservedUsd: number; accountedUsd: number; state: 'pe
 type Ledger = { schema: 1; entries: Entry[] };
 export class BudgetError extends Error { constructor(public readonly code: 'budget_unavailable' | 'budget_exhausted' | 'duplicate_request' | 'concurrency_limited' | 'frequency_limited') { super(code); } }
 const validAmount = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 10000;
+// Admission bounds must not cap provider-reported debt after a request has already incurred it.
+const validCharge = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
 /** Application-wide, outside branch recovery. Pending/unknown reservations are never refunded on restart. */
 export class DurableBudget {
@@ -38,7 +40,7 @@ export class DurableBudget {
         if (!data || typeof data !== 'object' || (data as Ledger).schema !== 1 || !Array.isArray((data as Ledger).entries) || (data as Ledger).entries.length > 5000) throw new Error('Invalid ledger');
         const ledger = data as Ledger, ids = new Set<string>();
         for (const entry of ledger.entries) {
-          if (!entry || typeof entry.id !== 'string' || !/^[\w:.-]{1,160}$/.test(entry.id) || ids.has(entry.id) || !validAmount(entry.reservedUsd) || !validAmount(entry.accountedUsd) || !['pending','reported','estimated','unknown'].includes(entry.state) || !Number.isFinite(entry.at) || entry.at < 0 || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.at || entry.expiresAt - entry.at > 120000 || ((entry.state === 'pending' || entry.state === 'unknown') && entry.accountedUsd < entry.reservedUsd)) throw new Error('Invalid ledger entry');
+          if (!entry || typeof entry.id !== 'string' || !/^[\w:.-]{1,160}$/.test(entry.id) || ids.has(entry.id) || !validAmount(entry.reservedUsd) || !validCharge(entry.accountedUsd) || !['pending','reported','estimated','unknown'].includes(entry.state) || !Number.isFinite(entry.at) || entry.at < 0 || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= entry.at || entry.expiresAt - entry.at > 120000 || ((entry.state === 'pending' || entry.state === 'unknown') && entry.accountedUsd < entry.reservedUsd)) throw new Error('Invalid ledger entry');
           ids.add(entry.id);
         }
         // A dead process cannot settle its callback. Expiry frees only the slot, never the reserved money.
@@ -68,10 +70,29 @@ export class DurableBudget {
   settle(id: string, costUsd: number | null, basis: 'reported' | 'estimated' | 'unknown'): Promise<void> {
     return this.operation(async ledger => {
       const entry = ledger.entries.find(value => value.id === id);
-      if (entry?.state === 'unknown') return; // A late callback cannot refund an abandoned reservation.
+      if (entry?.state === 'unknown') {
+        // A late callback may increase known debt, but cannot refund an abandoned reservation.
+        if (basis === 'reported' && validCharge(costUsd) && costUsd > entry.accountedUsd) {
+          entry.accountedUsd = costUsd;
+          await atomicJson(join(this.directory, 'ledger.json'), ledger, false, this.directory);
+        }
+        return;
+      }
       if (!entry || entry.state !== 'pending') throw new BudgetError('duplicate_request');
-      if (basis !== 'unknown' && costUsd !== null && validAmount(costUsd) && costUsd <= entry.reservedUsd) { entry.accountedUsd = costUsd; entry.state = basis; }
-      else { entry.state = 'unknown'; entry.accountedUsd = Math.max(entry.reservedUsd, validAmount(costUsd) ? costUsd : 0); }
+      if (basis === 'reported' && validCharge(costUsd) || basis === 'estimated' && validCharge(costUsd) && costUsd <= entry.reservedUsd) { entry.accountedUsd = costUsd!; entry.state = basis; }
+      else { entry.state = 'unknown'; entry.accountedUsd = Math.max(entry.reservedUsd, validCharge(costUsd) ? costUsd : 0); }
+      await atomicJson(join(this.directory, 'ledger.json'), ledger, false, this.directory);
+    });
+  }
+  /** Accounting-only late completion: never refund or revive an abandoned request. */
+  recordLateReportedCost(id: string, costUsd: number): Promise<void> {
+    return this.operation(async ledger => {
+      const entry = ledger.entries.find(value => value.id === id);
+      if (!entry || !validCharge(costUsd)) throw new BudgetError('budget_unavailable');
+      const accountedUsd = Math.max(entry.accountedUsd, entry.reservedUsd, costUsd);
+      if (entry.accountedUsd === accountedUsd && entry.state !== 'pending') return;
+      entry.accountedUsd = accountedUsd;
+      if (entry.state === 'pending') entry.state = 'unknown';
       await atomicJson(join(this.directory, 'ledger.json'), ledger, false, this.directory);
     });
   }
