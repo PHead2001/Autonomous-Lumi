@@ -1,6 +1,42 @@
 # Phase 2c verification results
 
-Actual paid acceptance now passes: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. Phase 2c acceptance is fulfilled within the bounded checks and limitations below; merging remains the owner's action.
+The pixel-confidence correction is implemented: intended geometry-assisted handles and `inspect` are retained, with confidence calibrated from paired actual RGB/private-mask evidence. Weak/dim/small/cluttered eligible candidates remain LOW/uncertain; hidden/out-of-view geometry stays ineligible. **248/248 offline tests**, lint/build and actual attention **2/2** passed. Independent renderer/consumer reviews are clean. Latest hosted review is pending. No new paid calls were made, and all six existing paid bundles still replay with exact canonical results.
+
+## Pixel-confidence correction: actual evidence
+
+The renderer is `three-room-pixel-evidence-v2`; qualification is `rgb-mask-contrast-v1`, provider profile `pixel_checked_v3`, prompt `lumi-vision-prompt-v3`. Output schema remains `lumi-interpretation-v1`; handles and `inspect` keep their existing format. Current hints use `geometry_candidates_pixel_checked` with bounded quality flags; old geometry-only records preserve their original offline semantics. The [guide](multimodal-experience.md) documents the actual thresholds.
+
+Actual fixed-geometry render fixtures measured:
+
+| Fixture | Measured pixel evidence | Result |
+| --- | --- | --- |
+| Visible | RGB contrast 91/255 | HIGH |
+| Dim, illumination 0.04 | Contrast 7/255 | LOW, retained |
+| Black | Contrast 0 | LOW, retained |
+| Same wall material | Interior/ring luminance 141/141, RGB contrast 0 | LOW, retained |
+| Tiny / partial / hidden / out-of-view | Pixel support and geometric eligibility | Tiny LOW; partial retained; hidden/out-of-view absent |
+
+A focused review found a low-signal loophole: luminance 40/4 gave absolute contrast 36 and relative contrast 0.9 but could be HIGH. The fix requires measured median display signal ≥48/255 for HIGH; weaker signal stays LOW with `low_rgb_signal`. This cap is an engineering heuristic, not physiology or a day/night system. The fix passed **24 affected pixel/core checks**, **2/2 actual pixel checks** and **1/1 delayed-capture check**, plus TypeScript/lint and clean targeted re-review.
+
+| Check | Actual result / evidence |
+| --- | --- |
+| Full offline suite | **248/248 PASS**, `diagnostics/pixel-confidence-tests.log` |
+| Lint / build including TypeScript | **PASS**, `pixel-confidence-lint.log` / `pixel-confidence-build.log` |
+| Actual attention | **2/2 PASS**, `pixel-confidence-vision-attention.log` |
+| Paired renderer mask | **2/2**, D3D11 and SwiftShader; clean independent Astra review |
+| Actual pixel + FAKE transport integration | **2/2**, normal handle `inspect` → isolated LIVE encoding → fresh capture; zero external calls, `pixel-confidence-actual-tests.log` |
+| Existing paid artifacts | Six ZIPs exact offline canonical **PASS**; no new paid calls |
+| Renderer verification after correction | Initial **7/8**: one outdated test expected grounding without pixel metadata, not cleanup/runtime failure. Corrected affected test **1/1 PASS** with admitted RGB/mask/camera/complete-qualification proof; no full clean 8/8 rerun claimed |
+| Low-signal review correction | 24 affected checks, actual pixel **2/2**, delayed **1/1**, TypeScript/lint and targeted review clean; `pixel-confidence-review-fix-unit.log`, `pixel-confidence-actual-review-fix.log`, `pixel-confidence-delayed-capture-review-fix.log` |
+| Latest hosted review | **PENDING** for the new patch; previous hosted approval below applies to historical code |
+
+Paths without a prefix in this table are under `diagnostics/`. Missing/corrupt paired evidence produces zero handles and an explicit operational failure, rather than falling back to geometry-only confidence. The private mask never becomes model evidence. Controlled fixtures demonstrate this bounded heuristic, not broad perceptual accuracy.
+
+Cleanup diagnosis passed **13/13** focused checks (actual Windows query **469 ms**) and an exclusive pre-change `vision:verify` run **8/8** in **21.01 s** (`diagnostics/newgoalteardown-real.log`). It changed no source, ownership logic or timeout. The historical timeout was 750 ms versus the existing current 1,250 ms; this task did not inflate it. The reported cleanup flake was not reproduced; Windows query/host-load latency remains a candidate, not a confirmed cause or repaired defect.
+
+## Previous profile acceptance (historical)
+
+Previous paid acceptance passed: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. That review and acceptance apply to the previous profile; the current correction has separate checks above and its latest hosted review remains pending. Merging remains the owner's action.
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
@@ -71,7 +107,7 @@ The actual CLI replay **PASS** matched canonical state/events/runtime without pr
 
 Generated bundles, images, logs and reports are local ignored artifacts. They do not imply paid-provider acceptance.
 
-## Actual paid acceptance
+## Previous geometry-assisted paid acceptance (historical)
 
 Source reports are `diagnostics/phase2c-paid-json-20261029/{verification.json,acceptance-summary.json,http-evidence.json}`. The corrected run made **six main calls and one Decisions call**, all HTTP 200, without automated retries. Including the original strict-schema HTTP 404, the aggregate is **seven main calls and one Decisions call**. The initial unavailable preflight and failed first route attempt remain historical evidence in `diagnostics/phase2c-paid-preflight-20261029` and `diagnostics/phase2c-paid-20261029`; they were not erased or counted as successful interpretations.
 
