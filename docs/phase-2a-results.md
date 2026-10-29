@@ -2,7 +2,7 @@
 
 Virtual Eyes extends the existing fox-girl viewer and isolated laboratory with a shared physical scene, server-owned head/eye pose, deterministic turn/look/scan actions, an isolated on-demand Chromium renderer, and sight-limited spatial evidence. Operating instructions are in the [README](../README.md), [Virtual Eyes guide](virtual-eyes.md), and [renderer comparison](renderer-benchmarks.md).
 
-Current verification passed **143/143 normal tests**, **7/7 actual renderer cases in one command**, lint and build/typecheck. The observed-direction correction passed independent architect review and hosted code re-review with **no findings and no unresolved findings**. The retained renderer benchmark and browser evidence remain applicable as described below. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
+Current verification passed **156/156 normal tests**, **8/8 actual renderer cases in one command**, lint and build/typecheck. Independent architect review accepted the Windows teardown hardening with no actionable findings; hosted code re-review of that latest correction is pending. The observed-direction correction's earlier clean review, renderer benchmark and browser evidence remain applicable as described below. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
 
 ## Run and try it
 
@@ -45,7 +45,7 @@ npm.cmd run vision:benchmark -- --out diagnostics/vision-benchmarks/my-run
 npm.cmd run vision:verify
 ```
 
-The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. After the observed-direction correction, **`npm run vision:verify` passed 7/7 in one command**, approximately **15.32 seconds**, recorded in `diagnostics/observed-aim-renderer.log`. This includes physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, contained cleanup failure, and refusal of an eye inside an opaque occluder followed by a successful safe capture. This full run supersedes the earlier separate six-case and seventh-case checks. The first actual benchmark frame was visually inspected.
+The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. The latest **`npm run vision:verify` passed 8/8 in one command**, approximately **17.90 seconds**, recorded in `diagnostics/teardown-final-real-reallocated.log`. This includes physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, contained cleanup failure, refusal of an eye inside an opaque occluder followed by a successful safe capture, and a surviving profile process that remains an explicit cleanup failure until a later retry succeeds. The teardown verification sequence is detailed below. The first actual benchmark frame was visually inspected.
 
 ## Browser and continuity evidence
 
@@ -90,14 +90,14 @@ npm run lint
 npm run build
 ```
 
-The final observed-direction correction checks passed:
+The final Windows teardown correction checks passed:
 
-- `npm test`: **143/143**, approximately **10.23 seconds**, recorded in `diagnostics/observed-aim-tests.log`.
-- `npm run lint`: **PASS**, recorded in `diagnostics/observed-aim-lint.log`.
-- `npm run build`: **PASS**, including TypeScript checking, recorded in `diagnostics/observed-aim-build.log`. Vite retains the existing nonblocking approximately 540 kB viewer-chunk advisory above 500 kB.
-- `npm run vision:verify`: **7/7 in one command**, approximately **15.32 seconds**. The full result is described above.
+- `npm test`: **156/156**, approximately **9.54 seconds**, recorded in `diagnostics/teardown-final-tests-reallocated.log`.
+- `npm run lint`: **PASS**, recorded in `diagnostics/teardown-final-lint.log`.
+- `npm run build`: **PASS**, including TypeScript checking, recorded in `diagnostics/teardown-final-build.log`. Vite retains the existing nonblocking approximately 540 kB viewer-chunk advisory above 500 kB.
+- `npm run vision:verify`: **8/8 in one command**, approximately **17.90 seconds**. The full result is described above.
 
-The normal suite includes the earlier deadline regressions: automatic completion after 95 seconds, a bounded 105-second deadline, and fresh budgets for later captures after an earlier deadline or terminal result. It also includes the new captured-direction, active motor-anchor restore, migration and historical replay regressions.
+The normal suite includes the earlier deadline regressions: automatic completion after 95 seconds, a bounded 105-second deadline, and fresh budgets for later captures after an earlier deadline or terminal result. It also covers captured-direction aiming, active motor-anchor restore, migration, historical replay and the new cleanup result/stream/profile-query regressions.
 
 The renderer benchmark remains valid and was reused; the logging benchmark matrix from the previous milestone was not rerun.
 
@@ -135,6 +135,16 @@ npm.cmd run replay -- --bundle diagnostics/observed-aim-regression.zip
 ```
 
 The environment variable explicitly selects the real renderer for this bounded fixture; the ordinary test uses a stub. Logs are `diagnostics/observed-aim-{tests,lint,build,renderer,historical-replay,artifact}.log`. The retained `lumi-eyes-v1` acceptance ZIP was also replayed again and kept its original runtime hash `512cd093…b6742`.
+
+## Windows teardown hardening
+
+Two instrumented baseline `vision:verify` runs both passed. They nevertheless observed `taskkill` exit code 128 followed by the owned Chromium root exiting **35–53 ms** later. These were passing baseline runs, not failed renderer suites.
+
+The narrow correction reconciles only a normally exited, nonzero helper result. It requires bounded owned-root exit and a read-only exact-profile absence check. UTF-8 output must be complete before a query can prove absence. Helper timeout/launch/signal failure, query failure and a surviving profile process remain explicit failures, retaining child/profile ownership for a later explicit retry. Profile-query PIDs never become termination targets. An already-exited root also retains profile ownership until absence is proved.
+
+Three consecutive full **8/8** real-renderer runs passed in **19.02, 19.88 and 18.55 seconds** (`diagnostics/teardown-final-real-{1,2,3}.log`). The final encoding correction also passed actual Unicode-profile and stream regressions. A subsequent parallel normal-suite run exposed a **750 ms query deadline** that was too short: **154/155** passed, with the failure retained in `diagnostics/teardown-final-tests.log`. The budget was reallocated to **500 ms** for root-exit reconciliation and **1,250 ms** for the profile query plus **250 ms** to terminate an overdue query; the existing two-second helper and five-second manager budgets remain unchanged. A loaded query measured **815.8 ms**, confirming why the previous allowance was insufficient.
+
+After that timing correction, the final **156/156** normal suite, lint/build/typecheck and another full **8/8** actual renderer run passed as listed above. Exact matching was exercised with Unicode, spaces and prefix-confusable profile paths. Independent architect re-review accepted the stream/encoding and final timing corrections with no actionable findings; hosted code re-review is pending. No new security scan is claimed. The aiming/replay artifacts and renderer benchmark were reused; no new browser audible-output claim is made.
 
 ## Material limits
 

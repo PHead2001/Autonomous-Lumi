@@ -8,6 +8,9 @@ import { CaptureManager } from '../server/vision/capture-manager.js';
 import { BranchRuntime } from '../server/branch-runtime.js';
 import { groundSnapshot } from '../server/vision/grounding.js';
 import { rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { waitForOwnedExit } from '../server/vision/cleanup.js';
 
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 for (const configuration of ['angle-d3d11', 'swiftshader'] as const) {
@@ -87,4 +90,28 @@ test('actual renderer refuses an eye-inside-occluder frame and the next explicit
     assert.equal(png.width, 512); assert.equal(png.height, 512);
     assert.ok(valid.bytes.length > 100);
   } finally { await renderer.close(); }
+});
+
+test('an exited browser root does not discard a live owned-profile holder or delete its profile', { skip: process.platform !== 'win32' }, async () => {
+  let root: ChildProcess | undefined, profile: string | undefined, removals = 0, holder: ChildProcess | undefined;
+  const renderer = new ChromiumRenderer('angle-d3d11', 20000, 30000, {
+    onSpawn: child => { if (!root) { root = child; profile = child.spawnargs.find(arg => arg.startsWith('--user-data-dir='))?.slice('--user-data-dir='.length); } },
+    removeProfile: async path => { removals++; await rm(path, { recursive: true, force: true }); },
+  });
+  try {
+    await renderer.render(createVisibilityFixture(), 128, 128); assert.ok(root); assert.ok(profile);
+    // This separately owned test process models an orphan still using the unique renderer profile.
+    holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', `--user-data-dir=${profile}`], { stdio: 'ignore', windowsHide: true });
+    root.kill(); await waitForOwnedExit(root, 1000);
+    await assert.rejects(renderer.close(), /profile processes remain/);
+    assert.equal(removals, 0); assert.equal(existsSync(profile), true); assert.match(renderer.cleanupError ?? '', /cleanup failed/);
+    await assert.rejects(renderer.render(createVisibilityFixture(), 128, 128), /cleanup failed/);
+    assert.equal(removals, 0); assert.equal(existsSync(profile), true);
+    holder.kill(); await waitForOwnedExit(holder, 1000);
+    assert.ok((await renderer.render(createVisibilityFixture(), 128, 128)).bytes.length > 100);
+    assert.equal(existsSync(profile), false); assert.equal(removals, 1);
+  } finally {
+    if (holder && holder.exitCode === null && holder.signalCode === null) { holder.kill(); await waitForOwnedExit(holder, 1000); }
+    await renderer.close();
+  }
 });

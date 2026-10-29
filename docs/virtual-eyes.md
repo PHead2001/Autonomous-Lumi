@@ -55,6 +55,8 @@ Use the selected experiment’s identifiers to capture an experiment. Run identi
 
 The renderer runs a separate owned headless Chromium process with no simulation loop or recovery-data lease. One renderer job runs at a time; admission is bounded to four jobs. Requests have a 20-second render deadline, up to four frames per run and sixteen total retained frames. Idle renderer processes close after 30 seconds. A timeout or crash cleans up the worker; a later explicit request can try again. There is no unbounded automatic restart loop. Captures and frame bytes stay outside authoritative checkpoints.
 
+Windows cleanup can reconcile a normally exited, nonzero `taskkill` result with a nearly simultaneous Chromium exit. It waits at most 500 ms for the owned root, then allows 1,250 ms for the exact unique-profile query plus 250 ms to terminate an overdue query. An already-exited root also requires this absence proof before profile deletion. The read-only query must terminate normally with its UTF-8 output fully drained; process termination continues to target the original owned child. A helper timeout, launch failure, failed absence query or surviving profile process remains an explicit cleanup failure. Child/profile ownership is retained for a later explicit retry. The existing two-second `taskkill` and five-second manager cleanup budgets are unchanged.
+
 The measured Windows default is ANGLE/D3D11 with a 30-second idle renderer lifetime. [Phase 2a results](phase-2a-results.md) and the [renderer comparison](renderer-benchmarks.md) record the actual measurements and limitations. To explicitly choose a configuration before starting the server:
 
 ```powershell
