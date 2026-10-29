@@ -1,8 +1,9 @@
 import type { ActiveTarget } from '../shared/lab-protocol';
-import type { CognitionAction, CognitionActionOutcome, CognitionMetrics } from '../shared/cognition-protocol';
+import type { CognitionContext, CognitionAction, CognitionActionOutcome, CognitionMetrics } from '../shared/cognition-protocol';
 import { visionScopeKey } from './dashboard-vision';
 
 export interface CognitionRequestView {
+  context?: CognitionContext | null; contextProfile?: string; promptRevision?: string;
   requestId: string; observationId: string; captureId?: string; frameHash: string;
   purpose?: 'interpretation' | 'decisions_evaluation'; capturedTick: number; attentionTick: number; requestedTick: number;
   provider: string; model: string; status: 'pending' | 'completed'; resultTick: number | null;

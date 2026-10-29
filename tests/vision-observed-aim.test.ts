@@ -1,3 +1,4 @@
+import { pixelFixtureFrame } from './helpers/pixel-frame.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
@@ -18,7 +19,7 @@ import { replay } from '../server/replay.js';
 const radians=(degrees:number)=>degrees*Math.PI/180;
 const close=(actual:number,expected:number)=>assert.ok(Math.abs(actual-expected)<1e-12,`${actual} != ${expected}`);
 const step=(s:VisionSimulation,n:number)=>{for(let i=0;i<n;i++)s.step();};
-const fakeRenderer=():FrameRenderer=>({render:async()=>({bytes:new Uint8Array([137,80,78,71]),backend:{configuration:'angle-d3d11',chromium:'TEST STUB',webglVendor:'TEST STUB',webglRenderer:'TEST STUB',version:'TEST STUB',flags:[]}}),close:async()=>{}});
+const fakeRenderer=():FrameRenderer=>({render:async(snapshot,width,height)=>pixelFixtureFrame(snapshot,width,height),close:async()=>{}});
 function fixtureRuntime(moving=false,directory?:string) {
   const initial=new BranchRuntime({worldId:'aim-test',branchId:'fixture',mode:'EXPERIMENT',offline:true}),base=initial.checkpoint(),cp={...base,schemaVersion:2 as const,simulation:new VisionSimulation({mode:'EXPERIMENT'}).checkpoint()},fixture=createVisibilityFixture();
   if(cp.simulation.schemaVersion!==3)throw new Error('Vision checkpoint required');

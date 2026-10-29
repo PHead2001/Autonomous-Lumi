@@ -1,3 +1,4 @@
+import { currentCognitionProfile } from '../shared/cognition-protocol.js';
 import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../shared/protocol.js';
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
@@ -679,7 +680,8 @@ export class CognitionSimulation extends SensorySimulation {
   else if(!b||!last||last.outcome!=='success'||last.freshness!=='applicable'||last.captureId!==s.captureId||last.intentId!==s.intentId||b.captureId!==s.captureId||b.frameHash!==s.frameHash||b.capturedTick!==s.capturedTick||last.receivedTick!==s.attentionTick||canonicalStringify(b.pose)!==canonicalStringify(s.pose))reason='unselected_sensor_evidence';
   else if(!last.reasons.some(r=>['salient_sound','head_milestone','visible_change','activity_outcome'].includes(r))&&!(c.observationRequestedTick!==null&&s.capturedTick>=c.observationRequestedTick))reason='observation_not_attended';
   else if(s.attentionTick>tick||tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)reason='stale_selection';else if(s.source!=='actual_renderer'&&this.mode==='LIVE')reason='test_source_not_live';
-  else if(s.context.activity.status!==this.activity.status||s.context.experiences.some(e=>!this.realExperiences.some(old=>old.identity.historyId===s.identity.historyId&&old.interpretation===e.interpretation&&old.uncertainty===e.uncertainty)))reason='unadmitted_context';
+  else if(currentCognitionProfile(command)&&s.context.shapes.some(shape=>shape.uncertainty!=='geometry_candidates_pixel_checked'))reason='unqualified_shape_context';
+  else if(s.context.activity.status!==this.activity.status||s.context.experiences.some(e=>!this.realExperiences.some(old=>old.identity.historyId===s.identity.historyId&&old.interpretation===e.interpretation&&old.uncertainty===e.uncertainty&&(!currentCognitionProfile(command)||c.requests.some(r=>r.request.requestId===old.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))))))reason='unadmitted_context';
   else if(s.context.sound!==null){const received=a.lastReceived;if(!received)reason='unreceived_sound';else{const {tick:ignoreTick,bodyHeading:ignoreBody,headYaw:ignoreHead,...sound}=received;void ignoreTick;void ignoreBody;void ignoreHead;if(received.tick>s.capturedTick||a.lastDecision?.observationId!==received.observationId||a.lastDecision.outcome==='ignored'||canonicalStringify({...sound,relation:received.tick===s.capturedTick?'same_capture':'before_image',ageBand:s.capturedTick-received.tick<=90?'recent':'earlier'})!==canonicalStringify(s.context.sound))reason='unreceived_sound';}}
   if(reason){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason},sequence);return;}
   const candidate={request:structuredClone(command),requestedTick:tick,status:'pending' as const,resultTick:null,result:null,action:null,encoding:null};
@@ -717,7 +719,7 @@ export class CognitionSimulation extends SensorySimulation {
   this.emit(events,'COGNITION_RESULT','cognition',command.outcome,{requestId:command.requestId,latencyMs:command.metrics.latencyMs,attempts:command.metrics.attempts,costUsd:command.metrics.costUsd??'unknown',costBasis:command.metrics.costBasis,inputTokens:command.metrics.inputTokens??'unknown',outputTokens:command.metrics.outputTokens??'unknown'},sequence);
   const s=r.request.selection,p=command.proposal;
   if(command.outcome!=='success'||!p){r.encoding={status:'rejected',reason:command.outcome,experienceId:null};this.emit(events,'EXPERIENCE_ENCODING','experience','rejected',{requestId:command.requestId,reason:command.outcome,encoded:false},sequence);return;}
-  const handles=s.context.shapes.map(s=>s.handle);
+  const handles=s.context.shapes.filter(shape=>!currentCognitionProfile(r.request)||shape.uncertainty==='geometry_candidates_pixel_checked').map(s=>s.handle);
   if(p.observationId!==s.observationId||p.frameHash!==s.frameHash||p.evidenceHandles.some(h=>!handles.includes(h))||p.action.type==='inspect'&&!handles.includes(p.action.handle)){
    r.action={status:'rejected',reason:'fabricated_evidence',actionId:null,tick};r.encoding={status:'rejected',reason:'fabricated_evidence',experienceId:null};this.emit(events,'COGNITION_VALIDATION','cognition','rejected',{requestId:command.requestId,reason:'fabricated_evidence'},sequence);return;
   }

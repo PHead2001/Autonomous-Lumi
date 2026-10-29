@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { LabSimulation, VisionSimulation, SensorySimulation, CognitionSimulation, validateCheckpoint, validateCommand, hashCheckpoint, type CheckpointV2, type CheckpointV3, type CheckpointV4, type CheckpointV5, type OrderedInput, type NormalizedCommand, type DeterministicEvent } from './simulation.js';
-import { validateCognitionCommand, type CognitionObservationRequestCommand, type CognitionRequestCommand, type CognitionResultCommand } from '../shared/cognition-protocol.js';
+import { currentCognitionProfile, validateCognitionCommand, type CognitionObservationRequestCommand, type CognitionRequestCommand, type CognitionResultCommand } from '../shared/cognition-protocol.js';
 import type { CaptureMetadata, VisualObservation } from '../shared/capture-protocol.js';
 import {validateSensoryCommand,type SensorFeedbackCommand} from '../shared/attention-protocol.js';
 import { FixedScheduler, systemClock, type HostClock, type SchedulerState, type SchedulerDiagnostic } from './scheduler.js';
@@ -159,10 +159,11 @@ export class BranchRuntime {
   /** Only the host owning an ID-bound rendered frame may cross this boundary. */
   enqueueCognitionRequest(command:CognitionRequestCommand,evidence:{metadata:CaptureMetadata;observation:VisualObservation;sensorSource:'actual_renderer'|'mock_renderer'}) {
     const normalized=validateCognitionCommand(command);if(normalized.type!=='cognition_request')throw new Error('Cognition request required');
+    if(!currentCognitionProfile(normalized)||normalized.selection.context.shapes.some(shape=>shape.uncertainty!=='geometry_candidates_pixel_checked'))throw new Error('Current pixel-qualified cognition profile required');
     const s=normalized.selection,m=evidence.metadata,o=evidence.observation;
     if(m.status!=='success'||!m.backend||m.captureId!==s.captureId||m.observationId!==s.observationId||m.frameHash!==s.frameHash||m.tick!==s.capturedTick||o.observationId!==s.observationId||o.frameHash!==s.frameHash||o.tick!==s.capturedTick||!m.automatic||m.automatic.intentId!==s.intentId||m.worldId!==this.target.worldId||m.branchId!==this.target.branchId||m.runId!==this.target.runId||o.worldId!==m.worldId||o.branchId!==m.branchId||o.runId!==m.runId||m.width!==512||m.height!==512||s.source!==(evidence.sensorSource==='actual_renderer'?'actual_renderer':'test_fixture'))throw new Error('Untrusted cognition sensor association');
     const pose={x:m.camera.position[0],y:m.camera.position[1],z:m.camera.position[2],bodyHeading:m.camera.bodyHeading,headYaw:m.camera.headYaw,headPitch:m.camera.headPitch};
-    const shapes=o.shapes.slice(0,32).map(({handle,bearingDegrees,elevationDegrees,distanceBand,sampleVisibilityBand,uncertainty})=>({handle,bearingDegrees,elevationDegrees,distanceBand,sampleVisibilityBand,uncertainty}));
+    const shapes=o.shapes.slice(0,32).map(({handle,bearingDegrees,elevationDegrees,distanceBand,sampleVisibilityBand,uncertainty,qualityFlags})=>({handle,bearingDegrees,elevationDegrees,distanceBand,sampleVisibilityBand,uncertainty,...(uncertainty==='geometry_candidates_pixel_checked'?{qualityFlags:[...qualityFlags]}:{})}));
     if(canonicalStringify(pose)!==canonicalStringify(s.pose)||canonicalStringify(shapes)!==canonicalStringify(s.context.shapes))throw new Error('Cognition evidence context mismatch');
     return this.admitInput(normalized);
   }

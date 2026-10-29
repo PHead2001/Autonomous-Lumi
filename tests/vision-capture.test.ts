@@ -1,3 +1,4 @@
+import { pixelFixtureFrame } from './helpers/pixel-frame.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BranchRuntime } from '../server/branch-runtime.js';
@@ -28,7 +29,7 @@ function runtime(branchId = 'experiment') {
 class DelayedRenderer implements FrameRenderer {
   received: WorldState[] = []; private finish: ((value: RenderedFrame) => void) | undefined;
   render(snapshot: WorldState) { this.received.push(snapshot); return new Promise<RenderedFrame>(done => { this.finish = done; }); }
-  release() { this.finish?.(frame); }
+  release() { this.finish?.(pixelFixtureFrame(this.received.at(-1)!)); }
   async close() { this.release(); }
 }
 test('immutable delayed capture retains original tick and bytes; foreign run cannot read frame or use handle', async () => {

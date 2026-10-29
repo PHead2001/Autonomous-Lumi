@@ -12,7 +12,7 @@ import { INTERPRETATION_JSON_SCHEMA, type CognitionContext } from '../shared/cog
 
 const image = PNG.sync.write(new PNG({ width: 512, height: 512, fill: true }));
 const context = (): CognitionContext => ({ observationId: 'obs1', frameHash: createHash('sha256').update(image).digest('hex'),
-  shapes: [{ handle: 'shape1', bearingDegrees: 15, elevationDegrees: 0, distanceBand: 'near', sampleVisibilityBand: 'medium', uncertainty: 'geometric_samples_only' }],
+  shapes: [{ handle: 'shape1', bearingDegrees: 15, elevationDegrees: 0, distanceBand: 'near', sampleVisibilityBand: 'medium', uncertainty: 'geometry_candidates_pixel_checked', qualityFlags: [] }],
   sound: null, activity: { status: 'running' }, experiences: [] });
 const proposal = () => ({ observationId: 'obs1', frameHash: context().frameHash, interpretation: 'An uncertain shape is ahead.', uncertainty: 0.6, evidenceHandles: ['shape1'], action: { type: 'inspect', handle: 'shape1' } });
 const envelope = (content: unknown = proposal()) => ({ model: 'qwen/qwen3.7-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 123, completion_tokens: 40, cost: 0.00001 } });
@@ -130,7 +130,7 @@ test('OpenRouter sends the bound private 512 PNG with JSON mode, bounded explici
     assert.equal(body.model, 'qwen/qwen3.7-flash'); assert.equal(body.stream, false); assert.equal(body.provider.allow_fallbacks, false); assert.equal(body.provider.require_parameters, true);
     assert.deepEqual(body.provider.max_price, { prompt: 0.1, completion: 0.3 }); assert.deepEqual(body.response_format, { type: 'json_object' });
     assert.equal(body.max_tokens, fixture.config.limits.maxOutputTokens);
-    assert.equal(COGNITION_PROMPT_REVISION, 'lumi-vision-prompt-v2');
+    assert.equal(COGNITION_PROMPT_REVISION, 'lumi-vision-prompt-v3');
     assert.equal(body.messages[0].role, 'system');
     const systemPrompt = body.messages[0].content as string;
     assert.ok(Buffer.byteLength(systemPrompt) <= 8192);
@@ -286,4 +286,9 @@ test('separate Decisions contract uses fixed endpoint/model typed choices, conse
   const refused = await setup(async () => Response.json({ model: 'gpt-6-luna', answers: [{ type: 'refusal', name: 'attention' }] }));
   try { assert.equal((await refused.providers.decide({ requestId: 'decision1', worldTimeSeconds: 10, context: context(), choices: [{ value: 'continue', description: 'Continue' }, { value: 'inspect', description: 'Inspect' }] })).status, 'refused'); }
   finally { await refused.close(); }
+});
+
+test('both current adapters reject old unmeasured geometry labels and never send private mask machinery',async()=>{
+ let calls=0;const fixture=await setup(async(url,init)=>{calls++;const body=JSON.parse(init.body as string),dto=JSON.parse(url.includes('openrouter')?body.messages[1].content[0].text:body.input);for(const key of ['privateMask','physicalIds','pixelQualification','private-target','visiblePixels','interiorPixels'])assert.equal(JSON.stringify(dto).includes(key),false);return Response.json(envelope());});
+ try{const old=context();old.shapes[0].uncertainty='geometric_samples_only';delete old.shapes[0].qualityFlags;assert.equal((await fixture.providers.interpret({...input(),context:old})).status,'invalid_input');assert.equal((await fixture.providers.decide({requestId:'old-decision',worldTimeSeconds:0,context:old,choices:[{value:'continue',description:'Continue'},{value:'request_observation',description:'Fresh image'}]})).status,'invalid_input');assert.equal(calls,0);const privateFlag=context();privateFlag.shapes[0].qualityFlags=['private_engine_target'];assert.equal((await fixture.providers.interpret({...input(),context:privateFlag})).status,'invalid_input');assert.equal(calls,0);assert.equal((await fixture.providers.interpret(input())).status,'ok');assert.equal(calls,1);}finally{await fixture.close();}
 });

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
+import type { CheckpointV5 } from '../simulation.js';
 import type { BranchRuntime } from '../branch-runtime.js';
 import { hashCanonical } from '../canonical.js';
 import type { CaptureManager } from '../vision/capture-manager.js';
-import { validateCognitionContext, type CognitionContext, type CognitionIdentity, type CognitionSelection } from '../../shared/cognition-protocol.js';
+import { currentCognitionProfile, validateCognitionContext, type CognitionContext, type CognitionIdentity, type CognitionSelection } from '../../shared/cognition-protocol.js';
 
 export interface ImmutableCognitionObservation {
   selection:CognitionSelection;
@@ -11,6 +12,8 @@ export interface ImmutableCognitionObservation {
   contextHash:string;
   evidence:Omit<ReturnType<CaptureManager['observation']>,'png'>;
 }
+/** Legacy geometry-aided prose remains on disk, but never becomes future provider context. */
+export function providerExperiences(cp:CheckpointV5,identity:CognitionIdentity):CognitionContext['experiences'] {return cp.realExperiences.filter(e=>cp.cognition.requests.some(r=>r.request.requestId===e.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))&&e.identity.worldId===identity.worldId&&e.identity.historyId===identity.historyId&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).slice(-8).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));}
 /** This allowlist is the only world-to-provider assembly path. Private pose and
  * correlation timing remain in selection, separately from the provider DTO. */
 export function assembleCognitionObservation(runtime:BranchRuntime,manager:CaptureManager,captureId:string,identity:CognitionIdentity,maxImageBytes:number,maxContextBytes:number):ImmutableCognitionObservation {
@@ -27,10 +30,10 @@ export function assembleCognitionObservation(runtime:BranchRuntime,manager:Captu
   const relatedSound=!!received&&!!decision&&decision.observationId===received.observationId&&decision.outcome!=='ignored'&&decision.tick<=metadata.tick&&received.tick<=metadata.tick&&capture.reasons.some(r=>r==='salient_sound'||r==='head_milestone');
   const context:CognitionContext={
     observationId:observation.observationId,frameHash:observation.frameHash,
-    shapes:observation.shapes.slice(0,32).map(shape=>({handle:shape.handle,bearingDegrees:shape.bearingDegrees,elevationDegrees:shape.elevationDegrees,distanceBand:shape.distanceBand,sampleVisibilityBand:shape.sampleVisibilityBand,uncertainty:shape.uncertainty})),
+    shapes:observation.shapes.slice(0,32).map(shape=>({handle:shape.handle,bearingDegrees:shape.bearingDegrees,elevationDegrees:shape.elevationDegrees,distanceBand:shape.distanceBand,sampleVisibilityBand:shape.sampleVisibilityBand,uncertainty:shape.uncertainty,qualityFlags:[...shape.qualityFlags]})),
     sound:relatedSound?{observationId:received.observationId,intensity:received.intensity,suddenness:received.suddenness,bearingDegrees:received.bearingDegrees,directionUncertaintyDegrees:received.directionUncertaintyDegrees,distanceBand:received.distanceBand,distanceUncertainty:received.distanceUncertainty,provenance:received.provenance,relation:received.tick===metadata.tick?'same_capture':'before_image',ageBand:metadata.tick-received.tick<=90?'recent':'earlier'}:null,
     activity:{status:cp.activity.status},
-    experiences:cp.realExperiences.filter(e=>e.identity.worldId===identity.worldId&&e.identity.historyId===identity.historyId&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).slice(-8).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty})),
+    experiences:providerExperiences(cp,identity),
   };
   validateCognitionContext(context);
   if(Buffer.byteLength(JSON.stringify(context))>maxContextBytes)throw new Error('Selected context exceeds bound');

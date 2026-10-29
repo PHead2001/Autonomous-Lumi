@@ -6,6 +6,7 @@ import { ChromiumRenderer } from '../server/vision/renderer.js';
 import { createVisibilityFixture } from '../shared/vision-fixture.js';
 import { CaptureManager } from '../server/vision/capture-manager.js';
 import { BranchRuntime } from '../server/branch-runtime.js';
+import { qualifyPixelGrounding } from '../server/vision/pixel-qualification.js';
 import { groundSnapshot } from '../server/vision/grounding.js';
 import { rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -56,7 +57,7 @@ test('actual delayed zero-viewer capture preserves admission snapshot while worl
   const manager = new CaptureManager(() => true, renderer), requested = manager.request(runtime, { reason: 'diagnostic' });
   const timer = setInterval(() => runtime.simulation.step(), 1000 / 30);
   runtime.enqueue({ type: 'slam' });
-  try { const completed = await manager.wait(runtime.target, requested.captureId); assert.equal(completed.status, 'success'); assert.equal(completed.tick, requested.tick); assert.equal(completed.stateHash, requested.stateHash); assert.ok(runtime.simulation.state.tick > requested.tick); assert.equal(runtime.simulation.state.door.slamCount, 1); assert.ok(runtime.simulation.state.reflex.strength > 0 && runtime.simulation.state.reflex.strength < 1); assert.equal(runtime.simulation.state.reflex.start, runtime.simulation.state.door.lastSlam); const capturedBytes = manager.frame(runtime.target, requested.captureId); assert.ok(capturedBytes.length > 100); const reproduced = await renderer.render(admittedSnapshot, 512, 512); assert.equal(digest(capturedBytes), digest(reproduced.bytes)); assert.deepEqual(manager.view(runtime.target).privateGrounding, groundSnapshot(admittedSnapshot, 512, 512)); }
+  try { const completed = await manager.wait(runtime.target, requested.captureId); assert.equal(completed.status, 'success'); assert.equal(completed.tick, requested.tick); assert.equal(completed.stateHash, requested.stateHash); assert.ok(runtime.simulation.state.tick > requested.tick); assert.equal(runtime.simulation.state.door.slamCount, 1); assert.ok(runtime.simulation.state.reflex.strength > 0 && runtime.simulation.state.reflex.strength < 1); assert.equal(runtime.simulation.state.reflex.start, runtime.simulation.state.door.lastSlam); const capturedBytes = manager.frame(runtime.target, requested.captureId); assert.ok(capturedBytes.length > 100); const reproduced = await renderer.render(admittedSnapshot, 512, 512); assert.equal(digest(capturedBytes), digest(reproduced.bytes)); assert.ok(reproduced.privateMask, 'reproduced admission snapshot has paired private mask'); const geometry = groundSnapshot(admittedSnapshot, 512, 512, { ignoreLegacyIlluminationGate: true, pixelEvidenceCandidates: true }); const expected = qualifyPixelGrounding(geometry, capturedBytes, reproduced.privateMask, 512, 512); assert.equal(expected.pixelQualification.status, 'checked'); assert.deepEqual(expected.camera, requested.camera); assert.deepEqual(manager.view(runtime.target).privateGrounding, expected, 'retained admission geometry and measured pixel confidence match its original RGB/mask, not the later moving world'); }
   finally { clearInterval(timer); await manager.close(); await runtime.close(); }
 });
 test('idle cleanup failure is contained, visible, and retried only by an explicit new capture', async () => {

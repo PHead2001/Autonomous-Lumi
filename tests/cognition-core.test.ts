@@ -8,7 +8,7 @@ import {replay} from '../server/replay.js';
 import {BranchRuntime,validateRuntimeCheckpoint,replayRuntime} from '../server/branch-runtime.js';
 import {RecoveryStore} from '../server/recovery-store.js';
 import {eyePose} from '../shared/eye-pose.js';
-import {COGNITION_SCHEMA_REVISION,parseCognitionProposal,type CognitionRequestCommand,type CognitionResultCommand,type CognitionAction} from '../shared/cognition-protocol.js';
+import {COGNITION_SCHEMA_REVISION,COGNITION_PROMPT_REVISION,parseCognitionProposal,type CognitionRequestCommand,type CognitionResultCommand,type CognitionAction} from '../shared/cognition-protocol.js';
 const frameHash='a'.repeat(64);
 function fixture(mode:'LIVE'|'EXPERIMENT'='LIVE',source:'actual_renderer'|'test_fixture'='actual_renderer') {
  const fresh=new CognitionSimulation({mode,worldId:'world',branchId:'live',historyId:'history',runId:'run'}).checkpoint();fresh.pauseUntilTick=10000;fresh.character.moving=false;
@@ -166,4 +166,19 @@ test('2c near-capacity admission measures actual pretty recovery/named envelopes
   t.diagnostic(JSON.stringify({forkSyntheticCount:full.simulation.experiences.length,fullActivityMilestones:full.simulation.activity.appliedMilestones.length,forkBytes:checkpointBytes(namedFull)}));
  } finally {await registry.close();}
  await base.close();
+});
+
+function pixelFixture() {const f=fixture();f.request.promptRevision=COGNITION_PROMPT_REVISION;f.request.selection.context.shapes[0].uncertainty='geometry_candidates_pixel_checked';f.request.selection.context.shapes[0].qualityFlags=[];return f;}
+test('current profile rejects unqualified geometry contexts and dropped/fabricated handles cannot encode',()=>{
+ const old=fixture();old.request.promptRevision=COGNITION_PROMPT_REVISION;old.enqueue(old.request);const events=old.sim.step();assert.equal(old.sim.cognitionState().requests.length,0);assert.ok(events.some(e=>e.data.reason==='unqualified_shape_context'));
+ const f=pixelFixture();f.request.selection.context.shapes=[];f.enqueue(f.request);f.sim.step();f.enqueue(f.result({type:'inspect',handle:'shape'}));f.sim.step();assert.equal(f.sim.cognitionState().requests[0].encoding?.reason,'fabricated_evidence');assert.equal(f.sim.admittedExperiences().length,0);
+});
+test('current qualified handle inspection executes with normal fresh capture and exact replay/recovery',async t=>{
+ const f=pixelFixture();f.enqueue(f.request);f.sim.step();const start=f.sim.checkpoint(),input=f.sim.enqueue(f.result({type:'inspect',handle:'shape'})).input;f.sim.step();for(let i=0;i<30;i++)f.sim.step();const end=f.sim.checkpoint();
+ assert.equal(end.cognition.requests[0].action?.reason,'inspection_orient_started');assert.ok(f.sim.attentionState().pending?.reasons.includes('head_milestone'));assert.equal(f.sim.admittedExperiences().length,1);const offline=replay(start,[input],end.tick);assert.equal(offline.stateHash,hashCheckpoint(end));assert.equal(offline.eventHash,end.eventHash);
+ const directory=await mkdtemp(join(tmpdir(),'lumi-pixel-recovery-'));t.after(()=>rm(directory,{recursive:true,force:true}));const base=new BranchRuntime({mode:'LIVE',worldId:'world',branchId:'live',historyId:'history',offline:true});try{const {store}=await RecoveryStore.open({directory});await store.save({...base.checkpoint(),simulation:end});const restored=await RecoveryStore.open({directory});assert.deepEqual((restored.checkpoint as import('../server/branch-runtime.js').RuntimeCheckpoint).simulation,end);}finally{await base.close();}
+});
+test('future provider context excludes legacy geometry-aided prose without altering stored history',async()=>{
+ const {providerExperiences}=await import('../server/cognition/observation.js');const f=fixture();f.enqueue(f.request);f.sim.step();f.enqueue(f.result());f.sim.step();const cp=f.sim.checkpoint(),before=hashCheckpoint(cp);assert.equal(providerExperiences(cp,cp.cognition.identity).length,0);assert.equal(hashCheckpoint(cp),before);assert.equal(cp.realExperiences.length,1);
+ const current=structuredClone(cp);current.cognition.requests[0].request.promptRevision=COGNITION_PROMPT_REVISION;assert.equal(providerExperiences(current,current.cognition.identity).length,1);
 });
