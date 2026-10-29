@@ -155,3 +155,27 @@ test('capture completed during failed restore preparation remains valid for the 
     assert.ok(!records.some(record => record.event_type === 'CAPTURE_STALE_DISCARD' && record.data.captureId === requested.captureId));
   } finally { if (preparationEntered) failPreparation(new Error('test preparation cleanup')); await restoreOutcome; await api.close(); await registry.close(); await rm(directory, { recursive: true, force: true }); }
 });
+test('invalid camera admission records a failed capture and retains the earlier image only as previous evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lumi-vision-admission-')); assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep));
+  const source = runtime('source'), checkpoint = source.checkpoint();
+  assert.equal(checkpoint.simulation.schemaVersion, 3); if (checkpoint.simulation.schemaVersion !== 3) throw new Error('Vision schema required');
+  checkpoint.simulation.character = { x: 3.2, z: -2.3, heading: Math.PI - 0.5, moving: false, gait: 0 };
+  checkpoint.simulation.pauseUntilTick = checkpoint.simulation.tick + 1000;
+  checkpoint.simulation.scene.fixture = 'none'; checkpoint.simulation.scene.doorOpenRadians = null;
+  const a = new BranchRuntime({ worldId: 'camera-admission', branchId: 'experiment', mode: 'EXPERIMENT', checkpoint, directory });
+  let renders = 0;
+  const manager = new CaptureManager(() => true, { render: async () => { renders++; return frame; }, close: async () => {} });
+  try {
+    const good = manager.request(a, { reason: 'diagnostic' }); assert.equal((await manager.wait(a.target, good.captureId)).status, 'success');
+    // A valid migrated near-door pose becomes temporarily obstructed by the actual slam transform.
+    a.enqueue({ type: 'slam' }); a.applyControl({ type: 'step' });
+    const invalid = manager.request(a, { reason: 'diagnostic' }); assert.equal(invalid.status, 'failed');
+    const terminal = await manager.wait(a.target, invalid.captureId); assert.match(terminal.error ?? '', /Camera/); assert.ok(terminal.completedAt); assert.equal(terminal.frameHash, null); assert.equal(terminal.backend, null);
+    const view = manager.view(a.target); assert.equal(view.latest?.captureId, invalid.captureId); assert.equal(view.latest?.status, 'failed'); assert.equal(view.previousSuccess?.captureId, good.captureId);
+    assert.equal(view.observation, null); assert.equal(view.privateGrounding, null); assert.equal(view.limits.queued, 0); assert.equal(renders, 1);
+    assert.throws(() => manager.frame(a.target, invalid.captureId), /unavailable/); assert.ok(manager.frame(a.target, good.captureId).length);
+    await a.recorder!.flush(); const records = (await readRun(a.recorder!.runDirectory)).records.filter(record => record.data.captureId === invalid.captureId);
+    assert.deepEqual(records.map(record => record.event_type), ['CAPTURE_REQUEST', 'CAPTURE_SNAPSHOT', 'CAPTURE_FAILURE', 'CAPTURE_TIMING']);
+    assert.equal(a.simulation.checkpoint().experiences.length, 0);
+  } finally { await manager.close(); await a.close(); await source.close(); await rm(directory, { recursive: true, force: true }); }
+});

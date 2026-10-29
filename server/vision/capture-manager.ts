@@ -12,7 +12,7 @@ import { groundSnapshot, filterVisibleGrounding } from './grounding.js';
 import { ChromiumRenderer, RendererFailure, type FrameRenderer } from './renderer.js';
 
 type Grounding = ReturnType<typeof groundSnapshot>;
-interface Entry { metadata: CaptureMetadata; snapshot: WorldState; grounding: Grounding; handles: Map<string, string>; runtime: BranchRuntime; observation?: VisualObservation; bytes?: Uint8Array; completion: Promise<void>; complete(): void; retired: boolean; requestedMono: number }
+interface Entry { metadata: CaptureMetadata; snapshot: WorldState; grounding: Grounding | null; handles: Map<string, string>; runtime: BranchRuntime; observation?: VisualObservation; bytes?: Uint8Array; completion: Promise<void>; complete(): void; retired: boolean; requestedMono: number }
 const scopeKey = (target: ActiveTarget) => `${target.worldId}/${target.branchId}/${target.runId}`;
 const exact = (value: unknown, keys: string[]) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === keys.sort().join(',');
 export function validateCaptureOptions(raw: unknown): Required<CaptureOptions> {
@@ -53,13 +53,22 @@ export class CaptureManager {
     if (this.queue.length + Number(!!this.running) >= this.capacity) throw new Error('Capture queue is full (4)');
     const snapshot = structuredClone(runtime.viewerState());
     if (!snapshot.head || !snapshot.scene) throw new Error('Capture requires the current vision state schema');
-    const checkpoint = runtime.simulation.checkpoint(), grounding = groundSnapshot(snapshot, options.width, options.height);
+    const checkpoint = runtime.simulation.checkpoint();
     const id = randomUUID();
     const metadata: CaptureMetadata = { ...runtime.target, captureId: id, observationId: id, tick: snapshot.tick, stateVersion: checkpoint.schemaVersion, stateHash: hashCanonical(checkpoint), sceneRevision: PHYSICAL_SCENE_VERSION, dynamicRevision: snapshot.scene.revision, renderRevision: RENDER_REVISION, camera: eyePose(snapshot, options.width, options.height), reason: options.reason, width: options.width, height: options.height, format: 'image/png', status: 'queued', requestedAt: new Date().toISOString(), completedAt: null, durationMs: null, frameHash: null, backend: null, error: null };
     let complete!: () => void; const completion = new Promise<void>(done => { complete = done; });
-    const entry: Entry = { metadata, snapshot, grounding, handles: new Map(), runtime, completion, complete, retired: false, requestedMono: performance.now() };
-    this.entries.set(id, entry); this.latest.set(scopeKey(runtime.target), id); this.queue.push(entry);
-    this.record(entry, 'CAPTURE_REQUEST', 'queued'); this.record(entry, 'CAPTURE_SNAPSHOT', 'immutable_snapshot');
+    const entry: Entry = { metadata, snapshot, grounding: null, handles: new Map(), runtime, completion, complete, retired: false, requestedMono: performance.now() };
+    this.entries.set(id, entry); this.latest.set(scopeKey(runtime.target), id);
+    this.record(entry, 'CAPTURE_REQUEST', 'received'); this.record(entry, 'CAPTURE_SNAPSHOT', 'immutable_snapshot');
+    try { entry.grounding = groundSnapshot(snapshot, options.width, options.height); }
+    catch {
+      metadata.status = 'failed'; metadata.error = 'Camera or physical scene is invalid for a visual observation';
+      metadata.completedAt = new Date().toISOString(); metadata.durationMs = performance.now() - entry.requestedMono;
+      this.record(entry, 'CAPTURE_FAILURE', 'failed', { reason: metadata.error });
+      this.record(entry, 'CAPTURE_TIMING', 'failed', { durationMs: metadata.durationMs, completionUtc: metadata.completedAt });
+      entry.complete(); this.trim(); return structuredClone(metadata);
+    }
+    this.queue.push(entry);
     this.trim(); void this.pump();
     return structuredClone(metadata);
   }
@@ -68,6 +77,7 @@ export class CaptureManager {
     const entry = this.queue.shift(); if (!entry) return;
     this.running = entry; entry.metadata.status = 'pending';
     try {
+      if (!entry.grounding) throw new RendererFailure('failed', 'Capture snapshot has no valid geometric evidence');
       // The renderer receives a second clone: it cannot mutate even the retained admission snapshot.
       let deadline: ReturnType<typeof setTimeout> | undefined;
       const result = await Promise.race([

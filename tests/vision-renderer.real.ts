@@ -75,3 +75,16 @@ test('actual Chromium capture deadline cleans its process while world/reflex con
     hooks.renderDelayMs = 0; assert.ok((await renderer.render(createVisibilityFixture(), 128, 128)).bytes.length > 100);
   } finally { clearInterval(timer); await renderer.close(); await runtime.close(); }
 });
+
+test('actual renderer refuses an eye-inside-occluder frame and the next explicit valid capture succeeds', async () => {
+  const renderer = new ChromiumRenderer('angle-d3d11'), invalid = createVisibilityFixture();
+  invalid.character = { x: 2.1, z: 1.6, heading: -Math.PI / 2, moving: false, gait: 0 };
+  try {
+    await assert.rejects(renderer.render(invalid, 512, 512), /Renderer process failed/);
+    assert.equal(renderer.pid, undefined, 'failed camera capture leaves no renderer process');
+    const valid = await renderer.render(createVisibilityFixture(), 512, 512);
+    const png = PNG.sync.read(Buffer.from(valid.bytes));
+    assert.equal(png.width, 512); assert.equal(png.height, 512);
+    assert.ok(valid.bytes.length > 100);
+  } finally { await renderer.close(); }
+});
