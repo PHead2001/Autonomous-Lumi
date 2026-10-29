@@ -13,6 +13,7 @@ import {join} from 'node:path';
 import {exportIncident,replayBundle,inspectBundle} from '../server/diagnostics/bundle.js';
 import {strFromU8} from 'fflate';
 import {CaptureManager} from '../server/vision/capture-manager.js';
+import type {HeadAction} from '../shared/vision-protocol.js';
 
 const source={x:-1.6,y:2.5,z:2.8,intensity:1,suddenness:1,sourceId:'private-a'};
 const fixed=()=>{
@@ -92,6 +93,31 @@ test('2b-2 perceptual repetition habituates independently of private IDs; change
   assert.deepEqual(a.attentionState(),b.attentionState());
 });
 
+test('inaudible cues leave exposure history unchanged and cannot suppress a later audible cue',()=>{
+  const sim=fixed(),control=fixed(),eye=eyePose(sim.snapshot()).position;
+  const cue={x:eye[0],y:eye[1],z:eye[2],intensity:.001};
+  for(let i=0;i<12;i++) {
+    const events=emit(sim,{...cue,sourceId:`silent-${i}`});control.step();
+    assert.ok(events.some(e=>e.type==='SOUND_RECEIVED'&&e.outcome==='below_floor'));
+    assert.equal(sim.attentionState().lastDecision!.reason,'below_hearing_floor');
+    assert.deepEqual(sim.attentionState().exposures,[]);
+  }
+  emit(sim,{...cue,intensity:.02});emit(control,{...cue,intensity:.02});
+  const {observationId:actualId,...actual}=sim.attentionState().lastDecision!;
+  const {observationId:controlId,...expected}=control.attentionState().lastDecision!;
+  assert.notEqual(actualId,controlId);assert.deepEqual(actual,expected);
+  assert.equal(actual.outcome,'unreachable');assert.equal(actual.reason,'direction_undefined');
+  assert.deepEqual(sim.attentionState().exposures,control.attentionState().exposures);
+  assert.deepEqual(sim.attentionState().pending!.reasons,['salient_sound']);
+  // Even expired entries must survive an inaudible cue unchanged; pruning and
+  // bounded-history eviction belong to audible perception only.
+  const checkpoint=sim.checkpoint();checkpoint.tick+=1000;
+  const aged=new SensorySimulation({mode:'EXPERIMENT',checkpoint});
+  const history=aged.attentionState().exposures;emit(aged,cue);
+  assert.deepEqual(aged.attentionState().exposures,history);
+  assert.equal(sim.checkpoint().experiences.length,0);
+});
+
 test('2b-2 commitment/cooldown prevents thrash and activity resumes without repeated effects',()=>{
   const sim=fixed();sim.applyAction({type:'activity-start',totalTicks:80});
   const events:DeterministicEvent[]=[];
@@ -121,6 +147,47 @@ test('2b-2 perceived sound ray respects limits, own-body rotation and developer 
   assert.ok(interrupted.some(e=>e.type==='ATTENTION_ACTION'&&e.outcome==='interrupted'));
   emit(restored);assert.equal(restored.attentionState().lastDecision!.reason,'developer_priority');
   const behind=fixed();emit(behind,{z:.5});cp=behind.checkpoint();assert.equal(cp.attention.lastDecision!.outcome,'unreachable');assert.ok(Math.abs(cp.head.targetYaw)<=75*Math.PI/180);assert.equal(cp.head.observedAim,null);
+});
+
+test('rejected developer head commands preserve automatic ownership, observation and completion capture causes',()=>{
+  const original=fixed();emit(original,{x:.6});const start=original.checkpoint();start.scene.revision++;
+  assert.ok(start.attention.automaticActionId);assert.equal(start.attention.pending,null);
+  const rejected:HeadAction[]=[
+    {type:'turn_head',yawDelta:-.1,pitchDelta:0,sceneRevision:0},
+    {type:'look_at',yaw:0,pitch:0,sceneRevision:0},
+    {type:'scan_area',minYaw:-.5,maxYaw:.5,pitch:0,passes:1,sceneRevision:0},
+    {type:'cancel_head',sceneRevision:0},
+    {type:'look_at',yaw:0,pitch:0,sceneRevision:start.scene.revision,evidence:{kind:'captured_filtered_bearing_v1',observationId:'outside-head-range',frameHash:'a'.repeat(64),capturedTick:start.tick,handle:'outside',capturedBodyHeading:0,capturedHeadYaw:0,capturedHeadPitch:0,bearingDegrees:180,elevationDegrees:0}},
+  ];
+  for(const command of rejected) {
+    const sim=new SensorySimulation({mode:'EXPERIMENT',checkpoint:start}),input=sim.enqueue(command).input;
+    const events=sim.step(),attention=sim.attentionState();
+    assert.ok(events.some(e=>e.type==='INPUT_VALIDATED'&&e.outcome==='rejected'));
+    assert.equal(events.some(e=>e.type==='ATTENTION_ACTION'&&e.outcome==='interrupted'),false);
+    assert.equal(attention.developerUntilTick,start.attention.developerUntilTick);
+    assert.equal(attention.automaticActionId,start.attention.automaticActionId);
+    assert.equal(attention.automaticObservationId,start.attention.automaticObservationId);
+    const completed=steps(sim,30).find(e=>e.type==='ATTENTION_ACTION'&&e.outcome==='completed');
+    assert.ok(completed);assert.equal(completed.data.observationId,start.attention.automaticObservationId);
+    assert.deepEqual(sim.attentionState().pending!.reasons,['salient_sound','head_milestone']);
+    assert.equal(sim.attentionState().pending!.parentSequence,completed.sequence);
+    const replayed=replay(start,[input],sim.state.tick);
+    assert.equal(replayed.stateHash,hashCanonical(sim.checkpoint()));assert.equal(replayed.eventHash,sim.checkpoint().eventHash);
+  }
+});
+
+test('accepted developer cancel and turn override automatic attention before later inputs at the same tick',()=>{
+  const commands:HeadAction[]=[{type:'cancel_head',sceneRevision:0},{type:'turn_head',yawDelta:-.1,pitchDelta:0,sceneRevision:0}];
+  for(const command of commands) {
+    const sim=fixed();emit(sim,{x:.6});const previous=sim.attentionState();
+    sim.enqueue(command);sim.enqueue({type:'emit_sound',...source});const events=sim.step(),attention=sim.attentionState();
+    const interruption=events.find(e=>e.type==='ATTENTION_ACTION'&&e.outcome==='interrupted');
+    assert.ok(interruption);assert.equal(interruption.data.actionId,previous.automaticActionId);
+    assert.equal(interruption.data.observationId,previous.automaticObservationId);
+    assert.equal(attention.automaticActionId,null);assert.equal(attention.automaticObservationId,null);
+    assert.equal(attention.developerUntilTick,sim.state.tick+attention.config.developerPriorityTicks);
+    assert.equal(attention.lastDecision!.reason,'developer_priority');
+  }
 });
 
 test('2b-3 automatic intentions coalesce and sensor results are ordered, fresh, image based and duplicate suppressed',()=>{

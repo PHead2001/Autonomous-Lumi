@@ -1,6 +1,6 @@
 # Phase 2b verification results
 
-Phase 2b adds listener-relative hearing, deterministic local attention, bounded automatic capture scheduling and replayable sensor feedback. Final checks passed: **181/181** tests, lint, build/typecheck, **8/8** existing actual-renderer cases and **2/2** new actual image/attention cases. The actual zero-viewer scenario, normal Chrome dashboard export and exact offline replay passed. Independent architect re-review is clean; hosted PR review remains pending. Audible browser output was activated but not independently heard.
+Phase 2b adds listener-relative hearing, deterministic local attention, bounded automatic capture scheduling and replayable sensor feedback. Final checks after hosted-review fixes passed: **186/186** tests, lint, build/typecheck and **2/2** actual image/attention cases. The unchanged renderer retains its earlier **8/8** actual verification. The actual zero-viewer scenario, normal Chrome dashboard export and exact offline replay passed; the same ZIP replayed with unchanged hashes after the fixes. Independent targeted architect re-review is clean. [PR #7](https://github.com/PHead2001/Autonomous-Lumi/pull/7) hosted re-review is pending. Audible browser output was activated but not independently heard.
 
 See [Spatial hearing and attention](spatial-attention.md) for configuration, approximations, recovery/replay and the reproducible demo. Phase 2c remains outside this change, and merging belongs to the owner.
 
@@ -14,7 +14,7 @@ See [Spatial hearing and attention](spatial-attention.md) for configuration, app
 | Zero-viewer chain | Real isolated server: sound → received evidence → reflex → attention → head → automatic image, with no spectator WebSockets. Capture tick 10 and receipt tick 31 remain distinct; zero experiences were encoded. |
 | Browser workflow | Chrome verified selected world/branch/run, source/receiver separation, associated image, event filters, causal navigation, sound/step, fast-forward/activity progress, manual capture and normal dashboard ZIP export. LIVE upright walking, idle, door motion, articulated ears and disconnect/reconnect were observed. |
 | Diagnostic artifact | `diagnostics/phase2b-spatial-attention.zip`: **22,456 bytes**, **13 entries**, COMPLETE, 61 records, no gaps/drops, no raw pixels or encoded image payloads. Exact offline replay passed. |
-| Review | Focused independent architect review/fix/re-review clean. Hosted PR review pending; no new security scan is claimed. |
+| Review | Initial hosted PR #7 review raised three P2 findings; all were fixed with five regressions. Independent targeted boundary re-review is clean; hosted re-review pending. No new security scan is claimed. |
 
 ## Accepted checks
 
@@ -28,15 +28,15 @@ npm run vision:attention
 
 | Command | Result | Retained local log |
 | --- | --- | --- |
-| `npm test` | **181/181**, approximately 10 seconds | `diagnostics/phase2b-tests.log` |
-| `npm run lint` | **PASS** | `diagnostics/phase2b-lint.log` |
-| `npm run build` | **PASS**, including TypeScript | `diagnostics/phase2b-build.log` |
-| `npm run vision:verify` | **8/8** real-renderer cases | `diagnostics/phase2b-renderer.log` |
-| `npm run vision:attention` | **2/2** actual image/attention cases, approximately 2.52 seconds | `diagnostics/phase2b-attention-real.log` |
+| `npm test` | **186/186** after five review regressions | `diagnostics/phase2b-review-tests.log` |
+| `npm run lint` | **PASS** after review fixes | `diagnostics/phase2b-review-lint.log` |
+| `npm run build` | **PASS**, including TypeScript, after review fixes | `diagnostics/phase2b-review-build.log` |
+| `npm run vision:verify` | Earlier **8/8** retained; renderer unchanged by review fixes | `diagnostics/phase2b-renderer.log` |
+| `npm run vision:attention` | **2/2** actual image/attention cases rerun after review fixes | `diagnostics/phase2b-review-attention-real.log` |
 
 The existing nonblocking viewer-chunk advisory remains, approximately **539.20 kB**. The real RGB test measured visible material-change difference approximately **0.0133**, above the configured **0.01** threshold. Duplicate, hidden and behind-wall differences were zero. These are decoded image measurements, not PNG-byte differences.
 
-Earlier targeted dashboard lint/typecheck and **18/18** existing helper regressions also passed; the final full suite supersedes their narrower coverage. The Phase 2a renderer comparison and prior logging benchmarks were reused without rerunning their matrices.
+The pre-review canonical run passed **181/181**, lint/build and both actual-renderer commands (`diagnostics/phase2b-{tests,lint,build,renderer,attention-real}.log`); the final affected checks above supersede their narrower evidence. Earlier targeted dashboard lint/typecheck and **18/18** existing helper regressions also passed. The Phase 2a renderer comparison and prior logging benchmarks were reused without rerunning their matrices.
 
 ## Actual isolated scenario and browser walkthrough
 
@@ -69,7 +69,7 @@ The actual ZIP was exported through the normal dashboard control and inspected i
 npm.cmd run replay -- --bundle diagnostics/phase2b-spatial-attention.zip
 ```
 
-Offline replay **PASS**: tick **38**, **4 inputs**, **33 deterministic events**, without Chromium. Output: `diagnostics/phase2b-artifact-replay.log`.
+Offline replay **PASS**: tick **38**, **4 inputs**, **33 deterministic events**, without Chromium. The same inspected archive was replayed again after the review fixes and kept all hashes below. Original output: `diagnostics/phase2b-artifact-replay.log`; accepted post-fix output: `diagnostics/phase2b-review-artifact-replay.log`. Use `npm.cmd` in PowerShell as shown so the bundle flag is forwarded correctly.
 
 | Canonical evidence | Hash |
 | --- | --- |
@@ -87,6 +87,8 @@ Focused review also corrected physical-wall acoustic grouping/emitting-surface h
 
 The owner's additional PR #6 movement finding is fixed in current schema 4 with a swept segment check. A regression uses supported `hz=1`, `speed=5`, position `(2.6, 2.3)` and waypoint 0: the path cannot tunnel through `fixture-partial` despite a clear endpoint. Historical schema 3 keeps its original endpoint-only collision semantics for exact replay. The final normal suite includes this regression.
 
+Hosted review of PR #7 then identified three P2 boundary defects. Capture restoration now waits for a queued admission acknowledgement to execute through the ordered input path before reconciling orphaned work, preserving capture-ID ownership. A rejected explicit head command no longer clears automatic ownership or grants developer priority. Inaudible cues no longer mutate, prune or evict the exposure summaries used for habituation. Five regressions cover these cases, bringing the normal suite to **186/186**. Lint/build, the actual attention renderer checks and the existing diagnostic ZIP replay passed after correction. Independent targeted boundary re-review accepted all three fixes with no actionable findings; hosted re-review is pending.
+
 ## Material limits
 
-Hearing is a normalized straight-ray game approximation. The 4×4 RGB signature may miss small changes and does not recognize objects. There are no model calls, semantic source identification, real autobiographical admission, learned associations, microphone input or hosting changes. Model-response metrics remain **N/A**. Audible playback is explicitly unverified; hosted PR review remains pending. Stop before Phase 2c and leave merging to the owner.
+Hearing is a normalized straight-ray game approximation. The 4×4 RGB signature may miss small changes and does not recognize objects. There are no model calls, semantic source identification, real autobiographical admission, learned associations, microphone input or hosting changes. Model-response metrics remain **N/A**. Audible playback is explicitly unverified; hosted PR re-review remains pending. Stop before Phase 2c and leave merging to the owner.

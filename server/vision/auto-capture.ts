@@ -1,6 +1,6 @@
 import type { BranchRuntime } from '../branch-runtime.js';
 import type { ActiveTarget } from '../../shared/lab-protocol.js';
-import type { AttentionState, CaptureIntent, SensorFeedbackCommand, SensorPose } from '../../shared/attention-protocol.js';
+import type { CaptureIntent, SensorFeedbackCommand, SensorPose } from '../../shared/attention-protocol.js';
 import type { CaptureMetadata } from '../../shared/capture-protocol.js';
 import { eyePose } from '../../shared/eye-pose.js';
 import { CaptureManager } from './capture-manager.js';
@@ -17,9 +17,9 @@ export interface AutomaticCaptureHostView {
   lastIntentId: number | null; lastOutcome: string | null; captureId: string | null;
   nextHostOpportunityMs: number; limits: typeof AUTO_CAPTURE_HOST_LIMITS;
 }
-function attention(runtime: BranchRuntime): AttentionState | null {
+function captureState(runtime: BranchRuntime) {
   const cp = runtime.simulation.checkpoint();
-  return cp.schemaVersion === 4 ? cp.attention : null;
+  return cp.schemaVersion === 4 ? cp : null;
 }
 function pose(runtime: BranchRuntime): SensorPose {
   const p = eyePose(runtime.viewerState(), AUTO_CAPTURE_HOST_LIMITS.width, AUTO_CAPTURE_HOST_LIMITS.height);
@@ -62,15 +62,19 @@ export class AutomaticCaptureCoordinator {
     for (const runtime of all) {
       const scope = key(runtime.target); currentKeys.add(scope);
       if (!this.current(runtime.target)) continue;
-      const logical = attention(runtime), intent = logical?.pending;
+      const checkpoint = captureState(runtime), intent = checkpoint?.attention.pending;
       if (!intent) continue;
       const summary = runtime.captureAvailability();
       // Paused/fast-forward experiments never release accumulated renderer work.
       // Ordered result inputs can still arrive while paused and apply on a later step.
       if (summary.paused || summary.fastForwardRemaining) continue;
+      // A checkpoint can retain a pending intention whose admission is already
+      // queued. Let its recorded feedback apply in order before deciding whether
+      // the submitted worker survived; redispatch would race the saved capture ID.
+      if (checkpoint!.pendingInputs.some(input=>input.command.type==='sensor_feedback'&&input.command.intentId===intent.id)) continue;
       const state = this.runs.get(scope);
-      if (intent.status === 'submitted' && !(this.active?.runtime === runtime && this.active.intentId === intent.id)) {
-        if (state?.lastIntentId !== intent.id) {
+      if (intent.status === 'submitted' && !(this.active?.runtime === runtime && this.active.intentId === intent.id && this.active.captureId === intent.captureId)) {
+        if (state?.lastIntentId !== intent.id || state.lastOutcome !== 'interrupted' || state.captureId !== intent.captureId) {
           this.runs.set(scope,{lastIntentId:intent.id,lastAttemptMs:state?.lastAttemptMs??-Infinity,lastOutcome:'interrupted',captureId:intent.captureId});
           this.reject(runtime,intent,'interrupted','recovered');
         }

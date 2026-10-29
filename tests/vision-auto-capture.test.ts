@@ -82,6 +82,56 @@ test('restart reconciles submitted work once, and a retired result never writes 
     assert.equal(runtime.simulation.checkpoint().pendingInputs.length,0);assert.equal(logical(runtime).baseline,null);
   }finally{host.close();await manager.close();await restored.close();await runtime.close();}
 });
+test('restart reconciles a saved queued admission before dispatching and accepts a bounded fresh probe',async()=>{
+  const original=fixture('queued-admission'),oldRenderer=new DelayedRenderer(),oldManager=new CaptureManager(()=>true,oldRenderer),oldHost=new AutomaticCaptureCoordinator(oldManager,()=>true,()=>0);
+  let restored:BranchRuntime|undefined;
+  const renderer=new DelayedRenderer(),manager=new CaptureManager(()=>true,renderer),host=new AutomaticCaptureCoordinator(manager,()=>true,()=>0);
+  try{
+    oldHost.pump([original]);const oldCapture=oldManager.view(original.target).latest!;
+    const saved=JSON.parse(JSON.stringify(original.checkpoint())) as ReturnType<BranchRuntime['checkpoint']>;
+    if(saved.simulation.schemaVersion!==4)throw new Error('Current schema');
+    assert.equal(saved.simulation.attention.pending?.status,'pending');
+    assert.equal(saved.simulation.pendingInputs[0].command.type,'sensor_feedback');
+    // A short logical probe interval proves recovery before the old intention expires.
+    saved.simulation.attention.config.probeIntervalTicks=160;
+    restored=new BranchRuntime({worldId:'auto-test',branchId:'queued-admission',mode:'EXPERIMENT',offline:true,checkpoint:saved});
+    const before=restored.simulation.checkpoint();
+    for(let i=0;i<10;i++)host.pump([restored]);
+    assert.equal(renderer.calls,0,'saved ordered admission must apply before a new host can dispatch');
+    assert.deepEqual(restored.simulation.checkpoint(),before,'host reconciliation cannot mutate canonical state');
+    restored.simulation.step();assert.equal(logical(restored).pending?.captureId,oldCapture.captureId);
+    for(let i=0;i<10;i++)host.pump([restored]);
+    const recovery=restored.simulation.checkpoint().pendingInputs;
+    assert.equal(recovery.length,1);assert.equal(recovery[0].command.type,'sensor_feedback');
+    assert.ok(recovery[0].command.type==='sensor_feedback'&&recovery[0].command.stage==='recovered');
+    assert.equal(logical(restored).pending?.status,'submitted','recovery remains an ordered input');
+    restored.simulation.step();assert.equal(logical(restored).lastCapture?.outcome,'interrupted');assert.equal(logical(restored).pending,null);
+    while(!logical(restored).pending&&restored.simulation.state.tick<200)restored.simulation.step();
+    const fresh=logical(restored).pending!;assert.ok(fresh);assert.equal(fresh.id,2);assert.ok(restored.simulation.state.tick<300);
+    host.pump([restored]);host.pump([restored]);assert.equal(renderer.calls,1);
+    const requested=manager.view(restored.target).latest!;assert.notEqual(requested.captureId,oldCapture.captureId);assert.equal(requested.automatic?.intentId,fresh.id);
+    restored.simulation.step();renderer.release();await manager.wait(restored.target,requested.captureId);await turn();
+    assert.equal(logical(restored).baseline,null);restored.simulation.step();
+    assert.equal(logical(restored).lastCapture?.captureId,requested.captureId);assert.equal(logical(restored).lastCapture?.freshness,'applicable');assert.equal(logical(restored).pending,null);
+    assert.equal(logical(restored).baseline?.captureId,requested.captureId);
+  }finally{oldHost.close();host.close();await oldManager.close();await manager.close();await original.close();await restored?.close();}
+});
+test('restart lets saved ordered admission and result finish without orphan recovery or redispatch',async()=>{
+  const original=fixture('queued-result'),renderer=new DelayedRenderer(),manager=new CaptureManager(()=>true,renderer),oldHost=new AutomaticCaptureCoordinator(manager,()=>true,()=>0);
+  let restored:BranchRuntime|undefined;
+  const freshRenderer=new DelayedRenderer(),freshManager=new CaptureManager(()=>true,freshRenderer),host=new AutomaticCaptureCoordinator(freshManager,()=>true,()=>0);
+  try{
+    oldHost.pump([original]);const requested=manager.view(original.target).latest!;
+    renderer.release();await manager.wait(original.target,requested.captureId);await turn();
+    const saved=JSON.parse(JSON.stringify(original.checkpoint())) as ReturnType<BranchRuntime['checkpoint']>;
+    assert.equal(saved.simulation.pendingInputs.length,2);
+    restored=new BranchRuntime({worldId:'auto-test',branchId:'queued-result',mode:'EXPERIMENT',offline:true,checkpoint:saved});
+    host.pump([restored]);assert.equal(freshRenderer.calls,0);assert.equal(restored.simulation.checkpoint().pendingInputs.length,2);
+    restored.simulation.step();host.pump([restored]);
+    assert.equal(logical(restored).lastCapture?.freshness,'applicable');assert.equal(logical(restored).baseline?.captureId,requested.captureId);
+    assert.equal(restored.simulation.checkpoint().pendingInputs.length,0);assert.equal(freshRenderer.calls,0);
+  }finally{oldHost.close();host.close();await manager.close();await freshManager.close();await original.close();await restored?.close();}
+});
 test('full ordered input queue cannot stick a capture forever or cause per-pump retries',async()=>{
   const runtime=fixture('saturated'),manager=new CaptureManager(()=>true,{render:async()=>frame,close:async()=>{}}),host=new AutomaticCaptureCoordinator(manager,()=>true,()=>0);
   try{

@@ -446,13 +446,18 @@ export class SensorySimulation extends VisionSimulation {
     const reflex=this.emit(events,'REFLEX_DECISION','reflex',strength>0?'triggered':'ignored',{observationId:r.observationId,intensity:r.intensity,suddenness:r.suddenness,intensityThreshold:c.reflexIntensity,suddennessThreshold:c.reflexSuddenness,strength},inputSequence,sensed.sequence);
     if(strength>0){this.data.reflex={startTick:this.data.tick,strength};this.emit(events,'REFLEX_STATE','reflex','changed',{observationId:r.observationId,startTick:this.data.tick,strength,durationSeconds:REFLEX_DURATION},inputSequence,reflex.sequence);}
     const key=`b${r.bearingDegrees===null?'null':Math.round(r.bearingDegrees/45)}-i${Math.floor(r.intensity*5)}-s${Math.floor(r.suddenness*3)}`;
-    a.exposures=a.exposures.filter(e=>this.data.tick-e.lastTick<c.exposureRecoveryTicks);
-    let exposure=a.exposures.find(e=>e.key===key);
+    const audible=r.intensity>=c.hearingFloor;
+    // Diagnostics retain below-floor receptions, but only perceived cues can
+    // decay, evict or add habituation history.
+    if(audible)a.exposures=a.exposures.filter(e=>this.data.tick-e.lastTick<c.exposureRecoveryTicks);
+    let exposure=audible?a.exposures.find(e=>e.key===key):undefined;
     const previous=exposure?Math.max(0,exposure.count-Math.floor((this.data.tick-exposure.lastTick)/(c.exposureRecoveryTicks/4))):0;
     const novelty=1/(1+previous),commitment=this.activity.status==='running'?.18:0,switchingCost=this.data.tick<a.commitmentUntilTick?.3:0;
     const score=.65*r.intensity+.3*r.suddenness+.3*novelty+.1*(r.directionUncertaintyDegrees/180)-Math.min(.9,previous*c.habituationPenalty)-commitment-switchingCost;
-    if(!exposure){exposure={key,count:0,lastTick:this.data.tick,intensity:r.intensity,suddenness:r.suddenness};a.exposures.push(exposure);if(a.exposures.length>8)a.exposures.shift();}
-    exposure.count=Math.min(32,previous+1);exposure.lastTick=this.data.tick;exposure.intensity=r.intensity;exposure.suddenness=r.suddenness;
+    if(audible) {
+      if(!exposure){exposure={key,count:0,lastTick:this.data.tick,intensity:r.intensity,suddenness:r.suddenness};a.exposures.push(exposure);if(a.exposures.length>8)a.exposures.shift();}
+      exposure.count=Math.min(32,previous+1);exposure.lastTick=this.data.tick;exposure.intensity=r.intensity;exposure.suddenness=r.suddenness;
+    }
     let reason='below_salience',outcome:'ignored'|'glance'|'investigate'|'unreachable'='ignored';
     if(r.intensity<c.hearingFloor)reason='below_hearing_floor';
     else if(this.data.tick<a.developerUntilTick)reason='developer_priority';
@@ -487,12 +492,15 @@ export class SensorySimulation extends VisionSimulation {
       this.hear(sound,events,input.sequence,emission.sequence);return true;
     }
     if(command.type==='sensor_feedback'){this.applySensorFeedback(command,events,input.sequence);return true;}
-    if(['turn_head','look_at','scan_area','cancel_head'].includes(command.type)) {
+    // Accepted head commands, including cancel, consume an action ID. Arbitrate
+    // only after that acceptance boundary and before the next ordered input.
+    const nextActionId=this.head.nextActionId,handled=super.applyExtendedInput(input,events);
+    if(['turn_head','look_at','scan_area','cancel_head'].includes(command.type)&&this.head.nextActionId!==nextActionId) {
       a.developerUntilTick=this.data.tick+a.config.developerPriorityTicks;
       if(a.automaticActionId!==null)this.emit(events,'ATTENTION_ACTION','attention','interrupted',{actionId:a.automaticActionId,observationId:a.automaticObservationId!,reason:'developer_override'},input.sequence);
       a.automaticActionId=null;a.automaticObservationId=null;
     }
-    return super.applyExtendedInput(input,events);
+    return handled;
   }
   private noteCaptureTrigger(intent:CaptureIntent,reason:AutomaticCaptureReason,tick:number,parentSequence:number|null):void {
     const matching=intent.triggers.map((trigger,index)=>({trigger,index})).filter(({trigger})=>trigger.reason===reason),next={reason,tick,parentSequence};
