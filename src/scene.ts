@@ -70,5 +70,5 @@ export function createScene(canvas: HTMLCanvasElement) {
     controls.update(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  return { reset, setState(next: WorldState) { if (next.worldId !== state?.worldId) initialized = false; state = next; received = performance.now(); } };
+  return { reset, setState(next: WorldState) { if (next.worldId !== state?.worldId || next.runId !== state?.runId) initialized = false; state = next; received = performance.now(); } };
 }

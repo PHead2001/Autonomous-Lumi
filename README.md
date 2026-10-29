@@ -1,6 +1,6 @@
-# Autonomous Lumi — Phase 1
+# Autonomous Lumi — Phase 1 + 1.5a
 
-An original low-poly fox girl wanders upright through a small browser room. A door slam produces a synthesized impact and a deterministic articulated ear reflex. One Node.js process owns the world and keeps updating with **zero browser viewers**. No AI API, credentials, downloaded character assets, or database is required.
+An original low-poly fox girl wanders upright through a small browser room. A door slam produces a synthesized impact and a deterministic articulated ear reflex. One Node.js process owns the world and keeps updating with **zero browser viewers**. Phase 1.5a adds fixed ticks, complete restorable checkpoints, deterministic replay, explicit host-sleep handling and a bounded diagnostic flight recorder. No AI API, credentials, downloaded character assets, or database is required.
 
 ## Run locally
 
@@ -36,18 +36,46 @@ Browsers require a user gesture for audio. A newly opened viewer never replays h
 
 ```powershell
 npm test
-npm run typecheck
 npm run lint
 npm run build
 ```
 
-Tests cover movement/bounds, pause/resume, qualifying/nonqualifying sounds, reflex recovery, slam transport to multiple clients, malformed commands, and the actual timer advancing with zero sockets before reconnection to the same world.
+The build includes TypeScript checking.
+
+Tests cover the original browser/server lifecycle, movement and reflex behavior plus seeded randomness, strict checkpoint restore, ordered-input replay/hash matching, forbidden simulation randomness, bounded scheduler catch-up and injected multi-hour host gaps. Diagnostic tests cover the sanitized ZIP/replay path, bounded logging and writer failures.
+
+## Deterministic time and restore
+
+The simulation advances one integer tick per `Simulation.step()` at 30 ticks/second. World elapsed seconds are derived as `tick / hz`. Commands enter at a recorded receipt tick, receive a sequence, and execute at the next tick before movement. Invalid commands and cooldown/queue rejections remain part of the ordered evidence. No variable-delta simulation path is retained.
+
+The host scheduler runs at most 8 steps per pump, retains at most 16 steps of backlog, and records discarded short-jitter catch-up. A monotonic or UTC gap of at least 5 seconds freezes local world time across that gap, emits linked `HOST_SUSPEND`/`HOST_RESUME` diagnostics with observed wall downtime and skipped ticks, then resumes ordinary stepping. A gap can represent host sleep, a stall or a clock discontinuity; it is not simulated lived experience. Tests inject these clocks without sleeping the PC. `createWorldServer` accepts scheduler configuration for local integration; the fixed rate comes from the checkpoint configuration.
+
+The complete, versioned private checkpoint contains the route cursor, pause/cooldown deadlines, PRNG seed/state, sound and event/input counters, pending inputs and rolling deterministic event hash. It is separate from public viewer snapshots. Invalid/incompatible checkpoints fail explicitly. A new hosted run has a new identity so restored sound counters do not defeat browser deduplication.
+
+To start from an exported checkpoint in PowerShell:
+
+```powershell
+$env:LUMI_CHECKPOINT = 'C:\path\to\checkpoint.json'
+npm start
+```
+
+Clear that environment variable to start a fresh world. `LUMI_SEED` sets a positive uint32 seed for new worlds. The injected xorshift32 stream is restorable; the existing waypoint policy deliberately does not consume random draws.
+
+See [Diagnostic export and replay](docs/diagnostics.md) for CLI incident ZIP creation, selection, replay, log limits and coverage warnings. Generated `diagnostics/` output is ignored by Git.
+
+Create and replay a real slam/invalid-command incident in PowerShell (`npm.cmd` preserves forwarded flags):
+
+```powershell
+npm.cmd run diagnostics:incident -- --out diagnostics/door-invalid-incident.zip
+npm.cmd run replay -- --bundle diagnostics/door-invalid-incident.zip
+```
 
 ## Small architecture
 
-- `server/simulation.ts`: authoritative time, replaceable waypoint movement, acoustic reflex and door state.
-- `server/world-server.ts`: one connection-independent timer, WebSocket transport, loopback HTTP/static server.
-- `shared/protocol.ts`: state/event types and presentation curve for server-owned reflex state.
+- `server/simulation.ts`, `prng.ts`, `canonical.ts`, `replay.ts`: fixed-step world, full checkpoints, ordered inputs and canonical hashes.
+- `server/scheduler.ts`, `world-server.ts`: bounded host scheduling, WebSocket transport, loopback HTTP/static server.
+- `server/diagnostics/`: observational buffered flight recorder and sanitized incident ZIP CLI.
+- `shared/protocol.ts`: lightweight viewer state and server-owned reflex presentation curve.
 - `src/`: Three.js room/avatar, interpolated presentation, Web Audio impact, connection controls.
 
-Continuity lasts while the **server process remains alive**. Restarts (including source edits under the development watcher) create a new world. Cross-restart persistence, cognition, learning, hosting, and Phase 1.5 tooling are deferred. Geometry/audio is generated by original code; dependencies retain their respective licenses. System fonts work if Google Fonts is unavailable.
+Automatic continuity lasts while the **server process remains alive**. Restarts create a new world unless a checkpoint is explicitly supplied; this milestone does not add automatic crash recovery or always-on hosting. Cognition, learning, experiment branches, accelerated laboratory controls and dashboards remain deferred. Geometry/audio is generated by original code; dependencies retain their respective licenses. System fonts work if Google Fonts is unavailable.

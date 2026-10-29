@@ -2,16 +2,31 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import { WebSocket } from 'ws';
-import { createWorldServer } from '../server/world-server.js';
+import { createWorldServer, type WorldServerOptions } from '../server/world-server.js';
 import type { ServerMessage, WorldState } from '../shared/protocol.js';
+async function testServer(options: WorldServerOptions = {}) {
+  const prefix = join(tmpdir(), 'lumi-connection-'), directory = await mkdtemp(prefix);
+  const app = createWorldServer({ ...options, diagnosticsDirectory: directory });
+  const close = app.close;
+  app.close = async () => {
+    await close();
+    const target = resolve(directory), allowed = resolve(tmpdir()) + sep;
+    if (!target.startsWith(allowed) || !target.startsWith(resolve(prefix))) throw new Error('Unexpected test directory');
+    await rm(target, { recursive: true, force: true });
+  };
+  return app;
+}
 async function viewer(port: number) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/world`), first = once(socket, 'message');
   await once(socket, 'open'); const [data] = await first;
   return { socket, state: (JSON.parse(data.toString()) as ServerMessage).state };
 }
 test('real timer advances with zero viewers; reconnect receives same current world', { timeout: 5000 }, async () => {
-  const app = createWorldServer(), port = await app.listen(0);
+  const app = await testServer(), port = await app.listen(0);
   try {
     const first = await viewer(port), before = first.state;
     const serverSocket = [...app.sockets.clients][0], serverClosed = once(serverSocket, 'close');
@@ -26,7 +41,7 @@ test('real timer advances with zero viewers; reconnect receives same current wor
   } finally { await app.close(); }
 });
 test('slam reaches multiple clients; malformed commands do not reset world', { timeout: 5000 }, async () => {
-  const app = createWorldServer(), port = await app.listen(0);
+  const app = await testServer(), port = await app.listen(0);
   try {
     const a = await viewer(port), b = await viewer(port);
     const sound = (socket: WebSocket) => new Promise<WorldState>(resolve => socket.on('message', data => {
@@ -38,5 +53,19 @@ test('slam reaches multiple clients; malformed commands do not reset world', { t
     const [stateA, stateB] = await Promise.all([heardA, heardB]);
     assert.equal(stateA.worldId, a.state.worldId); assert.equal(stateA.door.slamCount, 1);
     assert.equal(stateB.reflex.start, stateA.door.lastSlam); assert.equal(stateB.reflex.strength, 1);
+  } finally { await app.close(); }
+});
+
+test('injected host suspend freezes zero-viewer world, resumes and reconnects without reset', { timeout: 5000 }, async () => {
+  let now = 0;
+  const app = await testServer({ autoSchedule: false, clock: { monotonicMs: () => now, utcMs: () => 1700000000000 + now } }), port = await app.listen(0);
+  try {
+    const first = await viewer(port), closed = once([...app.sockets.clients][0], 'close'); first.socket.close(); await closed;
+    now = 100; app.scheduler.pump(); const before = app.simulation.checkpoint();
+    now += 8 * 3600000; assert.equal(app.scheduler.pump(), 0); assert.equal(app.simulation.state.tick, before.tick);
+    assert.equal(app.sockets.clients.size, 0); now += 100; app.scheduler.pump();
+    assert.equal(app.simulation.state.tick, before.tick + 3);
+    const restored = await viewer(port); assert.equal(restored.state.worldId, first.state.worldId); assert.equal(restored.state.runId, first.state.runId);
+    assert.equal(restored.state.tick, before.tick + 3); restored.socket.close(); await once(restored.socket, 'close');
   } finally { await app.close(); }
 });
