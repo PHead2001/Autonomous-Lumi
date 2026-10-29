@@ -53,6 +53,15 @@ export function verificationAcceptance(cases:readonly CaseAcceptanceEvidence[],f
   return {status:failure?'failed':actualProviderAcceptance?'passed':'incomplete',actualProviderAcceptance,actualImageInterpretationEvidence,livePersistenceVerified,offlineReplayComplete:required.every(name=>{const c=cases.find(c=>c.case===name);return c?.bundle?.evidence==='COMPLETE'&&c.bundle.replay?.status==='PASS';}),evidenceGaps:gaps};
 }
 const empty=(model:string,status:ProviderResult['status']):ProviderResult=>({status,content:null,provider:'openrouter',model,modelRevision:null,latencyMs:0,attempts:0,inputTokens:null,outputTokens:null,costUsd:null,costBasis:'unknown',reservedUsd:0});
+export function sanitizedProviderFailure(status:number,payload:unknown){
+  const envelope=payload&&typeof payload==='object'?payload as Record<string,unknown>:null;
+  const error=envelope?.error&&typeof envelope.error==='object'?envelope.error as Record<string,unknown>:null;
+  const known=new Set(['authentication_error','invalid_api_key','invalid_request_error','permission_error','rate_limit_error','rate_limit_exceeded','insufficient_quota','insufficient_credits','model_not_found','not_found','unsupported_parameter','provider_error','route_error','server_error','timeout','overloaded_error','content_filter']);
+  const safe=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=599?value:typeof value==='string'&&known.has(value)?value:null;
+  const message=typeof error?.message==='string'?error.message.toLowerCase():'';
+  const category=/no endpoints|no providers|support.*parameters|unsupported.*parameter/.test(message)?'no_compatible_endpoint':/not a valid model|model.*not found|unknown model/.test(message)?'invalid_model':/insufficient.*credit|credit.*insufficient/.test(message)?'insufficient_credits':/invalid.*api.key|invalid.*credential/.test(message)?'invalid_credential':status===429?'rate_limit':'provider_http_error';
+  return {httpStatus:status,code:safe(error?.code),type:safe(error?.type),category};
+}
 
 /** Private evidence files contain bounded filtered DTOs and PNGs, never credentials,
  * raw full prompts or provider envelopes. Case labels never enter provider input. */
@@ -189,7 +198,24 @@ export async function runVerification(options:VerificationOptions,configured?:Co
   const preflight=verificationPreflight(options,config);await mkdir(options.out,{recursive:true});
   if(preflight.status==='unavailable'){await writeFile(join(options.out,'verification.json'),JSON.stringify(preflight,null,2));console.log(JSON.stringify(preflight));return preflight;}
   const evidence=join(options.out,'private-observations');await mkdir(evidence,{recursive:true});
-  const actual=options.paid?new CognitionProviders(config,new DurableBudget(config.budget.directory,config.budget.ceilingUsd)):null,client=new EvidenceClient(config,evidence,actual);
+  const httpEvidence:Record<string,unknown>[]=[];
+  const ledger=options.paid?new DurableBudget(config.budget.directory,config.budget.ceilingUsd):null;
+  const budgetBefore=ledger?await ledger.snapshot():null;
+  const actual=options.paid?new CognitionProviders(config,ledger!,async(url,init)=>{
+    const started=performance.now();
+    try{
+      const response=await fetch(url,init);let failure:ReturnType<typeof sanitizedProviderFailure>|null=null;
+      if(!response.ok){
+        // The adapter discards HTTP failure bodies. Read at most 4 KiB directly
+        // under its existing abort deadline; no cloned/tee stream can buffer an
+        // unconsumed original. Successful response consumption stays unchanged.
+        const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
+        try{if(reader)while(size<4096){const part=await reader.read();if(part.done)break;const bounded=part.value.subarray(0,4096-size);chunks.push(bounded);size+=bounded.length;}let payload:unknown=null;try{payload=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{/* Bounded or non-JSON error body intentionally omitted. */}failure=sanitizedProviderFailure(response.status,payload);}
+        finally{await reader?.cancel().catch(()=>{});}
+      }
+      httpEvidence.push({endpoint:url,httpStatus:response.status,latencyMs:performance.now()-started,failure});await writeFile(join(options.out,'http-evidence.json'),JSON.stringify(httpEvidence,null,2));return response.ok?response:new Response(null,{status:response.status,statusText:response.statusText});
+    }catch(error){httpEvidence.push({endpoint:url,httpStatus:null,latencyMs:performance.now()-started,category:error instanceof Error&&error.name==='AbortError'?'aborted':'transport_error'});await writeFile(join(options.out,'http-evidence.json'),JSON.stringify(httpEvidence,null,2));throw error;}
+  }):null,client=new EvidenceClient(config,evidence,actual);
   if(options.mock){const report=await mockCompanion(options,config,client);await writeFile(join(options.out,'input-evidence.json'),JSON.stringify(client.inputs,null,2));return report;}
   const cases:CaseAcceptanceEvidence[]=[];let failure:string|null=null;
   try{
@@ -199,7 +225,7 @@ export async function runVerification(options:VerificationOptions,configured?:Co
     }
     if(!failure)cases.push(await liveRecoveryCase(config,client,options.out));
   }catch(error){failure=error instanceof Error?error.message:'Bounded verification failed';}
-  const report={...preflight,...verificationAcceptance(cases,failure),cases,inputs:client.inputs,failure,decisionsAdoption:'insufficient evidence to adopt; normal LIVE disabled',limitations:['Five controlled experiment frames plus one genuine temporary LIVE chain; qualitative model interpretations require human inspection.','Case labels and private evaluation coverage exist only in this report.','Reported uncertainty is a model estimate, not calibrated accuracy.','App-wide budget ledger is shared and is never reset by this harness.']};
+  const report={...preflight,...verificationAcceptance(cases,failure),cases,inputs:client.inputs,httpEvidence,budgetBefore,budgetAfter:ledger?await ledger.snapshot():null,failure,decisionsAdoption:'insufficient evidence to adopt; normal LIVE disabled',limitations:['Five controlled experiment frames plus one genuine temporary LIVE chain; qualitative model interpretations require human inspection.','Case labels and private evaluation coverage exist only in this report.','Reported uncertainty is a model estimate, not calibrated accuracy.','App-wide budget ledger is shared and is never reset by this harness.']};
   await writeFile(join(options.out,'verification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,actualProviderAcceptance:report.actualProviderAcceptance,out:options.out,failure}));return report;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

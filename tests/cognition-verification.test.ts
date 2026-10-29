@@ -4,7 +4,7 @@ import { mkdtemp,readFile,readdir,rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadCognitionConfig } from '../server/cognition/config.js';
-import { runVerification,verificationOptions,verificationPreflight,verificationAcceptance } from '../server/cognition/verify.js';
+import { runVerification,verificationOptions,verificationPreflight,verificationAcceptance,sanitizedProviderFailure } from '../server/cognition/verify.js';
 
 test('paid verification requires explicit mode; absent credentials finish preflight without renderer or provider work',async()=>{
   assert.throws(()=>verificationOptions([]),/exactly one/);
@@ -18,6 +18,12 @@ test('paid verification requires explicit mode; absent credentials finish prefli
     assert.deepEqual(await readdir(directory),['verification.json']);
     assert.equal(JSON.parse(await readFile(join(directory,'verification.json'),'utf8')).actualProviderAcceptance,false);
   }finally{await rm(directory,{recursive:true,force:true});}
+});
+test('HTTP capability evidence retains status and bounded failure categories without provider message contents',()=>{
+  const failure=sanitizedProviderFailure(404,{error:{code:404,type:'route_error',message:'No endpoints found that support the requested parameters SECRET key and full prompt'}});
+  assert.deepEqual(failure,{httpStatus:404,code:404,type:'route_error',category:'no_compatible_endpoint'});assert.ok(!JSON.stringify(failure).includes('SECRET'));
+  assert.equal(sanitizedProviderFailure(401,{error:{code:'Bearer private-key',message:'Invalid API key private-key'}}).code,null);
+  const token='sk-or-v1-fake-private-key';const secretShaped=sanitizedProviderFailure(401,{error:{code:token,type:token,message:token}});assert.equal(secretShaped.code,null);assert.equal(secretShaped.type,null);assert.ok(!JSON.stringify(secretShaped).includes(token));
 });
 test('incomplete replay evidence cannot become full acceptance even with images and a surviving LIVE experience',()=>{
   const cases=['visible','partial','dark','absent','hidden','temporary-live'].map(name=>({case:name,requests:[{status:'success'}],bundle:{evidence:'COMPLETE',replay:{status:'PASS'}},...(name==='temporary-live'?{restartWithCognitionDisabled:{survived:true}}:{})}));

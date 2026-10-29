@@ -14,7 +14,7 @@ LUMI_COGNITION_BUDGET_USD=1
 LUMI_DECISIONS_ENABLED=false
 ```
 
-Edit the key locally. The ordinary inference credential is sufficient; no admin key is requested. `.env` is ignored by Git. The common loader reads the repository `.env`, then applies process-environment overrides for development, normal startup and explicit integration commands. A key alone enables nothing. Missing credentials or disabled cognition preserve local behavior.
+Edit the key locally. The ordinary inference credential is sufficient; no admin key is requested. `.env` is ignored by Git. The common loader reads the repository `.env`, then applies process-environment overrides for development, normal startup and explicit integration commands. A key alone enables nothing. Missing credentials or disabled cognition preserve local behavior. New-install `.env.example` defaults main and Decisions OFF. The owner's current ignored `.env` explicitly enables main cognition persistently; Decisions remains saved OFF.
 
 ```powershell
 npm install
@@ -23,7 +23,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173/?view=dashboard`, or build with `npm run build` and use `npm start` on port 3001. Enablement is server configuration; the dashboard has no runtime enable/spend button.
 
-OpenRouter is the default main route at `https://openrouter.ai/api/v1`, using `qwen/qwen3.7-flash`. It receives actual private 512×512 PNG data plus allowlisted context, with bounded JSON output. The model remains configurable. Changing it requires an explicit documented full-route context limit; the adapter does not silently fall back to another model. Actual capability/results are reported separately in [Phase 2c results](phase-2c-results.md), never inferred from mocks.
+OpenRouter is the default main route at `https://openrouter.ai/api/v1`, using `qwen/qwen3.7-flash`. It receives actual private 512×512 PNG data plus allowlisted context, with bounded JSON output. This route uses `json_object`, the explicit bounded `lumi-vision-prompt-v2` response contract and strict local validation; it does not support native remote JSON-schema enforcement ([official model FAQ](https://openrouter.ai/qwen/qwen3.7-flash)). JSON output alone does not guarantee a valid proposal. The model remains configurable. Changing it requires an explicit documented full-route context limit; the adapter does not silently fall back to another model. Actual capability/results are reported separately in [Phase 2c results](phase-2c-results.md), never inferred from mocks.
 
 OpenAI Decisions uses its separate `OPENAI_API_KEY`, `LUMI_DECISIONS_ENABLED` flag, `gpt-6-luna` model and `https://api.openai.com/v1/decisions` typed question interface. It does not use the OpenRouter credential or a relabelled chat request. It is restricted to explicit isolated comparisons, remains disabled for normal LIVE use and is not a dependency of the main interpretation path.
 
@@ -95,8 +95,16 @@ Normal `npm test` is offline and must not spend money. The explicit harness is r
 # Explicit paid opt-in; requires enabled main cognition and its local key.
 npm.cmd run cognition:verify -- --paid --out diagnostics/cognition-checks/my-paid-check
 
-# Optional isolated Decisions comparison, with its independent flag/key configured.
-npm.cmd run cognition:verify -- --paid --decisions --out diagnostics/cognition-checks/my-paid-decisions-check
+# Optional comparison: --decisions does not itself enable configuration.
+# Requires independent OPENAI_API_KEY; restore the process-only flag afterwards.
+$phase2cPreviousDecisions = $env:LUMI_DECISIONS_ENABLED
+try {
+  $env:LUMI_DECISIONS_ENABLED = 'true'
+  npm.cmd run cognition:verify -- --paid --decisions --out diagnostics/cognition-checks/my-paid-decisions-check
+} finally {
+  if ($null -eq $phase2cPreviousDecisions) { Remove-Item Env:LUMI_DECISIONS_ENABLED -ErrorAction SilentlyContinue }
+  else { $env:LUMI_DECISIONS_ENABLED = $phase2cPreviousDecisions }
+}
 
 # Actual renderer + explicitly MOCK provider; no paid provider acceptance claim.
 npm run build
@@ -105,4 +113,4 @@ npm.cmd run cognition:verify -- --mock --serve 180 --out diagnostics/cognition-c
 
 Use a fresh output directory. The default is a timestamped directory under `diagnostics/cognition-checks/`. Choose exactly one of `--paid` or `--mock`. `--serve` accepts 1–600 seconds and is available only for the mock dashboard companion; use the printed loopback URL and select its experiment, then export normally. The paid harness bounds itself to at most six main interpretation calls and, with `--decisions`, one optional Decisions call, all subject to the shared budget/admission limits. Missing main enablement/key reports unavailable before paid requests or rendering. Configured keys alone do not launch evaluation. Actual command results and any credential-dependent gaps remain explicit in [Phase 2c results](phase-2c-results.md).
 
-Paid acceptance must use actual 512×512 visible/partial/dark/absent/hidden images and the genuine temporary LIVE admission path. A mock companion can demonstrate deterministic integration and UI but cannot prove provider image capability or real paid LIVE acceptance. Decisions requires a small matched ambiguous-case comparison; no measurable benefit is an acceptable outcome and does not enable normal LIVE use automatically. Stop before Phase 2.5 or Phase 3.
+The actual paid acceptance run covered 512×512 visible/partial/dark/absent/hidden images and the genuine temporary LIVE admission/restart path; six corrected bundles replay offline. One actual matched Decisions sample was insufficient to adopt it. See the results for latency, cost, retained failed-request accounting and limitations. Future paid acceptance must use actual images and the genuine temporary LIVE path. A mock companion can demonstrate deterministic integration and UI but cannot prove provider image capability or real paid LIVE acceptance. Decisions requires a small matched ambiguous-case comparison; no measurable benefit is an acceptable outcome and does not enable normal LIVE use automatically. Stop before Phase 2.5 or Phase 3.

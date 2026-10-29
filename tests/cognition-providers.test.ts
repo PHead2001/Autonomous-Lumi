@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadCognitionConfig, safeCognitionConfig } from '../server/cognition/config';
 import { DurableBudget, BudgetError } from '../server/cognition/budget';
-import { CognitionProviders, type ProviderTransport } from '../server/cognition/providers';
-import type { CognitionContext } from '../shared/cognition-protocol';
+import { COGNITION_PROMPT_REVISION, CognitionProviders, type ProviderTransport } from '../server/cognition/providers';
+import { INTERPRETATION_JSON_SCHEMA, type CognitionContext } from '../shared/cognition-protocol';
 
 const image = PNG.sync.write(new PNG({ width: 512, height: 512, fill: true }));
 const context = (): CognitionContext => ({ observationId: 'obs1', frameHash: createHash('sha256').update(image).digest('hex'),
@@ -122,13 +122,20 @@ test('crashed pending requests expire into charged unknown usage without permane
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('OpenRouter sends the bound private 512 PNG with strict schema and price/route controls, returning normalized output', async () => {
+test('OpenRouter sends the bound private 512 PNG with JSON mode, bounded explicit contract and price/route controls', async () => {
   let calls = 0;
   const fixture = await setup(async (url, init) => {
     calls++; assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions'); assert.equal(init.redirect, 'error');
     const body = JSON.parse(init.body as string);
     assert.equal(body.model, 'qwen/qwen3.7-flash'); assert.equal(body.stream, false); assert.equal(body.provider.allow_fallbacks, false); assert.equal(body.provider.require_parameters, true);
-    assert.deepEqual(body.provider.max_price, { prompt: 0.1, completion: 0.3 }); assert.equal(body.response_format.json_schema.strict, true);
+    assert.deepEqual(body.provider.max_price, { prompt: 0.1, completion: 0.3 }); assert.deepEqual(body.response_format, { type: 'json_object' });
+    assert.equal(body.max_tokens, fixture.config.limits.maxOutputTokens);
+    assert.equal(COGNITION_PROMPT_REVISION, 'lumi-vision-prompt-v2');
+    assert.equal(body.messages[0].role, 'system');
+    const systemPrompt = body.messages[0].content as string;
+    assert.ok(Buffer.byteLength(systemPrompt) <= 8192);
+    assert.ok(Buffer.byteLength(systemPrompt) + Buffer.byteLength(body.messages[1].content[0].text) <= fixture.config.limits.maxContextBytes);
+    assert.deepEqual(JSON.parse(systemPrompt.slice(systemPrompt.indexOf('\n') + 1)), INTERPRETATION_JSON_SCHEMA);
     const content = body.messages[1].content; assert.deepEqual(JSON.parse(content[0].text), context());
     assert.equal(content[1].image_url.url, 'data:image/png;base64,' + image.toString('base64'));
     for (const forbidden of ['worldId', 'runId', 'worldTimeSeconds', 'privateGrounding', 'bodyHeading']) assert.equal((init.body as string).includes(forbidden), false);

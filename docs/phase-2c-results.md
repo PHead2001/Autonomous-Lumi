@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Offline implementation and an actual-renderer **MOCK provider** workflow have been verified. The latest supplied full offline run passed **231 tests**, lint and build; real Chromium attention checks passed **2/2**. Chrome inspected the normal dashboard and exported a COMPLETE replayable experiment bundle. **Actual OpenRouter image capability, positive provider-backed temporary LIVE admission/restart and the optional Decisions comparison remain unverified.** Mock evidence does not satisfy those acceptance requirements. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) is open and unmerged with these paid-acceptance gaps explicit. Hosted review identified cost-accounting and checkpoint-capacity defects; both are fixed and resolved. Targeted hosted Codex re-review of `da6b1b2` is clean (`has_any_findings: false`, `has_unresolved_findings: false`).
+Actual paid acceptance now passes: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Prior hosted review was clean at `da6b1b2`; hosted review of the subsequent provider JSON-mode and sanitizer corrections is pending.
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
@@ -24,7 +24,9 @@ The hosted P2 cost-overage finding was fixed and pushed in `808a870`; its thread
 
 The hosted P1 checkpoint-capacity fix passed **76 affected tests**, owned ESLint and build including TypeScript, with **clean independent Astra review**. Both initial hosted findings are resolved. Targeted hosted Codex re-review of `da6b1b2` completed with no findings and no unresolved findings; independent Astra re-reviews are also clean. The old compact-size guard admitted a counterexample of **1,390,041 compact bytes** whose actual stored envelope was **2,145,509 bytes**, above the **2,097,152-byte** limit. The replacement measures the actual pretty-printed recovery/named envelopes and reserves future activity, synthetic, motor/sensor and terminal-delivery growth. Supplied corrected fixtures measured **1,743,094 actual recovery bytes** for 221 real experiences with a **2,042,291-byte derived budget**, and **1,972,720 named-checkpoint bytes** after LIVE→EXPERIMENT fork with 256 synthetic records and 10,000 activity milestones. Maximum escaped terminal-result and ordered-delivery fixtures measured **23,886 / 12,002 bytes**, below their individual **32 KiB** allowances; combined growth was **35,888 bytes**, below **64 KiB**. These are focused capacity fixtures and affected checks, not a fresh full-suite result.
 
-## Actual renderer plus explicitly MOCK interpretation
+The later sanitizer correction passed **3 affected tests**, lint and TypeScript, with clean independent re-review. The provider JSON-mode/prompt correction passed **16 provider tests**, lint and TypeScript, with clean focused review. The earlier hosted clean result predates these corrections and is not approval of their latest code.
+
+## Earlier actual renderer plus explicitly MOCK interpretation
 
 ```powershell
 npm run build
@@ -69,30 +71,66 @@ The actual CLI replay **PASS** matched canonical state/events/runtime without pr
 
 Generated bundles, images, logs and reports are local ignored artifacts. They do not imply paid-provider acceptance.
 
-## Paid preflight and remaining acceptance gaps
+## Actual paid acceptance
 
-The actual paid preflight reported **unavailable**, `actualProviderAcceptance: false`, a US$1 ceiling and **zero paid calls**, before renderer/provider execution. Report: `diagnostics/phase2c-paid-preflight-20261029/verification.json`. Its message requires main enablement and `OPENROUTER_API_KEY` to be configured locally; credentials alone do not enable calls. The latest supplied configuration status remains `mainEnabled: false` and `mainAvailable: false`, with zero paid calls; local configuration is still being edited.
+Source reports are `diagnostics/phase2c-paid-json-20261029/{verification.json,acceptance-summary.json,http-evidence.json}`. The corrected run made **six main calls and one Decisions call**, all HTTP 200, without automated retries. Including the original strict-schema HTTP 404, the aggregate is **seven main calls and one Decisions call**. The initial unavailable preflight and failed first route attempt remain historical evidence in `diagnostics/phase2c-paid-preflight-20261029` and `diagnostics/phase2c-paid-20261029`; they were not erased or counted as successful interpretations.
 
-With the local main flag/key configured, the remaining explicit check is:
+The same `qwen/qwen3.7-flash` route now uses `response_format: json_object`, the bounded explicit `lumi-vision-prompt-v2` contract and independent strict local validation. The [official model FAQ](https://openrouter.ai/qwen/qwen3.7-flash) distinguishes JSON output from unsupported native JSON-schema enforcement on this route; JSON syntax support is not a promise of contract correctness. Provider revision metadata was unavailable. The qualitative responses describe visible shapes/partial occlusion, report darkness or missing detail, and remain fallible rather than calibrated recognition evidence. All six inputs were actual **512×512** images, with zero forbidden input fields found by the context inspection.
+
+| Case | Provider latency (s) | Ordered request→result wall time (s) | Model uncertainty | Local action result | Bundle / offline replay |
+| --- | ---: | ---: | ---: | --- | --- |
+| visible | 14.460 | 14.525 | 0.65 | continued | COMPLETE / PASS |
+| partial | 11.263 | 11.300 | 0.2 | continued | COMPLETE / PASS |
+| dark | 6.871 | 14.655 | 1 | capture_requested | COMPLETE / PASS |
+| absent | 9.347 | 11.116 | 0.8 | capture_requested | COMPLETE / PASS |
+| hidden | 12.933 | 13.029 | 1 | capture_requested | COMPLETE / PASS |
+| temporary-live | 12.080 | 12.122 | 0.85 | look_started | COMPLETE / PASS |
+
+These provider latencies include adapter scheduling/queueing; the separate HTTP measurements in `http-evidence.json` are shorter transport intervals. End-to-end wall time additionally includes ordered delivery and fixture scheduling. Neither metric establishes a long-run throughput distribution. “Look started” or “capture requested” means an action began or was queued, not that its physical outcome completed.
+
+The genuine **temporary LIVE** chain admitted real experience **1** at tick **412**, with `look_started`. Restarting that isolated history with cognition disabled retained **one** real experience in the **same history**. The harness used disposable temporary data; owner LIVE history was not used for these fixtures. The sanitized bundle is `diagnostics/phase2c-paid-json-20261029/temporary-live.zip`; it is COMPLETE and replays at tick 412 with **9 inputs / 61 events**:
+
+| Canonical evidence | Hash |
+| --- | --- |
+| State | `af32a2290f95f5a895b1026e3dc09ea1a23c81fb6b33d7fb56174f021a59bd3d` |
+| Events | `dc8ace4f111eee10d5cce3ac9ffd1763dd8dea1e21a93f0faef0a485a78ea659` |
+| Runtime | `1c31aa7849c04e59bdfcc55a734c2407fc7923693df8dd009caf04ad3c2a4dc8` |
 
 ```powershell
-npm.cmd run cognition:verify -- --paid --out diagnostics/phase2c-paid
-
-# Only with the independent OpenAI flag/key configured:
-npm.cmd run cognition:verify -- --paid --decisions --out diagnostics/phase2c-paid-decisions
+# Offline: makes no provider or renderer calls.
+npm.cmd run replay -- --bundle diagnostics/phase2c-paid-json-20261029/temporary-live.zip
 ```
 
-The harness bounds paid work to at most six main calls covering five image cases plus the temporary LIVE path, and one optional Decisions call, subject to the same durable application-wide US$1 budget. Use a fresh output directory. No sample count, latency, usage, model capability or adoption benefit is fabricated when a call did not occur.
+The six main responses reported **4,931 input / 3,335 output tokens** and **US$0.00058148**. The actual matched partial-view Decisions call used **475 input tokens**, **819.44 ms** adapter latency and estimated **US$0.000130625**. Its confidence was **0.28**; the normalized local fallback was `continue`, and encoding was rejected as `decision_not_experience`. This one matched case does not justify adoption or imply calibrated confidence; normal LIVE Decisions remains disabled.
+
+The durable ledger accounts **US$0.100942505**, with **pending 0 / unknown 1**. This includes **US$0.1002304** retained conservatively for the original failed strict-schema request, not merely the smaller reported successful-call cost. No reservation was refunded by resetting the ledger.
+
+For another explicitly paid run, use a fresh output directory and the local main flag/key. The user's ignored `.env` now persistently enables main cognition; new-install `.env.example` still defaults both flags OFF. Saved Decisions configuration remains false. `--decisions` selects the comparison but does not enable its independent configuration; use a process-only override and restore it afterwards:
+
+```powershell
+npm.cmd run cognition:verify -- --paid --out diagnostics/phase2c-paid-repeat
+
+$phase2cPreviousDecisions = $env:LUMI_DECISIONS_ENABLED
+try {
+  $env:LUMI_DECISIONS_ENABLED = 'true'
+  npm.cmd run cognition:verify -- --paid --decisions --out diagnostics/phase2c-paid-decisions-repeat
+} finally {
+  if ($null -eq $phase2cPreviousDecisions) { Remove-Item Env:LUMI_DECISIONS_ENABLED -ErrorAction SilentlyContinue }
+  else { $env:LUMI_DECISIONS_ENABLED = $phase2cPreviousDecisions }
+}
+```
+
+The optional command also needs the independent local `OPENAI_API_KEY`. Both commands consume the existing shared budget; they are reproduction instructions, not a request to repeat acceptance calls.
 
 | Acceptance | Status |
 | --- | --- |
-| `2c-1` actual OpenRouter 512×512 visible/partial/dark/absent/hidden cases | **UNVERIFIED**, credential-dependent |
-| `2c-2` local action/outage boundary | Offline/mock and affected provider/host/CLI checks passed; targeted CLI and restart/cadence re-reviews clean |
-| `2c-3` inspected bundle and exact offline replay | **PASS for actual-renderer/MOCK experiment**; real-provider sequence not yet exercised |
-| `2c-4` actual provider-backed temporary LIVE admission/restart | **UNVERIFIED**; mock experiment encoding is not a substitute |
-| Optional Decisions comparison | **UNVERIFIED**; no benefit/adoption conclusion, normal LIVE use remains disabled |
+| `2c-1` actual OpenRouter visible/partial/dark/absent/hidden cases | **PASS**, five actual 512×512 fixtures; interpretation quality remains fallible |
+| `2c-2` local action/outage boundary | Offline/mock and affected provider/host/CLI checks passed; independent targeted reviews clean |
+| `2c-3` inspected bundle and exact offline replay | **PASS**, six corrected actual-provider bundles COMPLETE / replay PASS; earlier dashboard MOCK export retained separately |
+| `2c-4` genuine temporary LIVE admission/restart | **PASS**, experience 1 retained with cognition disabled, same temporary history |
+| Optional Decisions comparison | One actual matched case evaluated; **insufficient evidence to adopt**, normal LIVE disabled |
 | Original viewer browser regression | Upright avatar, walking/idle and advancing-world reconnect observed; audio unverified and no reliable new door/ear transient capture |
-| Final independent/hosted review | Core/CLI and restart/cadence targeted re-reviews clean; hosted P2 cost fix resolved with clean independent re-review. Hosted P1 capacity fix passed 76 affected tests, owned lint/build and independent Astra review. Both hosted findings are resolved; targeted Codex re-review of `da6b1b2` is clean with no findings or unresolved findings. Draft PR #8 open/unmerged |
+| Final review | Initial capacity/cost findings fixed and resolved with clean independent and prior hosted reviews; subsequent JSON-mode/sanitizer focused reviews clean, latest hosted review pending. Draft PR #8 open/unmerged |
 
 ## Material limits
 

@@ -44,7 +44,7 @@ The build includes TypeScript checking.
 
 ## Phase 2c: interpretation and experience
 
-Cognition and Decisions are **OFF by default**. To enable main interpretation, create a local `.env` from `.env.example` if one does not already exist, preserve any existing settings, set `OPENROUTER_API_KEY` locally and set `LUMI_COGNITION_ENABLED=true`. Development and normal startup use the same server-side loader. The default route is OpenRouter `qwen/qwen3.7-flash`; keys alone do not enable inference. Never use a `VITE_` prefix for server credentials.
+New-install cognition and Decisions are **OFF by default**. The owner's current ignored `.env` explicitly enables main cognition persistently; saved Decisions remains OFF. To enable main interpretation, create a local `.env` from `.env.example` if one does not already exist, preserve any existing settings, set `OPENROUTER_API_KEY` locally and set `LUMI_COGNITION_ENABLED=true`. Development and normal startup use the same server-side loader. The default route is OpenRouter `qwen/qwen3.7-flash`, using JSON-object output, a bounded explicit prompt contract and strict local validation; native remote JSON-schema enforcement is unsupported on this route ([official model FAQ](https://openrouter.ai/qwen/qwen3.7-flash)). Keys alone do not enable inference. Never use a `VITE_` prefix for server credentials.
 
 Open the existing dashboard with `?view=dashboard` and select a world/branch. **Interpretation & experience** shows the specific observation/frame bound to each request, a short fallible interpretation, uncertainty, proposed versus locally started/queued action, encoding outcome, provider timing/usage/cost basis and admitted real experiences. It never substitutes the latest image for an older request. “Started / queued” does not mean a physical action completed. Only the trusted actual-sensor → attention → interpretation → encoding path admits real experience; manual previews, ignored cues, unsupported guesses and TEST STUB ancestry cannot create LIVE autobiography.
 
@@ -52,7 +52,7 @@ The default application-wide spending ceiling is **US$1**, with durable reservat
 
 OpenAI Decisions has an independent `OPENAI_API_KEY` and enable flag. It uses the actual Decisions endpoint for explicit isolated comparisons, remains disabled for normal LIVE use and does not gate reflexes or the main model. Main and Decisions measurements are separate; `world_seconds_per_model_response` stays **N/A** without successful main responses. Ordinary `npm test` never makes paid calls.
 
-See [Multimodal interpretation and experience](docs/multimodal-experience.md) for configuration, budgets, action/provenance boundaries, replay/recovery and explicit integration commands. [Phase 2c results](docs/phase-2c-results.md) lists actual evidence and outstanding provider-dependent checks; mock results are labelled separately.
+See [Multimodal interpretation and experience](docs/multimodal-experience.md) for configuration, budgets, action/provenance boundaries, replay/recovery and explicit integration commands. [Phase 2c results](docs/phase-2c-results.md) records six successful main paid checks, temporary LIVE admission/restart, six COMPLETE replayable bundles and one actual Decisions comparison that was insufficient to adopt. Latencies, reported/estimated/unknown costs and remaining review/audio limits are explicit; earlier mock results are labelled separately.
 
 ## Phase 2b: hearing and attention
 
