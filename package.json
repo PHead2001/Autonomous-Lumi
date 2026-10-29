@@ -1,0 +1,22 @@
+{
+  "name": "autonomous-lumi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "concurrently -k -n world,viewer \"npm:dev:server\" \"npm:dev:viewer\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:viewer": "vite --host 127.0.0.1",
+    "start": "tsx server/index.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "lint": "eslint ."
+  },
+  "dependencies": { "three": "^0.180.0", "ws": "^8.18.3" },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0", "@types/node": "^22.18.6", "@types/three": "^0.180.0", "@types/ws": "^8.18.1",
+    "concurrently": "^9.2.1", "eslint": "^9.36.0", "globals": "^16.4.0", "tsx": "^4.20.6", "typescript": "^5.9.2", "typescript-eslint": "^8.44.1", "vite": "^7.1.7"
+  }
+}
