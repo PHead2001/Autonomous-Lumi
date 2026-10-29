@@ -2,7 +2,7 @@
 
 Virtual Eyes extends the existing fox-girl viewer and isolated laboratory with a shared physical scene, server-owned head/eye pose, deterministic turn/look/scan actions, an isolated on-demand Chromium renderer, and sight-limited spatial evidence. Operating instructions are in the [README](../README.md), [Virtual Eyes guide](virtual-eyes.md), and [renderer comparison](renderer-benchmarks.md).
 
-**Integration status:** the runtime, renderer and diagnostic export/replay checks below have completed. Final normal-suite/build/lint results and final review outcome are pending integration. This report does not yet certify the entire milestone complete.
+The runtime, renderer, diagnostic export/replay and final normal checks below have completed. Independent local review and targeted re-review have no actionable findings remaining. Draft PR **#6** is open; hosted Codex review has been requested and remains pending.
 
 ## Run and try it
 
@@ -53,6 +53,8 @@ The actual dashboard/viewer walkthrough used separate temporary test data, prese
 
 The final dashboard check recovered the saved head yaw of **−6°**, queued a directional look toward **−75°**, then advanced **25 fixed ticks**. An observed-target request outside the head’s limits was visibly rejected; this is rejection-path evidence, not a claim that target admission succeeded through the UI. A dark capture at tick **2265** produced zero eligible shapes; the lit capture at **2266** produced one. The inspected dashboard reported no console errors. The local private screenshot is `diagnostics/vision/phase2a-dashboard.png`.
 
+The normal spectator slam control in the paused experiment also showed the door open at the first stepped tick **2267** and closed at **2270**. The upright two-legged avatar remained visible with the idle caption “taking a breath”; the viewer console error list was empty. The earlier tick-2241 inspection remains the articulated ear-flick evidence. These observations add no independent audible-output claim.
+
 Disconnect/reconnect returned to the same running world. A separate zero-viewer CLI check observed LIVE advance from tick **6972** to **7011** in the same run, with the actual independent first-person capture fixed at tick **6991**. Advancement was observed while viewers were absent, rather than reconstructed after reconnection.
 
 Historical Phase 1.5b and 1.5c diagnostic artifacts both replayed successfully with their original semantics. Current migration and recovery preserve history identity and existing state while adding the complete head/action/camera/scene fields. Frame bytes and renderer resource observations remain outside authoritative checkpoints.
@@ -80,7 +82,17 @@ npm run lint
 npm run build
 ```
 
-The build includes TypeScript checking. Final normal check counts/results and the independent review/fix/re-review outcome remain pending; the renderer checks above are not a substitute for those results.
+Final normal checks passed:
+
+- `npm test`: **120/120**, approximately **9.78 seconds**.
+- `npm run lint`: **PASS**.
+- `npm run build`: **PASS**, including TypeScript checking. Vite retains the existing nonblocking chunk-size advisory above 500 kB.
+
+The actual local logs are `diagnostics/phase2a-final-test-storage-fix.log`, `diagnostics/phase2a-final-lint-storage-fix.log` and `diagnostics/phase2a-final-build-storage-fix.log`. Passing results were reused; the logging benchmark matrix from the previous milestone was not rerun.
+
+Independent ordinary UI review and the architect’s final targeted re-review found no actionable defects remaining after corrections. A real recorder concurrency failure—ENOENT/Windows EPERM during concurrent retention and publication—was fixed with a branch-scoped, process-local filesystem serializer. Its meaningful regression exercises eight writers across twenty flush rounds and compression. The final normal checks above include that fix. The serializer coordinates writers within the application process; existing data-directory ownership/lease protections remain the boundary against competing server processes.
+
+Draft [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) has been pushed and hosted `@codex` review requested. Hosted review is pending and is not reported as passed here. The owner retains the final merge decision.
 
 ## Material limits
 
