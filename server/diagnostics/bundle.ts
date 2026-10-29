@@ -4,7 +4,7 @@ import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { canonicalStringify, hashCanonical } from '../canonical.js';
 import { replay } from '../replay.js';
 import { hashCheckpoint, validateCheckpoint, type DeterministicEvent, type OrderedInput } from '../simulation.js';
-import { readRun, sanitizeData, type DiagnosticRecord } from './recorder.js';
+import { readRun, sanitizeData, type DiagnosticRecord,type RunSnapshot } from './recorder.js';
 import {validateRuntimeCheckpoint,validateRuntimeOperation,replayRuntime,hashRuntimeCheckpoint,type RuntimeCheckpoint} from '../branch-runtime.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -49,9 +49,9 @@ function software() {
   return { application: 'autonomous-lumi', node: process.version, revision, working_tree:workingTree, revision_note:'Available base revision; modified source is not identified by this revision alone.', build: 'TypeScript source via tsx; viewer built with Vite' };
 }
 export interface ExportOptions { runDirectory: string; out: string; fromTick?: number; toTick?: number; incident?: number;
-  expectedWorldId?:string;expectedBranchId?:string;expectedRunId?:string;category?:string;component?:string;severity?:string;causalId?:string;search?:string;eventType?:string }
+  snapshot?:RunSnapshot;expectedWorldId?:string;expectedBranchId?:string;expectedRunId?:string;category?:string;component?:string;severity?:string;causalId?:string;search?:string;eventType?:string }
 export async function exportIncident(options: ExportOptions) {
-  const run = await readRun(options.runDirectory);
+  const run = options.snapshot??await readRun(options.runDirectory);
   if([options.expectedWorldId,options.expectedBranchId,options.expectedRunId].some(value=>value!==undefined)){
     if([options.expectedWorldId,options.expectedBranchId,options.expectedRunId].some(value=>typeof value!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(value)))throw new Error('Invalid export target');
     if(run.metadata.worldId!==options.expectedWorldId||run.metadata.branchId!==options.expectedBranchId||run.metadata.runId!==options.expectedRunId)throw new Error('Export target does not match recorded namespace');
@@ -121,7 +121,7 @@ export async function exportIncident(options: ExportOptions) {
     runtimeControlStateMatches:runtimeStart!==null?runtimeResult!==null:null,
     testSuite: 'No external test result is asserted by this export. Run npm test for repository regressions.' };
   const timeline = focus.map(r => `- tick ${r.world_tick} (${r.world_elapsed_seconds.toFixed(3)} s) [${r.event_id}] ${r.category} / ${r.event_type}: ${r.outcome}${r.input_sequence ? `; input ${r.input_sequence}` : ''}${r.causal_event_id ? `; caused by ${r.causal_event_id}` : ''}${Object.keys(r.data).length ? `; ${JSON.stringify(r.data)}` : ''}`).join('\n');
-  const summary = `# Incident summary\n\nEvidence: **${manifest.evidence_status}**. World ${manifest.world_id}; ${run.metadata.branchId?`branch ${run.metadata.branchId}; `:''}run ${manifest.run_id}.\n\nRequested ticks ${from}–${to}; included checkpoint/replay ticks ${start.tick}–${end.tick}. ${inputs.length} ordered inputs and ${observed.length} deterministic events.\n\n${focus.filter(r => ['INPUT_VALIDATED','ACOUSTIC_EVENT','REFLEX_DECISION','REFLEX_STATE','VIEWER_NOTIFICATION','SYNTHETIC_GATE','EXPERIENCE_ENCODED','ACTIVITY_COMPLETE','CONTROL_APPLIED'].includes(r.event_type)).map(r => `- [${r.event_id}] ${r.event_type} at tick ${r.world_tick}: ${r.outcome}; ${JSON.stringify(r.data)}`).join('\n')}\n\nCoverage gaps: ${gaps.length ? [...new Set(gaps)].join(', ') : 'none in retained deterministic replay evidence'}. Browser display/audio is not observed by this recorder.\n\n${manifest.coverage.fox_experience}\n`;
+  const summary = `# Incident summary\n\nEvidence: **${manifest.evidence_status}**. World ${manifest.world_id}; ${run.metadata.branchId?`branch ${run.metadata.branchId}; `:''}run ${manifest.run_id}.\n\nRequested ticks ${from}–${to}; included checkpoint/replay ticks ${start.tick}–${end.tick}. ${inputs.length} ordered inputs and ${observed.length} deterministic events.\n\n${focus.filter(r => ['INPUT_VALIDATED','ACOUSTIC_EVENT','REFLEX_DECISION','REFLEX_STATE','VIEWER_NOTIFICATION','SYNTHETIC_GATE','EXPERIENCE_ENCODED','ACTIVITY_COMPLETE','CONTROL_APPLIED','LIVE_RECOVERED','LIVE_INITIALIZED','RECOVERY_COMMITTED','RECOVERY_SAVE_FAILED','RESTORE_PREPARATION_FAILED','RESTORE_RETIRE_FAILED','BRANCH_RESTORED','EXPERIMENT_REOPENED'].includes(r.event_type)).map(r => `- [${r.event_id}] ${r.event_type} at tick ${r.world_tick}: ${r.outcome}; ${JSON.stringify(r.data)}`).join('\n')}\n\nCoverage gaps: ${gaps.length ? [...new Set(gaps)].join(', ') : 'none in retained deterministic replay evidence'}. A committed recovery checkpoint establishes a saved recovery point; deterministic replay only covers this run\u0027s included operations. Recovery does not prove complete pre-crash evidence or replay across downtime. Checkpoint age includes any unsaved uptime before a crash. Browser display/audio is not observed by this recorder.\n\n${manifest.coverage.fox_experience}\n`;
   const labExpected=runtimeStart?[
     `The starting runtime is ${runtimeStart.mode}, ${runtimeStart.control.paused?'paused':'running'} at ${runtimeStart.control.speed}x, tick ${runtimeStart.simulation.tick}. Restore its complete control/scheduler and simulation state before applying the recorded operations.`,
     `Activity starts at cursor ${runtimeStart.simulation.activity.cursor}/${runtimeStart.simulation.activity.totalTicks}, status ${runtimeStart.simulation.activity.status}, completion count ${runtimeStart.simulation.activity.completionCount}. Saved progress resumes from that cursor; completed effects must not repeat and completion must apply at most once.`,

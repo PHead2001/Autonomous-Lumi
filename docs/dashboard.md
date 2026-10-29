@@ -11,6 +11,16 @@ The header always names the selected world, branch, mode and current run. LIVE r
 3. While paused, start a generic activity with a small duration, such as 120 ticks. Step it, pause/resume the activity, and record another checkpoint. **Fast-forward** executes every intermediate fixed tick, yielding between bounded batches; **Cancel** stops the remaining request.
 4. **Restore selected checkpoint** restores this experiment’s full simulation and control state in a new run. Run selection in the timeline keeps older evidence available. Controls carrying the old run cannot mutate the restored run. No experiment restore or experience-promotion control exists for LIVE.
 
+Normal experiment playback defaults to **6×** and supports **1× through 30×**. **Requested unpaused speed** is a control setting; **Achieved** is measured from actual simulated advancement over monotonic host time. The dashboard shows sample duration and world seconds, and explicitly withholds the measured multiplier while paused, fast-forwarding, after host suspension, or while collecting a new sample. Catch-up loss and sustained underperformance are shown when observed. The ceiling is an admission limit, not a guarantee that every machine can sustain the requested speed. **Fast-forward** remains a separate bounded operation.
+
+## Recovery and saved experiments
+
+The **LIVE recovery** panel identifies the persisted LIVE history, its last successfully committed tick/world time and save timestamp, and the startup recovery point. A fallback to a previous valid generation and save failures are visible. Graceful shutdown commits a final recovery checkpoint. After abrupt termination, progress after the last committed checkpoint can be lost. Downtime does not advance world or subjective time. Recovery is independent from logging OFF and diagnostic evidence completeness.
+
+Saved experiment checkpoints are discovered from disk under **Reopen a saved experiment**. After restarting the application, press **Refresh saved checkpoints**, select a checkpoint, enter a new experiment branch ID and press **Reopen saved experiment**. The new run is isolated from LIVE and every other experiment; previous active experiments do not restart automatically. Rejected catalog files are reported beside the selector. A saved speed above the supported normal-playback ceiling fails explicitly rather than silently changing history.
+
+Older Phase 1.5b checkpoints may lack history metadata. The **Explicitly import a legacy checkpoint with unverified history** checkbox authorizes a deliberate experiment-only import; it is not a claim that the old checkpoint belongs to the current LIVE history. Recovery, first initialization, explicit checkpoint overrides and intentional fresh-world startup are described in the [README](../README.md). Automatic recovery never silently resets an existing corrupt or incompatible history.
+
 The activity is a minimal tick-count task for testing saved progress and once-only milestone/completion effects. It does not introduce painting or a task planner.
 
 ## Synthetic observations and subjective time

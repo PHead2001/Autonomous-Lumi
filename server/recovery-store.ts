@@ -1,0 +1,50 @@
+import { randomUUID } from 'node:crypto';
+import { readdir, mkdir, unlink } from 'node:fs/promises';
+import { join, resolve, dirname } from 'node:path';
+import { atomicJson, readBoundedJson, assertOwnedPath } from './checkpoint-storage.js';
+import { validateRuntimeCheckpoint, hashRuntimeCheckpoint, validId, type RuntimeCheckpoint } from './branch-runtime.js';
+import { Simulation } from './simulation.js';
+
+interface Generation {file:string;generation:number;tick:number;worldTime:number;savedAt:string;hash:string}
+interface Manifest {schemaVersion:1;historyId:string;latest:Generation;previous:Generation|null}
+interface RecoveryPayload {schemaVersion:1;kind:'lumi-live-recovery';historyId:string;generation:number;checkpoint:RuntimeCheckpoint}
+export interface RecoveryStatus {historyId:string;status:'fresh'|'recovered'|'override';lastCommitted:Omit<Generation,'file'|'hash'>|null;saveError:string|null;recovered:Omit<Generation,'file'|'hash'>|null;fallback:boolean;intervalMs:number;checkpointAgeMs:number|null}
+const clean=(g:Generation)=>({generation:g.generation,tick:g.tick,worldTime:g.worldTime,savedAt:g.savedAt});
+const message=(error:unknown)=>error instanceof Error?error.message:'Unknown recovery failure';
+const missing=(error:unknown)=>(error as NodeJS.ErrnoException).code==='ENOENT';
+function generation(value:unknown):Generation {const g=value as Generation;if(!g||!validId(g.file?.replace(/\.json$/,''))||!g.file.endsWith('.json')||!Number.isSafeInteger(g.generation)||g.generation<1||!Number.isSafeInteger(g.tick)||g.tick<0||!Number.isFinite(g.worldTime)||g.worldTime<0||typeof g.savedAt!=='string'||!Number.isFinite(Date.parse(g.savedAt))||typeof g.hash!=='string'||!/^[a-f0-9]{64}$/.test(g.hash))throw new Error('Invalid recovery generation metadata');return g;}
+function manifest(value:unknown,historyId:string):Manifest {const m=value as Manifest;if(!m||m.schemaVersion!==1||m.historyId!==historyId)throw new Error('Recovery manifest has incompatible schema or wrong history');generation(m.latest);if(m.previous!==null){generation(m.previous);if(m.previous.generation>=m.latest.generation)throw new Error('Ambiguous recovery generation order');}return m;}
+/** Authoritative saves live outside recorder retention. The manifest is the only commit point. */
+export class RecoveryStore {
+  readonly historyId:string;readonly directory:string;readonly rootDirectory:string;private current:Manifest|null=null;private queue:Promise<void>=Promise.resolve();
+  private statusValue:RecoveryStatus;private needsActivation=false;private lastOperationCursor:number|null=null;
+  private constructor(directory:string,historyId:string,intervalMs:number,status:'fresh'|'recovered'|'override',private readonly listRecoveryFiles:(directory:string)=>Promise<string[]>=readdir) {this.rootDirectory=resolve(directory);this.directory=join(this.rootDirectory,'.recovery',historyId);this.historyId=historyId;this.needsActivation=status!=='recovered';this.statusValue={historyId,status,lastCommitted:null,saveError:null,recovered:null,fallback:false,intervalMs,checkpointAgeMs:null};}
+  static async open(options:{directory:string;checkpoint?:unknown;newWorld?:boolean;intervalMs?:number;listRecoveryFiles?:(directory:string)=>Promise<string[]>}):Promise<{store:RecoveryStore;checkpoint?:unknown}> {
+    const intervalMs=options.intervalMs??30000;if(!Number.isSafeInteger(intervalMs)||intervalMs<100||intervalMs>3600000)throw new Error('LUMI_RECOVERY_INTERVAL_MS must be 100..3600000');
+    const base=resolve(options.directory),root=join(base,'.recovery');let entries:string[]=[];try{entries=await readdir(base);}catch(e){if(!missing(e))throw e;}
+    // Explicit overrides start a new history; neither import nor reset modifies the old one.
+    if(options.checkpoint!==undefined||options.newWorld){
+      if(options.checkpoint!==undefined){const raw=options.checkpoint as {kind?:unknown;schemaVersion?:unknown};if(raw?.kind==='lumi-branch-runtime'){const cp=validateRuntimeCheckpoint(raw);if(cp.mode!=='LIVE')throw new Error('LUMI_CHECKPOINT override requires LIVE; experimental state cannot enter LIVE');}else if(raw?.schemaVersion!==1)throw new Error('LUMI_CHECKPOINT requires a LIVE runtime envelope or explicit legacy schema 1 checkpoint');else new Simulation({checkpoint:raw});}
+      const historyId=randomUUID(),store=new RecoveryStore(base,historyId,intervalMs,'override',options.listRecoveryFiles);await mkdir(base,{recursive:true});await assertOwnedPath(base,store.directory);await mkdir(store.directory,{recursive:true});return {store,checkpoint:options.checkpoint};
+    }
+    let active:unknown;try{active=await readBoundedJson(join(root,'active.json'),base);}catch(e){if(!missing(e))throw new Error('Cannot read recovery identity. Preserve files and use an explicit LIVE checkpoint import or LUMI_NEW_WORLD=1. '+message(e));
+      if(entries.length)throw new Error('Existing Lumi data has no committed recovery identity. Import a known LIVE runtime checkpoint using LUMI_CHECKPOINT, or deliberately initialize a new history with LUMI_NEW_WORLD=1. Existing files are preserved.');
+      const historyId=randomUUID(),store=new RecoveryStore(base,historyId,intervalMs,'fresh',options.listRecoveryFiles);await mkdir(base,{recursive:true});await assertOwnedPath(base,store.directory);await mkdir(store.directory,{recursive:true});return {store};
+    }
+    const identity=active as {schemaVersion?:unknown;historyId?:unknown};if(!identity||typeof identity!=='object'||identity.schemaVersion!==1||!validId(identity.historyId))throw new Error('Invalid recovery identity; use an explicit checkpoint import or deliberate new history. Files were preserved.');
+    const store=new RecoveryStore(base,identity.historyId,intervalMs,'recovered',options.listRecoveryFiles);let m:Manifest;
+    try{m=manifest(await readBoundedJson(join(store.directory,'committed.json'),base),store.historyId);}catch(e){throw new Error('No valid committed LIVE recovery manifest. Import a known checkpoint or deliberately initialize a new history; files were preserved. '+message(e));}
+    const failures:string[]=[];for(const [index,g]of [m.latest,m.previous].entries()){if(!g)continue;try{const payload=await readBoundedJson(join(store.directory,g.file),base) as RecoveryPayload;if(payload.schemaVersion!==1||payload.kind!=='lumi-live-recovery'||payload.historyId!==store.historyId||payload.generation!==g.generation)throw new Error('Recovery payload has wrong history/mode/generation');const cp=validateRuntimeCheckpoint(payload.checkpoint);if(cp.mode!=='LIVE'||cp.simulation.tick!==g.tick||cp.simulation.tick/cp.simulation.config.hz!==g.worldTime||hashRuntimeCheckpoint(cp)!==g.hash)throw new Error('Recovery payload failed LIVE state/hash validation');
+        store.current=index===0?m:{...m,latest:g,previous:null};store.lastOperationCursor=cp.control.nextOperationSequence;store.statusValue.lastCommitted=clean(g);store.statusValue.recovered=clean(g);store.statusValue.fallback=index>0;store.statusValue.checkpointAgeMs=Math.max(0,Date.now()-Date.parse(g.savedAt));if(index>0)store.statusValue.saveError='Latest generation invalid; recovered previous generation: '+failures.join('; ');return {store,checkpoint:cp};
+      }catch(e){failures.push(message(e));}}
+    throw new Error('No valid committed LIVE recovery checkpoint. Files preserved; explicitly import a known LIVE checkpoint or use LUMI_NEW_WORLD=1. '+failures.join('; '));
+  }
+  status():RecoveryStatus{return structuredClone(this.statusValue);}
+  save(checkpoint:RuntimeCheckpoint):Promise<void>{const cp=validateRuntimeCheckpoint(checkpoint);if(cp.mode!=='LIVE')return Promise.reject(new Error('Recovery accepts LIVE only'));const task=this.queue.then(()=>this.commit(cp));this.queue=task.catch(()=>{});return task;}
+  private async commit(checkpoint:RuntimeCheckpoint){const previous=this.current?.latest??null,g:Generation={file:'generation-'+randomUUID()+'.json',generation:(this.current?.latest.generation??0)+1,tick:checkpoint.simulation.tick,worldTime:checkpoint.simulation.tick/checkpoint.simulation.config.hz,savedAt:new Date().toISOString(),hash:hashRuntimeCheckpoint(checkpoint)};const next:Manifest={schemaVersion:1,historyId:this.historyId,latest:g,previous};
+    if(previous&&(checkpoint.simulation.tick<previous.tick||checkpoint.simulation.tick===previous.tick&&checkpoint.control.nextOperationSequence<(this.lastOperationCursor??0))){this.statusValue.saveError='Recovery save rejected a stale snapshot; newer committed checkpoint retained';throw new Error(this.statusValue.saveError);}
+    let published=false;try{await atomicJson(join(this.directory,g.file),{schemaVersion:1,kind:'lumi-live-recovery',historyId:this.historyId,generation:g.generation,checkpoint} satisfies RecoveryPayload,true,this.rootDirectory);await atomicJson(join(this.directory,'committed.json'),next,false,this.rootDirectory);published=true;if(this.needsActivation){await atomicJson(join(dirname(this.directory),'active.json'),{schemaVersion:1,historyId:this.historyId},false,this.rootDirectory);this.needsActivation=false;}this.current=next;this.lastOperationCursor=checkpoint.control.nextOperationSequence;this.statusValue.lastCommitted=clean(g);this.statusValue.saveError=null;}
+    catch(e){this.statusValue.saveError='Recovery save failed: '+message(e);if(!published)await unlink(join(this.directory,g.file)).catch(()=>{});throw new Error(this.statusValue.saveError);}
+    const retained=new Set([g.file,previous?.file]);try{await assertOwnedPath(this.rootDirectory,this.directory);for(const file of await this.listRecoveryFiles(this.directory))if(/^generation-[A-Za-z0-9_-]+\.json$/.test(file)&&!retained.has(file)||/^(?:generation-[A-Za-z0-9_-]+\.json|committed\.json)\.[a-f0-9-]{36}\.tmp$/.test(file))await unlink(join(this.directory,file)).catch(()=>{this.statusValue.saveError='Recovery committed, but an obsolete generation could not be removed';});}catch{this.statusValue.saveError='Recovery committed, but obsolete-generation cleanup failed';}
+  }
+}
