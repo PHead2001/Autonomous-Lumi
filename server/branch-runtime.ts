@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { hashCanonical, canonicalStringify } from './canonical.js';
-import { LabSimulation, validateCheckpoint, hashCheckpoint, type CheckpointV2, type OrderedInput, type NormalizedCommand, type DeterministicEvent } from './simulation.js';
+import { LabSimulation, VisionSimulation, validateCheckpoint, validateCommand, hashCheckpoint, type CheckpointV2, type CheckpointV3, type OrderedInput, type NormalizedCommand, type DeterministicEvent } from './simulation.js';
 import { FixedScheduler, systemClock, type HostClock, type SchedulerState, type SchedulerDiagnostic } from './scheduler.js';
 import { FlightRecorder } from './diagnostics/recorder.js';
 import type { ActiveTarget, BranchSummary, ControlAction, WorldMode } from '../shared/lab-protocol.js';
 import { EXPERIMENT_PLAYBACK, type PlaybackReport } from '../shared/lab-protocol.js';
 
 export interface RuntimeControl {paused:boolean;speed:number;fastForwardRemaining:number;nextOperationSequence:number;loggingMode:'off'|'default'|'verbose';compressClosed:boolean}
-export interface RuntimeCheckpoint {schemaVersion:1;kind:'lumi-branch-runtime';mode:WorldMode;simulation:CheckpointV2;control:RuntimeControl;scheduler:SchedulerState}
+export interface RuntimeCheckpoint {schemaVersion:1|2;kind:'lumi-branch-runtime';mode:WorldMode;simulation:CheckpointV2|CheckpointV3;control:RuntimeControl;scheduler:SchedulerState}
 export type RuntimeOperation =
   | {sequence:number;tick:number;kind:'advance';ticks:number;backlogMs:number;source:'scheduled'|'fast-forward'}
   | {sequence:number;tick:number;kind:'input';input:OrderedInput}
@@ -34,8 +34,8 @@ export function validateControlAction(value:unknown,historical=false):ControlAct
 export function validateRuntimeCheckpoint(value:unknown):RuntimeCheckpoint {
   if(!exact(value,['schemaVersion','kind','mode','simulation','control','scheduler']))throw new Error('Invalid runtime checkpoint fields');
   const c=value as RuntimeCheckpoint;
-  if(c.schemaVersion!==1||c.kind!=='lumi-branch-runtime'||!['LIVE','EXPERIMENT'].includes(c.mode))throw new Error('Incompatible runtime checkpoint');
-  const sim=validateCheckpoint(c.simulation);if(sim.schemaVersion!==2)throw new Error('Runtime requires explicit lab simulation schema');
+  if(![1,2].includes(c.schemaVersion)||c.kind!=='lumi-branch-runtime'||!['LIVE','EXPERIMENT'].includes(c.mode))throw new Error('Incompatible runtime checkpoint');
+  const sim=validateCheckpoint(c.simulation);if(sim.schemaVersion===1||c.schemaVersion!==(sim.schemaVersion===3?2:1))throw new Error('Runtime requires matching explicit simulation schema');
   const r=c.control;
   if(!exact(r,['paused','speed','fastForwardRemaining','nextOperationSequence','loggingMode','compressClosed'])||typeof r.paused!=='boolean'||typeof r.speed!=='number'||!Number.isFinite(r.speed)||r.speed<1||r.speed>60||!int(r.fastForwardRemaining,0,100000)||!int(r.nextOperationSequence,1,Number.MAX_SAFE_INTEGER)||!['off','default','verbose'].includes(r.loggingMode)||typeof r.compressClosed!=='boolean'||(r.fastForwardRemaining>0&&!r.paused))throw new Error('Invalid runtime controls');
   if(c.mode==='LIVE'&&(r.paused||r.speed!==1||r.fastForwardRemaining!==0||sim.experiences.length))throw new Error('Invalid LIVE state or experience promotion');
@@ -50,7 +50,8 @@ export function validateRuntimeOperation(value:unknown):RuntimeOperation {
   if(o.kind==='control'&&exact(o,['sequence','tick','kind','action'])){validateControlAction(o.action,true);return structuredClone(o);}
   if(o.kind==='input'&&exact(o,['sequence','tick','kind','input'])) {
     const i=o.input;
-    if(!exact(i,['sequence','receivedTick','applyTick','command','admission'])||!int(i.sequence,1,Number.MAX_SAFE_INTEGER)||i.receivedTick!==o.tick||i.applyTick!==o.tick+1||!['queued','queue_full'].includes(i.admission)||!(exact(i.command,['type'])&&i.command.type==='slam'||exact(i.command,['type','reason'])&&i.command.type==='invalid'&&['malformed_json','invalid_shape','unknown_command'].includes(i.command.reason)))throw new Error('Invalid runtime input');
+    if(!exact(i,['sequence','receivedTick','applyTick','command','admission'])||!int(i.sequence,1,Number.MAX_SAFE_INTEGER)||i.receivedTick!==o.tick||i.applyTick!==o.tick+1||!['queued','queue_full'].includes(i.admission))throw new Error('Invalid runtime input');
+    validateCommand(i.command,true);
     return structuredClone(o);
   }
   if(o.kind==='advance'&&exact(o,['sequence','tick','kind','ticks','backlogMs','source'])&&int(o.ticks,0,10000000)&&typeof o.backlogMs==='number'&&Number.isFinite(o.backlogMs)&&o.backlogMs>=0&&['scheduled','fast-forward'].includes(o.source))return structuredClone(o);
@@ -59,7 +60,7 @@ export function validateRuntimeOperation(value:unknown):RuntimeOperation {
 export const hashRuntimeCheckpoint=(c:RuntimeCheckpoint)=>hashCanonical(validateRuntimeCheckpoint(c));
 export interface RuntimeOptions {worldId:string;branchId:string;mode:WorldMode;checkpoint?:unknown;seed?:number;directory?:string;clock?:HostClock;offline?:boolean;dormant?:boolean;historyId?:string;onEvents?:(events:DeterministicEvent[],runtime:BranchRuntime)=>void}
 export class BranchRuntime {
-  readonly target:ActiveTarget; readonly simulation:LabSimulation; readonly scheduler:FixedScheduler; readonly recorder:FlightRecorder|null;
+  readonly target:ActiveTarget; readonly simulation:LabSimulation|VisionSimulation; readonly scheduler:FixedScheduler; readonly recorder:FlightRecorder|null;
   readonly mode:WorldMode; readonly checkpoints=new Map<string,RuntimeCheckpoint>(); readonly runs:string[]=[];
   private controlState:RuntimeControl;private pendingAdvance:{tick:number;ticks:number;source:'scheduled'|'fast-forward'}|null=null;
   private events:DeterministicEvent[]=[];private fastJob:ReturnType<typeof setImmediate>|undefined;private disposed=false;private recordedBacklogMs=0;
@@ -72,10 +73,11 @@ export class BranchRuntime {
     if(options.historyId!==undefined&&!validId(options.historyId))throw new Error('Invalid history identity');
     this.target={worldId:options.worldId,branchId:options.branchId,runId:randomUUID()};this.mode=options.mode;this.hostClock=options.clock??systemClock;this.activated=!options.dormant;
     const envelope=options.checkpoint&&typeof options.checkpoint==='object'&&(options.checkpoint as {kind?:unknown}).kind==='lumi-branch-runtime'?validateRuntimeCheckpoint(options.checkpoint):null;
-    if(this.mode==='LIVE'&&!envelope&&options.checkpoint&&typeof options.checkpoint==='object'&&(options.checkpoint as {schemaVersion?:unknown}).schemaVersion===2)throw new Error('LIVE restoration requires a LIVE runtime envelope; bare lab state has no trusted mode');
+    if(this.mode==='LIVE'&&!envelope&&options.checkpoint&&typeof options.checkpoint==='object'&&[2,3].includes((options.checkpoint as {schemaVersion:number}).schemaVersion))throw new Error('LIVE restoration requires a LIVE runtime envelope; bare lab state has no trusted mode');
     if(envelope&&envelope.mode==='EXPERIMENT'&&this.mode==='LIVE')throw new Error('Cannot promote experimental runtime into LIVE');
     if(!options.offline&&this.mode==='EXPERIMENT'&&envelope&&envelope.control.speed>EXPERIMENT_PLAYBACK.maxSpeed)throw new Error(`Saved experiment playback ${envelope.control.speed}× exceeds the active ${EXPERIMENT_PLAYBACK.maxSpeed}× limit. Replay this artifact offline, or explicitly create a new experiment at a supported speed.`);
-    this.simulation=new LabSimulation({checkpoint:envelope?.simulation??options.checkpoint,seed:options.seed,worldId:options.worldId,runId:this.target.runId,mode:options.mode});
+    const simulationOptions={checkpoint:envelope?.simulation??options.checkpoint,seed:options.seed,worldId:options.worldId,runId:this.target.runId,mode:options.mode};
+    this.simulation=options.offline&&envelope?.simulation.schemaVersion===2?new LabSimulation(simulationOptions):new VisionSimulation({...simulationOptions,historical:options.offline});
     this.controlState=envelope?structuredClone(envelope.control):{paused:false,speed:this.mode==='LIVE'?1:EXPERIMENT_PLAYBACK.defaultSpeed,fastForwardRemaining:0,nextOperationSequence:1,loggingMode:'default',compressClosed:false};
     if(this.mode==='LIVE'){this.controlState.paused=false;this.controlState.speed=1;this.controlState.fastForwardRemaining=0;}
     this.scheduler=new FixedScheduler(()=>this.advanceOne('scheduled'),e=>this.schedulerDiagnostic(e),options.clock,envelope?.scheduler.config??{maxStepsPerPump:this.mode==='EXPERIMENT'?48:8,maxBacklogSteps:this.mode==='EXPERIMENT'?96:16});
@@ -83,6 +85,8 @@ export class BranchRuntime {
     this.recordedBacklogMs=this.scheduler.backlogMs;
     this.recorder=options.offline?null:new FlightRecorder({directory:options.directory,worldId:options.worldId,branchId:options.branchId,worldMode:options.mode,runId:this.target.runId,hz:this.simulation.checkpoint().config.hz,loggingMode:this.controlState.loggingMode,compressClosed:this.controlState.compressClosed});
     this.runs.push(this.target.runId);this.capture();
+    if(!options.offline&&options.checkpoint&&envelope?.simulation.schemaVersion!==3)this.recorder?.record({tick:this.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'STATE_SCHEMA_MIGRATED',component:'recovery',outcome:'history_and_tick_preserved',data:{fromSchema:envelope?.simulation.schemaVersion??1,toSchema:3,checkpointTick:this.simulation.state.tick,historyId:options.historyId??'unknown'}});
+    if(!options.offline&&envelope?.simulation.schemaVersion===3&&envelope.simulation.rulesVersion!==this.simulation.checkpoint().rulesVersion)this.recorder?.record({tick:this.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'STATE_RULES_MIGRATED',component:'recovery',outcome:'history_tick_pose_and_queue_preserved',data:{fromRules:envelope.simulation.rulesVersion,toRules:this.simulation.checkpoint().rulesVersion,checkpointTick:this.simulation.state.tick,historyId:options.historyId??'unknown'}});
     if(this.controlState.fastForwardRemaining&&!options.offline&&this.activated)this.scheduleFastForward();
   }
   private observe(events:DeterministicEvent[]){if(!this.activated)return;if(this.options.offline)this.events.push(...events);for(const e of events)this.recorder?.recordEvent(e);this.options.onEvents?.(events,this);}
@@ -157,7 +161,7 @@ export class BranchRuntime {
     if(action.type==='fast-forward'&&!this.options.offline)this.scheduleFastForward();
   }
   private scheduleFastForward(){if(this.fastJob||this.disposed||!this.activated)return;this.fastJob=setImmediate(()=>{this.fastJob=undefined;if(this.disposed||!this.activated)return;const n=Math.min(128,this.controlState.fastForwardRemaining);for(let i=0;i<n;i++)this.advanceOne('fast-forward');if(this.controlState.fastForwardRemaining)this.scheduleFastForward();else this.flushAdvance();});}
-  checkpoint():RuntimeCheckpoint {this.flushAdvance();return {schemaVersion:1,kind:'lumi-branch-runtime',mode:this.mode,simulation:this.simulation.checkpoint(),control:structuredClone(this.controlState),scheduler:this.scheduler.checkpoint()};}
+  checkpoint():RuntimeCheckpoint {this.flushAdvance();const simulation=this.simulation.checkpoint();return {schemaVersion:simulation.schemaVersion===3?2:1,kind:'lumi-branch-runtime',mode:this.mode,simulation,control:structuredClone(this.controlState),scheduler:this.scheduler.checkpoint()};}
   capture():RuntimeCheckpoint {const cp=this.checkpoint();this.recorder?.captureRuntimeCheckpoint(cp);return cp;}
   viewerState(){return {...this.simulation.snapshot(),branchId:this.target.branchId,mode:this.mode};}
   saveCheckpoint():{id:string;tick:number}{if(this.disposed)throw new Error('Branch runtime is closed');const cp=this.capture(),id=`checkpoint-${cp.simulation.tick}-${this.checkpoints.size+1}`;this.checkpoints.set(id,cp);return {id,tick:cp.simulation.tick};}

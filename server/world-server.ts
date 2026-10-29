@@ -12,6 +12,8 @@ import { exportIncident } from './diagnostics/bundle.js';
 import type { AcousticEvent, ServerMessage } from '../shared/protocol.js';
 import type { ActiveTarget, Target } from '../shared/lab-protocol.js';
 import type { RecoveryStore } from './recovery-store.js';
+import { createVisionApi } from './vision/http-api.js';
+import { validateCommand } from './simulation.js';
 export interface WorldServerOptions {seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;historyId?:string;recoveryStore?:RecoveryStore;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[]}
 const loopback=(name:string)=>['127.0.0.1','localhost','[::1]'].includes(name);
 function localHost(host:string|undefined){try{if(!host)return false;const u=new URL('http://'+host);return loopback(u.hostname)&&!u.username&&!u.password&&u.pathname==='/';}catch{return false;}}
@@ -31,7 +33,8 @@ export function createWorldServer(options:WorldServerOptions={}) {
     }
   };
   let shuttingDown=false;
-  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true});
+  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true,beforeRetireRuntime:runtime=>vision.manager.retire(runtime.target)});
+  const vision=createVisionApi({registry});
   if(options.schedulerConfig&&Object.keys(options.schedulerConfig).length)throw new Error('Scheduler configuration is restored through complete runtime checkpoints');
   const root=resolve('dist');const downloads=new Map<string,{target:ActiveTarget;file:string}>();
   const allowedOrigins=new Set(['http://127.0.0.1:5173','http://localhost:5173',...(options.viewerOrigins??[])]);
@@ -42,6 +45,10 @@ export function createWorldServer(options:WorldServerOptions={}) {
     if(!localHost(req.headers.host)){json(403,{error:'Loopback Host required'});return;}
     try{
       const url=new URL(req.url??'/','http://localhost'), pathname=url.pathname,query=Object.fromEntries(url.searchParams);
+      if(pathname.startsWith('/api/vision')&&req.method==='GET'){
+        if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}
+        const result=await vision.get(pathname,query);if(result){if(result.bytes){res.writeHead(result.status,{'Content-Type':result.contentType??'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(result.bytes);}else json(result.status,result.body);return;}
+      }
       if(pathname==='/health'){const live=registry.live;json(200,{worldId:live.target.worldId,historyId:registry.historyId,runId:live.target.runId,time:live.simulation.state.time,tick:live.simulation.state.tick,viewers:subscriptions.size,scheduler:live.scheduler.config,logging:live.recorder?.health(),recovery:options.recoveryStore?.status()??null});return;}
       if(pathname==='/api/branches'&&req.method==='GET'){json(200,{branches:[...registry.branches.values()].map(scopedSummary),recovery:options.recoveryStore?.status()??null});return;}
       if(pathname==='/api/recovery'&&req.method==='GET'){json(200,options.recoveryStore?.status()??null);return;}
@@ -57,6 +64,8 @@ export function createWorldServer(options:WorldServerOptions={}) {
         if(pathname==='/api/restore'){const restored=await registry.restore(scope,input.checkpointId);broadcast();json(200,scopedSummary(restored));return;}
         if(pathname==='/api/reopen'){if(typeof input.allowLegacy!=='boolean'&&input.allowLegacy!==undefined)throw new Error('allowLegacy must be boolean');const source=target({worldId:input.sourceWorldId,branchId:input.sourceBranchId});json(200,scopedSummary(await registry.reopen(source,input.checkpointId,input.newBranchId,input.allowLegacy===true)));return;}
         if(pathname==='/api/control'){runtime.applyControl(input.action);broadcast();json(200,scopedSummary(runtime));return;}
+        if(pathname.startsWith('/api/vision')){const result=await vision.post(pathname,runtime,input);if(result!==null){json(200,result);return;}}
+        if(pathname==='/api/scene'){const command=validateCommand(input.action,true);if(command.type!=='configure_scene')throw new Error('Scene configuration required');runtime.enqueue(command);json(200,{queued:true});return;}
         if(pathname==='/api/export'){
           const selectedRunId=input.selectedRunId??scope.runId;if(!validId(selectedRunId))throw new Error('Invalid export run');const selected={...scope,runId:selectedRunId},runDirectory=registry.runDirectory(selected);let snapshot;if(selectedRunId===runtime.target.runId){runtime.capture();snapshot=await runtime.recorder!.snapshotForExport();}
           if(downloads.size>=32)throw new Error('Local export limit reached (32)');const exportId='incident-'+randomUUID(),directory=join(registry.directory,scope.worldId,scope.branchId,'exports');await mkdir(directory,{recursive:true});const out=join(directory,exportId+'.zip');
@@ -83,8 +92,8 @@ export function createWorldServer(options:WorldServerOptions={}) {
   const saveRecovery=async()=>{if(!options.recoveryStore)return;const cp=registry.live.capture();try{await options.recoveryStore.save(cp);registry.live.recorder?.record({tick:cp.simulation.tick,category:'OPERATIONAL_REPLAY',eventType:'RECOVERY_COMMITTED',component:'recovery',outcome:'committed',data:{checkpointTick:cp.simulation.tick,historyId:registry.historyId,generation:options.recoveryStore.status().lastCommitted?.generation??0}});}catch{registry.live.recorder?.record({tick:cp.simulation.tick,category:'OPERATIONAL_REPLAY',eventType:'RECOVERY_SAVE_FAILED',component:'recovery',severity:'error',outcome:'previous_checkpoint_retained',data:{checkpointTick:cp.simulation.tick}});throw new Error('LIVE recovery save failed; inspect /health recovery.saveError');}};
   let saving=false;const recoveryTimer=options.recoveryStore?setInterval(()=>{if(!started||saving)return;saving=true;void saveRecovery().catch(()=>{}).finally(()=>{saving=false;});},options.recoveryStore.status().intervalMs):undefined;recoveryTimer?.unref();
   let closing:Promise<void>|undefined;const ready=(async()=>{await registry.live.prepare();await registry.initializeLiveCheckpoints();const status=options.recoveryStore?.status();if(status)registry.live.recorder?.record({tick:registry.live.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:status.status==='recovered'?'LIVE_RECOVERED':'LIVE_INITIALIZED',component:'recovery',outcome:status.fallback?'previous_generation_fallback':status.status,data:{historyId:registry.historyId,checkpointTick:status.recovered?.tick??registry.live.simulation.state.tick,fallback:status.fallback,checkpointAgeMs:status.checkpointAgeMs??0,classification:'checkpoint_age_upper_bound_no_catchup'}});await saveRecovery();if(!shuttingDown){registry.live.activate();started=true;}})();
-  return {server,registry,sockets,get simulation(){return registry.live.simulation;},get scheduler(){return registry.live.scheduler;},get recorder(){return registry.live.recorder!;},
+  return {server,registry,sockets,vision,get simulation(){return registry.live.simulation;},get scheduler(){return registry.live.scheduler;},get recorder(){return registry.live.recorder!;},
     listen:(port=3001)=>new Promise<number>((resolvePort,reject)=>{void ready.then(()=>{if(shuttingDown){reject(new Error("Server is shutting down"));return;}server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.removeListener('error',reject);const address=server.address();resolvePort(typeof address==='object'&&address?address.port:port);});},reject);}),
-    close:()=>closing??=(async()=>{shuttingDown=true;started=false;clearInterval(timer);clearInterval(recoveryTimer);let failure:unknown;try{await ready;await saveRecovery();}catch(e){failure=e;}for(const client of sockets.clients)client.terminate();await new Promise<void>(done=>sockets.close(()=>done()));await new Promise<void>(done=>server.close(()=>done()));try{await registry.close();}catch(e){failure??=e;}if(failure)throw failure;})(),
+    close:()=>closing??=(async()=>{shuttingDown=true;started=false;clearInterval(timer);clearInterval(recoveryTimer);let failure:unknown;try{await ready;await saveRecovery();}catch(e){failure=e;}for(const client of sockets.clients)client.terminate();await new Promise<void>(done=>sockets.close(()=>done()));await new Promise<void>(done=>server.close(()=>done()));try{await vision.close();await registry.close();}catch(e){failure??=e;}if(failure)throw failure;})(),
   };
 }

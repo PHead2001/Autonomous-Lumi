@@ -3,6 +3,10 @@ import { EXPERIMENT_PLAYBACK, type ActiveTarget, type BranchSummary, type Contro
 import { selectTimelineRun, type PendingRestoredRun } from './dashboard-selection';
 import { parsePlaybackSpeed, playbackPresentation } from './dashboard-playback';
 import { runCapturedControl } from './dashboard-control';
+import type { WorldState } from '../shared/protocol';
+import type { HeadAction } from '../shared/vision-protocol';
+import type { CaptureMetadata, CaptureView } from '../shared/capture-protocol';
+import { VisionCaptureDeadline, VisionRequestGate, displayedCapture, validateCaptureViewScope, visionScopeKey } from './dashboard-vision';
 
 interface TimelineRecord {
   event_id: string; world_id: string; branch_id: string; run_id: string;
@@ -16,6 +20,7 @@ interface RecoveryPoint { tick: number; worldTime: number; savedAt: string; gene
 interface RecoveryStatus { historyId: string; status: 'fresh' | 'recovered' | 'override'; lastCommitted: RecoveryPoint | null; saveError: string | null; recovered: RecoveryPoint | null; fallback: boolean; intervalMs: number; checkpointAgeMs: number | null }
 interface SavedCheckpoint { worldId: string; branchId: string; id: string; tick: number; mode: 'LIVE' | 'EXPERIMENT'; historyId: string | null; legacy: boolean }
 interface CheckpointCatalog { checkpoints: SavedCheckpoint[]; errors: { source: string; error: string }[] }
+interface DashboardBranch extends BranchSummary { state?: WorldState }
 
 const key = (target: { worldId: string; branchId: string }) => `${target.worldId}/${target.branchId}`;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -27,7 +32,7 @@ export function mountDashboard(): void {
   document.getElementById('app')!.innerHTML = `
     <header class="lab-header"><a class="brand" href="/">lumi<span> / experiment laboratory</span></a><a class="lab-return" href="/">Open LIVE viewer ↗</a></header>
     <main class="lab-main">
-      <div class="lab-heading"><div><p class="eyebrow">PHASE 1.5c · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, explicit test observations, and the evidence behind them.</p></div><span class="lab-local">Local / private</span></div>
+      <div class="lab-heading"><div><p class="eyebrow">PHASE 2a · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, first-person sensor evidence, and the evidence behind them.</p></div><span class="lab-local">Local / private</span></div>
       <div id="lab-message" class="lab-message" role="status" aria-live="polite">Connecting to the laboratory…</div>
       <section class="lab-selection lab-panel" aria-label="World and branch selection">
         <label class="lab-field lab-select-field">World / branch<select id="lab-branch" aria-label="World and branch"></select></label>
@@ -40,6 +45,29 @@ export function mountDashboard(): void {
         <article class="lab-panel lab-metric"><p class="lab-label">SUBJECTIVE ESTIMATE</p><strong id="lab-subjective">—</strong><span id="lab-uncertainty">Uncertainty —</span><small id="lab-calibration">No synthetic clock calibration</small></article>
         <article class="lab-panel lab-metric"><p class="lab-label">GENERIC ACTIVITY</p><strong id="lab-activity">—</strong><progress id="lab-progress" max="1" value="0"></progress><span id="lab-activity-detail">No activity</span></article>
         <article class="lab-panel lab-metric"><p class="lab-label">MODEL RESPONSE METRIC</p><strong>N/A</strong><span>world_seconds_per_model_response</span><small>No model calls exist.</small></article>
+      </section>
+      <section class="lab-panel lab-vision" aria-labelledby="lab-vision-heading">
+        <div class="lab-section-title"><div><h2 id="lab-vision-heading">Virtual Eyes</h2><p class="lab-note">An explicit capture from Lumi’s physical viewpoint. No model calls, attention, interpretation or personal memory are created.</p></div><span id="lab-vision-status" class="lab-badge">No capture</span></div>
+        <p id="lab-vision-scope" class="lab-note">Select a current branch/run.</p>
+        <div class="lab-vision-columns">
+          <div>
+            <div class="lab-vision-frame"><img id="lab-vision-image" alt="Lumi’s captured first-person sensor frame" hidden><p id="lab-vision-empty">No image has been captured for this run.</p></div>
+            <p id="lab-vision-caption" class="lab-note">Missing images are missing observations.</p>
+            <div class="lab-inline"><label class="lab-field">Capture resolution<select id="lab-vision-resolution"><option value="256">256 × 256</option><option value="512" selected>512 × 512</option><option value="1024">1024 × 1024</option></select></label><label class="lab-field">Capture reason<select id="lab-vision-reason"><option value="developer">Developer</option><option value="diagnostic">Diagnostic</option></select></label><button id="lab-vision-capture" class="lab-button vision-control">Capture viewpoint</button><button id="lab-vision-refresh" class="lab-button secondary vision-control">Refresh captures</button></div>
+            <p id="lab-vision-operation" class="lab-note" role="status" aria-live="polite"></p><p id="lab-vision-cleanup" class="lab-note warning" role="status"></p><p id="lab-vision-limits" class="lab-note"></p>
+            <details><summary>Capture identity, pose, image hash and backend</summary><pre id="lab-vision-metadata">No capture.</pre></details>
+          </div>
+          <div>
+            <h3>Server-owned head</h3><p id="lab-head-state" class="lab-note">Waiting for head state.</p><p class="lab-note">Yaw ±75°; pitch −40° down to +45° up; maximum turn rate 90°/s. Angles below are degrees. Positive yaw turns toward room +X; positive pitch looks up.</p>
+            <div class="lab-inline"><label class="lab-field">Turn Δ yaw<input id="lab-head-delta-yaw" type="number" min="-150" max="150" step="1" value="20"></label><label class="lab-field">Turn Δ pitch<input id="lab-head-delta-pitch" type="number" min="-85" max="85" step="1" value="0"></label><button id="lab-head-turn" class="lab-button secondary vision-control">Turn head</button></div>
+            <div class="lab-inline"><label class="lab-field">Body-relative look yaw<input id="lab-head-look-yaw" type="number" min="-75" max="75" step="1" value="0"></label><label class="lab-field">Look pitch<input id="lab-head-look-pitch" type="number" min="-40" max="45" step="1" value="0"></label><button id="lab-head-look" class="lab-button secondary vision-control">Look in direction</button></div>
+            <div class="lab-inline"><label class="lab-field">Scan minimum yaw<input id="lab-head-scan-min" type="number" min="-75" max="75" value="-45"></label><label class="lab-field">Scan maximum yaw<input id="lab-head-scan-max" type="number" min="-75" max="75" value="45"></label><label class="lab-field">Scan pitch<input id="lab-head-scan-pitch" type="number" min="-40" max="45" value="0"></label><label class="lab-field">Scan passes<input id="lab-head-scan-passes" type="number" min="1" max="4" value="1"></label></div><div class="lab-button-row"><button id="lab-head-scan" class="lab-button secondary vision-control">Scan area</button><button id="lab-head-cancel" class="lab-button text vision-control">Cancel head action</button></div>
+            <p class="lab-note">Commands apply in order on the next fixed tick. Relative turns add to the head pose at execution and clamp the target to the angle limits. A paused experiment must step or resume before a queued action takes effect. New actions interrupt the old action without snapping the head.</p>
+            <div class="lab-divider"></div><h3>Filtered observation</h3><p class="lab-note">Unknown shapes with observation-scoped handles, approximate bearings and sampled visibility. These are geometric samples, not recognized identities or exact visible-pixel fractions.</p><div class="lab-inline"><label class="lab-field">Eligible observed shape<select id="lab-vision-target"><option value="">Capture a visible shape first</option></select></label><button id="lab-head-target" class="lab-button secondary vision-control">Look toward observed bearing</button></div><p id="lab-vision-target-note" class="lab-note"></p><pre id="lab-vision-observation">No successful observation.</pre>
+            <details class="lab-vision-truth"><summary>Private developer world-truth comparison</summary><p class="lab-note">Engine identifiers and exact measurements below are private diagnostics. They are excluded from the filtered observation.</p><pre id="lab-vision-truth">No private measurement.</pre></details>
+          </div>
+        </div>
+        <details id="lab-vision-fixture"><summary>Experiment scene fixture</summary><p class="lab-note">Changes only the selected experiment’s physical scene. LIVE rejects these controls. Apply, then step/resume, and request a fresh capture. A scene change invalidates old observation targets.</p><div class="lab-inline"><label class="lab-field">Geometry fixture<select id="lab-scene-fixture"><option value="none">Room only</option><option value="visibility">Visibility test objects</option></select></label><label class="lab-field">Illumination (0–1)<input id="lab-scene-light" type="number" min="0" max="1" step="0.01" value="1"></label><label class="lab-field">Fixture color<input id="lab-scene-color" type="color" value="#ed6050"></label><label class="lab-field">Door override<select id="lab-scene-door"><option value="animated">Normal slam animation</option><option value="closed">Closed</option><option value="open">Open −90°</option></select></label><button id="lab-scene-apply" class="lab-button secondary experiment">Apply scene fixture</button></div><p id="lab-scene-state" class="lab-note"></p></details>
       </section>
       <section class="lab-panel lab-recovery" aria-labelledby="lab-recovery-heading"><div class="lab-section-title"><h2 id="lab-recovery-heading">LIVE recovery</h2><span id="lab-recovery-status" class="lab-badge">Waiting</span></div><p id="lab-history" class="lab-note">History —</p><div class="lab-health-grid"><div><span>Last committed recovery point</span><strong id="lab-recovery-committed">Unavailable</strong></div><div><span>Startup recovery</span><strong id="lab-recovery-startup">Unavailable</strong></div></div><p id="lab-recovery-detail" class="lab-note">Waiting for recovery status.</p><p id="lab-recovery-error" class="lab-note warning"></p><p class="lab-note">A crash can lose progress after the last committed save. Server downtime does not advance lived world time. Recovery remains separate from diagnostic replay coverage.</p></section>
       <div class="lab-columns">
@@ -69,18 +97,22 @@ export function mountDashboard(): void {
   const val = (id: string) => el<HTMLInputElement | HTMLSelectElement>(id).value;
   const text = (id: string, value: string) => { el(id).textContent = value; };
   const branches = el<HTMLSelectElement>('lab-branch');
-  let summaries: BranchSummary[] = [], current: BranchSummary | undefined, selected = '', busy = false, stopped = false;
+  let summaries: DashboardBranch[] = [], current: DashboardBranch | undefined, selected = '', busy = false, stopped = false;
   let filterGeneration = 0, renderedIdentity = '', refreshGeneration = 0;
   let restoredRunSelection: PendingRestoredRun | undefined;
   let recovery: RecoveryStatus | null | undefined, catalog: CheckpointCatalog = { checkpoints: [], errors: [] }, catalogLoaded = false;
   const lastExports = new Map<string, string>();
+  const visionGate = new VisionRequestGate();
+  let visionView: CaptureView | null = null, visionScope = '', visionDirty = true, visionLoading = false, visionError = '';
+  const visionDeadline = new VisionCaptureDeadline();
+  let visionAbort: AbortController | undefined;
   const message = (value: string, error = false) => { text('lab-message', value); el('lab-message').classList.toggle('error', error); };
   const active = (): ActiveTarget => {
     if (!current) throw new Error('Select a branch first.');
     return { worldId: current.worldId, branchId: current.branchId, runId: current.runId };
   };
-  async function request<T>(url: string, body?: unknown): Promise<T> {
-    const response = await fetch(url, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  async function request<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    const response = await fetch(url, body === undefined ? { cache: 'no-store', signal } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
     if (!response.ok) {
       let detail = `Request failed (${response.status})`;
       try { const result = await response.json(); detail = typeof result.error === 'string' ? result.error : detail; } catch { /* The status remains useful for a non-JSON response. */ }
@@ -100,11 +132,81 @@ export function mountDashboard(): void {
     // arrive after an overlapping refresh has already populated the new run.
     select.value = values.some(item => item.value === preferred) ? preferred : values[0]?.value ?? '';
   }
+  function renderVision() {
+    const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
+    if (identity !== visionScope) {
+      visionAbort?.abort(); visionAbort = undefined; visionLoading = false;
+      visionScope = identity; visionGate.select(target); visionView = null; visionError = ''; visionDirty = true; visionDeadline.reset();
+      text('lab-vision-operation', '');
+      const scene = current?.state?.scene;
+      if (scene) {
+        el<HTMLSelectElement>('lab-scene-fixture').value = scene.fixture;
+        el<HTMLInputElement>('lab-scene-light').value = String(scene.illumination);
+        el<HTMLInputElement>('lab-scene-color').value = scene.fixtureColor;
+        el<HTMLSelectElement>('lab-scene-door').value = scene.doorOpenRadians === null ? 'animated' : scene.doorOpenRadians === 0 ? 'closed' : 'open';
+      }
+    }
+    const state = current?.state, head = state?.head, scene = state?.scene;
+    const degrees = (value: number) => format(value * 180 / Math.PI, 1);
+    text('lab-vision-scope', target ? `${target.worldId} / ${target.branchId} / ${target.runId} · physical scene revision ${scene?.revision ?? 'unavailable'}` : 'No current branch/run selected.');
+    text('lab-head-state', head ? `${head.status} · yaw ${degrees(head.yaw)}° / pitch ${degrees(head.pitch)}° · target ${degrees(head.targetYaw)}° / ${degrees(head.targetPitch)}°${head.scan ? ` · scan point ${head.scan.cursor + 1}/${head.scan.points.length}` : ''} · horizontal FOV ${head.camera.horizontalFovDegrees}°` : 'Head state unavailable for this world version.');
+    text('lab-scene-state', scene ? `Applied scene revision ${scene.revision} · ${scene.fixture} · illumination ${scene.illumination} · color ${scene.fixtureColor} · door ${scene.doorOpenRadians === null ? 'normal animation' : `${degrees(scene.doorOpenRadians)}°`}` : 'Physical scene state unavailable.');
+    document.querySelectorAll<HTMLButtonElement>('.vision-control').forEach(button => { button.disabled = busy || !head; });
+    const latest = visionView?.latest;
+    text('lab-vision-status', visionError ? 'Status unavailable' : `${latest?.status ?? 'No capture'}${visionView?.cleanupError ? ' · cleanup warning' : ''}`);
+    el('lab-vision-status').classList.toggle('warning', !!visionError || !!visionView?.cleanupError || !!latest && ['unavailable', 'timeout', 'failed', 'stale'].includes(latest.status));
+    text('lab-vision-cleanup', visionView?.cleanupError ? `Renderer cleanup warning: ${visionView.cleanupError}. The capture result above remains separate from renderer resource cleanup.` : '');
+    const display = visionView ? displayedCapture(visionView) : { frame: null, previous: false }, frame = display.frame;
+    const image = el<HTMLImageElement>('lab-vision-image');
+    image.hidden = !frame; el('lab-vision-empty').hidden = !!frame;
+    if (frame && target) {
+      const url = `/api/vision/frame?${new URLSearchParams({ ...target, captureId: frame.captureId })}`;
+      if (image.getAttribute('src') !== url) image.src = url;
+      text('lab-vision-caption', `${display.previous || visionError ? 'PREVIOUS successful capture' : 'Captured sensor frame'} · tick ${frame.tick} · ${frame.width} × ${frame.height} · ${frame.captureId}. ${display.previous ? 'This is not the result of the latest capture request.' : 'The world may have advanced since this image.'}`);
+    } else {
+      image.removeAttribute('src'); text('lab-vision-empty', latest ? 'No successful image is available for this run.' : 'No image has been captured for this run.');
+      text('lab-vision-caption', 'Missing images are missing observations; no world-truth substitute is provided.');
+    }
+    text('lab-vision-metadata', JSON.stringify({ latest: latest ?? null, displayedPrevious: display.previous ? frame : null }, null, 2));
+    text('lab-vision-limits', visionView ? `Renderer queue ${visionView.limits.queued}/${visionView.limits.capacity} · retained frames ${visionView.limits.retainedFrames}/${visionView.limits.maxRetainedFrames} · timeout ${format(visionView.limits.timeoutMs / 1000)} host seconds.` : 'Renderer limits load with the selected sensor.');
+    if (visionError) text('lab-vision-operation', `${visionError} Use Refresh captures to retry the status query.`);
+    else if (latest?.error) text('lab-vision-operation', `${latest.status}: ${latest.error}`);
+    else if (latest && ['pending', 'queued'].includes(latest.status)) text('lab-vision-operation', `Capture ${latest.status} for tick ${latest.tick}. Simulation continues independently.`);
+    else if (latest?.status === 'success') text('lab-vision-operation', `Capture complete at ${latest.completedAt}; ${format(latest.durationMs, 0)} ms. No experience was encoded.`);
+    const observation = visionView?.observation;
+    const expired = !!observation && (scene?.revision !== observation.dynamicRevision || (current?.tick ?? 0) - observation.tick > 300);
+    text('lab-vision-target-note', observation ? expired ? 'Target context expired or its physical scene changed. Request a fresh capture.' : `Evidence from tick ${observation.tick}. Look toward the captured coarse bearing, adjusted for Lumi’s own turning. Targets expire after 300 world ticks; a new capture may show that the shape has gone.` : 'A successful capture is required for observation-scoped targeting.');
+    text('lab-vision-observation', observation ? JSON.stringify(observation, null, 2) : 'No successful eligible observation for this run.');
+    text('lab-vision-truth', visionView?.privateGrounding ? JSON.stringify(visionView.privateGrounding, null, 2) : 'No private measurement.');
+    options(el<HTMLSelectElement>('lab-vision-target'), observation?.shapes.length ? observation.shapes.map((shape, index) => ({ value: shape.handle, label: `Unknown shape ${index + 1} · bearing ${shape.bearingDegrees}° / ${shape.elevationDegrees}° · ${shape.distanceBand} · sampled visibility ${shape.sampleVisibilityBand}${shape.qualityFlags.length ? ` · ${shape.qualityFlags.join(', ')}` : ''}` })) : [{ value: '', label: 'No eligible shape in this observation' }], val('lab-vision-target'));
+    el<HTMLButtonElement>('lab-head-target').disabled ||= !observation?.shapes.length || latest?.status !== 'success' || expired;
+  }
+  async function loadVision(force = false) {
+    if (!current || visionLoading || stopped) return;
+    const pending = visionView?.latest && ['queued', 'pending'].includes(visionView.latest.status);
+    if (!force && !visionDirty && !pending) return;
+    if (!force && pending && visionDeadline.expired(visionView?.latest)) { visionError = 'Capture status polling deadline reached.'; visionDirty = false; renderVision(); return; }
+    const token = visionGate.begin(), controller = new AbortController(); visionAbort = controller; visionLoading = true;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const result = await request<CaptureView>(`/api/vision?${new URLSearchParams({ ...token.target })}`, undefined, controller.signal);
+      if (!visionGate.accepts(token) || stopped) return;
+      validateCaptureViewScope(result, token.target); visionView = result; visionError = ''; visionDirty = false;
+      visionDeadline.observe(result.latest);
+      renderVision();
+    } catch (error) {
+      if (visionGate.accepts(token) && !stopped) { visionDirty = false; visionError = error instanceof Error ? error.message : 'Visual sensor unavailable.'; renderVision(); }
+    } finally {
+      clearTimeout(timeout);
+      if (visionGate.accepts(token)) { visionLoading = false; visionAbort = undefined; }
+    }
+  }
   function render() {
     current = summaries.find(item => key(item) === selected);
     if (!current) {
-      document.querySelectorAll<HTMLButtonElement>('.experiment, #lab-save, #lab-fork, #lab-export, #lab-reopen').forEach(button => { button.disabled = true; });
+      document.querySelectorAll<HTMLButtonElement>('.experiment, .vision-control, #lab-save, #lab-fork, #lab-export, #lab-reopen').forEach(button => { button.disabled = true; });
       text('lab-state', 'Selected branch unavailable');
+      renderVision();
       return;
     }
     const c = current, health = record(c.logging), experiment = c.mode === 'EXPERIMENT';
@@ -156,6 +258,7 @@ export function mountDashboard(): void {
       renderedIdentity = identity;
     }
     if (document.activeElement !== el('lab-speed')) el<HTMLInputElement>('lab-speed').value = String(c.speed);
+    renderVision();
   }
   function filters(): Record<string, string> {
     const values: Record<string, string> = { runId: val('lab-filter-run') || current?.runId || '', limit: '150' };
@@ -188,7 +291,7 @@ export function mountDashboard(): void {
   async function refresh(showMessage = false) {
     const generation = ++refreshGeneration;
     try {
-      const result = await request<{ branches: BranchSummary[]; recovery?: RecoveryStatus | null }>('/api/branches');
+      const result = await request<{ branches: DashboardBranch[]; recovery?: RecoveryStatus | null }>('/api/branches');
       if (generation !== refreshGeneration) return;
       summaries = result.branches;
       recovery = result.recovery;
@@ -199,7 +302,7 @@ export function mountDashboard(): void {
         return;
       }
       options(branches, summaries.map(item => ({ value: key(item), label: `${item.mode} · ${item.branchId} · ${item.worldId}` })), selected);
-      render(); await loadTimeline(); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
+      render(); await Promise.all([loadTimeline(), loadVision(showMessage)]); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
     } catch (error) { if (generation === refreshGeneration) message(error instanceof Error ? error.message : 'Laboratory unavailable', true); }
   }
   async function loadCatalog() {
@@ -230,6 +333,59 @@ export function mountDashboard(): void {
     } catch (error) { message(error instanceof Error ? error.message : `${label} failed`, true); }
   }
   const bind = (id: string, run: () => void | Promise<void>) => { el<HTMLButtonElement>(id).onclick = () => { void run(); }; };
+  const radians = (id: string, min: number, max: number) => number(id, min, max, false) * Math.PI / 180;
+  const sceneRevision = () => {
+    const revision = current?.state?.scene?.revision;
+    if (revision === undefined) throw new Error('Current physical scene state is unavailable. Refresh the selected branch.');
+    return revision;
+  };
+  async function headOperation(label: string, read: () => HeadAction | { type: 'look_at'; observationId: string; handle: string; sceneRevision: number }) {
+    try {
+      const action = structuredClone(read());
+      await operation(label, async target => { await request('/api/vision/head', { ...target, action }); });
+    } catch (error) { message(error instanceof Error ? error.message : `${label} failed`, true); }
+  }
+  bind('lab-head-turn', () => headOperation('Queue relative head turn', () => ({ type: 'turn_head', yawDelta: radians('lab-head-delta-yaw', -150, 150), pitchDelta: radians('lab-head-delta-pitch', -85, 85), sceneRevision: sceneRevision() })));
+  bind('lab-head-look', () => headOperation('Queue directional look', () => ({ type: 'look_at', yaw: radians('lab-head-look-yaw', -75, 75), pitch: radians('lab-head-look-pitch', -40, 45), sceneRevision: sceneRevision() })));
+  bind('lab-head-scan', () => headOperation('Queue scan', () => {
+    const minYaw = radians('lab-head-scan-min', -75, 75), maxYaw = radians('lab-head-scan-max', -75, 75);
+    if (minYaw >= maxYaw) throw new Error('Scan minimum yaw must be less than maximum yaw.');
+    return { type: 'scan_area', minYaw, maxYaw, pitch: radians('lab-head-scan-pitch', -40, 45), passes: number('lab-head-scan-passes', 1, 4), sceneRevision: sceneRevision() };
+  }));
+  bind('lab-head-cancel', () => headOperation('Queue head cancellation', () => ({ type: 'cancel_head', sceneRevision: sceneRevision() })));
+  bind('lab-head-target', () => headOperation('Queue observed-bearing look', () => {
+    const observation = visionView?.observation, handle = val('lab-vision-target');
+    if (!observation || !observation.shapes.some(shape => shape.handle === handle)) throw new Error('Select an eligible shape from this run’s successful observation.');
+    return { type: 'look_at', observationId: observation.observationId, handle, sceneRevision: sceneRevision() };
+  }));
+  bind('lab-vision-capture', async () => {
+    try {
+      const size = number('lab-vision-resolution', 256, 1024), reason = val('lab-vision-reason');
+      if (!['developer', 'diagnostic'].includes(reason)) throw new Error('Select a supported capture reason.');
+      const payload = { width: size, height: size, reason };
+      await operation('Request first-person capture', async target => {
+        const token = visionGate.begin(); visionAbort?.abort(); visionLoading = false;
+        try {
+          const result = await request<CaptureMetadata>('/api/vision/capture', { ...target, ...payload });
+          if (!visionGate.accepts(token)) return;
+          if (visionScopeKey(result) !== visionScopeKey(target)) throw new Error('Capture response does not match the requested world, branch and run.');
+          visionView = { latest: result, previousSuccess: visionView?.latest?.status === 'success' ? visionView.latest : visionView?.previousSuccess ?? null, observation: null, privateGrounding: null, cleanupError: visionView?.cleanupError ?? null, limits: visionView?.limits ?? { queued: 0, capacity: 0, retainedFrames: 0, maxRetainedFrames: 0, timeoutMs: 20000 } };
+          visionError = ''; visionDirty = true; visionDeadline.observe(result); renderVision();
+        } catch (error) {
+          if (visionGate.accepts(token)) { visionError = error instanceof Error ? error.message : 'Capture request failed.'; renderVision(); }
+          throw error;
+        }
+      });
+    } catch (error) { message(error instanceof Error ? error.message : 'Capture request failed', true); }
+  });
+  bind('lab-vision-refresh', () => { visionError = ''; visionDirty = true; visionDeadline.reset(); return loadVision(true); });
+  bind('lab-scene-apply', async () => {
+    try {
+      const door = val('lab-scene-door');
+      const action = { type: 'configure_scene', illumination: number('lab-scene-light', 0, 1, false), fixture: val('lab-scene-fixture'), fixtureColor: val('lab-scene-color'), doorOpenRadians: door === 'animated' ? null : door === 'closed' ? 0 : -Math.PI / 2 };
+      await operation('Queue experiment scene configuration', async target => { await request('/api/scene', { ...target, action }); });
+    } catch (error) { message(error instanceof Error ? error.message : 'Scene configuration failed', true); }
+  });
   bind('lab-pause', () => control('Pause', () => ({ type: 'pause' })));
   bind('lab-resume', () => control('Resume', () => ({ type: 'resume' })));
   bind('lab-step', () => control('Single tick', () => ({ type: 'step' })));
@@ -272,11 +428,11 @@ export function mountDashboard(): void {
     lastExports.set(`${key(target)}/${selectedFilters.runId}`, `${result.manifest.evidence_status} · ${result.manifest.evidence_status === 'COMPLETE' ? 'replay verified' : 'evidence gaps; replay not certified'}`);
   }));
   bind('lab-refresh', () => { catalogLoaded = false; return refresh(true); });
-  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void loadTimeline(); message('Selected branch changed. Controls now target this branch’s current run.'); };
+  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void Promise.all([loadTimeline(), loadVision()]); message('Selected branch changed. Controls now target this branch’s current run.'); };
   el<HTMLFormElement>('lab-filters').onsubmit = event => { event.preventDefault(); void loadTimeline(); render(); };
   bind('lab-clear-filters', () => { for (const id of ['lab-category', 'lab-component', 'lab-severity', 'lab-causal', 'lab-from', 'lab-to', 'lab-search', 'lab-event-type']) el<HTMLInputElement | HTMLSelectElement>(id).value = ''; if (current) el<HTMLSelectElement>('lab-filter-run').value = current.runId; void loadTimeline(); render(); });
   async function poll() { if (!busy) await refresh(); if (!stopped) setTimeout(() => { void poll(); }, 1200); }
-  window.addEventListener('pagehide', () => { stopped = true; });
+  window.addEventListener('pagehide', () => { stopped = true; visionAbort?.abort(); });
   window.addEventListener('pageshow', event => { if (event.persisted && stopped) { stopped = false; void poll(); } });
   void refresh(true).then(() => { if (!stopped) setTimeout(() => { void poll(); }, 1200); });
 }

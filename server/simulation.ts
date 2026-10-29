@@ -2,12 +2,16 @@ import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../s
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
 import type { ActivityState, ControlAction, SubjectiveClock, WorldMode } from '../shared/lab-protocol.js';
+import { defaultHeadState, HEAD_LIMITS, isCapturedBearingEvidence, observedHeadTarget, observedWorldDirection, relativeObservedAim, validateHeadAction, validateHeadState, type HeadAction, type HeadState } from '../shared/vision-protocol.js';
+import { defaultPhysicalSceneState, validatePhysicalSceneState, validateSceneConfiguration, canOccupyCharacter, canRestoreCharacter, canMoveCharacter, type PhysicalSceneState } from '../shared/physical-scene.js';
+import { isTargetEligible } from './vision/grounding.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
 export const DEFAULT_CONFIG = { hz: 30, speed: 0.75, pauseTicks: 36, cooldownTicks: 27, maxPendingInputs: 256 };
 export type SimulationConfig = typeof DEFAULT_CONFIG;
 export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_command';
-export type NormalizedCommand = { type: 'slam' } | { type: 'invalid'; reason: InvalidReason };
+export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
+export type NormalizedCommand = { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -31,11 +35,13 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
   if (c.type === 'slam' && Object.keys(c).length === 1) return { type: 'slam' };
   if (c.type === 'invalid' && Object.keys(c).length === 2 && ['malformed_json', 'invalid_shape', 'unknown_command'].includes(c.reason as string)) return { type: 'invalid', reason: c.reason as InvalidReason };
+  if(vision&&c.type==='configure_scene') {const raw=structuredClone(c);delete raw.type;const config=validateSceneConfiguration(raw);return {type:'configure_scene',...config};}
+  if(vision)return validateHeadAction(value);
   throw new Error('Invalid normalized command');
 }
 /** Deliberately discards all raw visitor fields before recording. */
@@ -77,6 +83,10 @@ export class Simulation {
   protected data: CheckpointV1;
   readonly random: SeededRandom;
   readonly worldId: string; readonly runId: string;
+  protected supportsVisionInputs():boolean{return false;}
+  protected applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean{void input;void events;return false;}
+  protected onDoorChanged():void{}
+  protected canMove(x:number,z:number):boolean{void x;void z;return true;}
   constructor(options: { seed?: number; checkpoint?: unknown; worldId?: string; runId?: string } = {}) {
     this.worldId = options.worldId ?? 'offline-world'; this.runId = options.runId ?? 'offline-run';
     const seed = options.seed ?? 1;
@@ -97,7 +107,7 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
     const received = this.emit(events, 'INPUT_RECEIVED', 'input', 'received', { command: normalized.type }, input.sequence);
     this.emit(events, 'INPUT_ADMITTED', 'input', input.admission, {}, input.sequence, received.sequence);
@@ -112,9 +122,11 @@ export class Simulation {
     const due = d.pendingInputs; d.pendingInputs = [];
     for (const input of due) {
       if (input.command.type === 'invalid') { this.emit(events, 'INPUT_VALIDATED', 'input', 'rejected', { reason: input.command.reason }, input.sequence); continue; }
+      if(this.applyExtendedInput(input,events))continue;
       if (d.tick < d.cooldownUntilTick) { this.emit(events, 'INPUT_VALIDATED', 'input', 'rejected', { reason: 'door_cooldown', cooldownUntilTick: d.cooldownUntilTick }, input.sequence); continue; }
       const accepted = this.emit(events, 'INPUT_VALIDATED', 'input', 'accepted', {}, input.sequence);
       d.door.lastSlamTick = d.tick; d.door.slamCount++; d.cooldownUntilTick = d.tick + d.config.cooldownTicks;
+      this.onDoorChanged();
       const action = this.emit(events, 'DOOR_SLAM', 'door', 'applied', { slamCount: d.door.slamCount }, input.sequence, accepted.sequence);
       const sound = { id: d.nextSoundId++, time: d.tick / d.config.hz, intensity: 1, suddenness: 1, x: 3.1, z: -3.4 };
       const acoustic = this.emit(events, 'ACOUSTIC_EVENT', 'sound', 'emitted', sound, input.sequence, action.sequence);
@@ -126,8 +138,9 @@ export class Simulation {
     const [x,z] = waypoints[d.waypoint], dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx,dz);
     const step = Math.min(distance, d.config.speed / d.config.hz);
     if (distance > 0.001) {
-      c.heading = Math.atan2(dx,dz); c.x = Math.max(-ROOM.walkX, Math.min(ROOM.walkX, c.x + dx / distance * step));
-      c.z = Math.max(-ROOM.walkZ, Math.min(ROOM.walkZ, c.z + dz / distance * step)); c.gait += step * 8;
+      c.heading = Math.atan2(dx,dz);const nextX=Math.max(-ROOM.walkX,Math.min(ROOM.walkX,c.x+dx/distance*step)),nextZ=Math.max(-ROOM.walkZ,Math.min(ROOM.walkZ,c.z+dz/distance*step));
+      if(!this.canMove(nextX,nextZ)){d.waypoint=(d.waypoint+1)%waypoints.length;d.pauseUntilTick=d.tick+d.config.pauseTicks;c.moving=false;this.emit(events,'MOVEMENT_BLOCKED','movement','idle',{nextWaypoint:d.waypoint,pauseUntilTick:d.pauseUntilTick});return events;}
+      c.x=nextX;c.z=nextZ;c.gait+=step*8;
     }
     if (distance <= step + 0.001) {
       d.waypoint = (d.waypoint + 1) % waypoints.length; d.pauseUntilTick = d.tick + d.config.pauseTicks; c.moving = false;
@@ -163,7 +176,9 @@ export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rule
   schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
   experiences: SyntheticExperience[]; nextExperienceId: number;
 }
-export type Checkpoint = CheckpointV1 | CheckpointV2;
+export const CURRENT_VISION_RULES='lumi-eyes-v2' as const;
+export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVersion'> {schemaVersion:3;rulesVersion:'lumi-eyes-v1'|typeof CURRENT_VISION_RULES;head:HeadState;scene:PhysicalSceneState}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -173,12 +188,14 @@ function legacyPart(c: CheckpointV2): CheckpointV1 {
 /** Explicit migration: V1 replay remains V1; a new lab run initializes named new systems. */
 export function upgradeCheckpoint(value: unknown): CheckpointV2 {
   const cp = validateCheckpoint(value);
+  if(cp.schemaVersion===3)throw new Error('Vision state cannot be downgraded into historical lab semantics');
   if (cp.schemaVersion === 2) return cp;
   return { ...cp, schemaVersion: 2, rulesVersion: 'lumi-lab-v1',
     subjective: { estimateSeconds: 0, uncertaintySeconds: cp.tick / cp.config.hz + 5, lastCalibrationTick: null, driftPpm: 1200, uncertaintyGrowthPerSecond: 0.02 },
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===3)return validateVisionCheckpoint(value);
   if (!value || typeof value !== 'object' || (value as {schemaVersion?:unknown}).schemaVersion !== 2) return validateCheckpointV1(value);
   const keys = ['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId'];
   const raw = object(value, keys, 'lab root');
@@ -245,5 +262,112 @@ export class LabSimulation extends Simulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
+  protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
+  override checkpoint():CheckpointV2|CheckpointV3 {return this.labCheckpoint();}
+}
+
+/** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
+ * This is validation, never a restore/downgrade path: actual pending commands are retained. */
+function visionLabPart(cp:CheckpointV3):CheckpointV2 {
+  const raw=structuredClone(cp) as unknown as Record<string,unknown>;
+  delete raw.head;delete raw.scene;raw.schemaVersion=2;raw.rulesVersion='lumi-lab-v1';
+  raw.pendingInputs=cp.pendingInputs.map(input=>({...input,command:input.command.type==='slam'||input.command.type==='invalid'?input.command:{type:'invalid',reason:'unknown_command'}}));
+  const validated=validateCheckpoint(raw);if(validated.schemaVersion!==2)fail('vision base schema');return validated as CheckpointV2;
+}
+export function validateVisionCheckpoint(value:unknown):CheckpointV3 {
+  const keys=['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId','head','scene'];
+  const raw=object(value,keys,'vision root');if(raw.schemaVersion!==3||!['lumi-eyes-v1',CURRENT_VISION_RULES].includes(raw.rulesVersion as string))fail('incompatible vision rules');
+  const cp=value as CheckpointV3;if(!Array.isArray(cp.pendingInputs))fail('vision input queue');
+  for(const input of cp.pendingInputs){validateCommand(input.command,true);if(cp.rulesVersion==='lumi-eyes-v1'&&input.command.type==='look_at'&&input.command.evidence&&isCapturedBearingEvidence(input.command.evidence))fail('captured bearing evidence requires current vision rules');}
+  visionLabPart(cp);validateHeadState(cp.head,cp.rulesVersion==='lumi-eyes-v1');validatePhysicalSceneState(cp.scene);
+  if(cp.head.observedAim&&cp.head.targetYaw!==relativeObservedAim(cp.head.observedAim,cp.character.heading).yaw)fail('observed aim and body orientation disagree');
+  if(!canRestoreCharacter(cp.scene,cp.character.x,cp.character.z))fail('character overlaps physical collider');
+  return structuredClone(cp);
+}
+/** Deliberate active-world upgrade; offline V1/V2 replay never calls this. */
+export function upgradeVisionCheckpoint(value:unknown):CheckpointV3 {
+  const source=validateCheckpoint(value);if(source.schemaVersion===3)return {...source,rulesVersion:CURRENT_VISION_RULES,head:source.rulesVersion===CURRENT_VISION_RULES?source.head:{...source.head,observedAim:null}};
+  const cp=upgradeCheckpoint(source);
+  return {...cp,schemaVersion:3,rulesVersion:CURRENT_VISION_RULES,head:defaultHeadState(),scene:defaultPhysicalSceneState()};
+}
+export class VisionSimulation extends LabSimulation {
+  private head:HeadState;private scene:PhysicalSceneState;private readonly visionRules:CheckpointV3['rulesVersion'];
+  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode;historical?:boolean}) {
+    const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
+    const cp=options.historical&&source.schemaVersion===3?source:upgradeVisionCheckpoint(source);
+    super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
+  }
+  override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
+    const normalized=validateCommand(command,true);
+    if(normalized.type==='look_at'&&normalized.evidence) {
+      if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
+      if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
+    }
+    return super.enqueue(normalized);
+  }
+  protected override supportsVisionInputs():boolean{return true;}
+  protected override onDoorChanged():void{this.scene.revision++;}
+  protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
+  protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
+    const command=input.command;if(command.type==='slam'||command.type==='invalid')return false;
+    const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
+    if(command.type==='configure_scene') {
+      if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
+      const configuration=validateSceneConfiguration({illumination:command.illumination,fixture:command.fixture,fixtureColor:command.fixtureColor,doorOpenRadians:command.doorOpenRadians}),scene={...configuration,revision:this.scene.revision+1};
+      if(!canOccupyCharacter(scene,this.data.character.x,this.data.character.z))return reject('fixture_overlaps_character');
+      this.scene=scene;this.emit(events,'SCENE_CONFIGURED','scene','applied',{sceneRevision:scene.revision,illumination:scene.illumination,fixture:scene.fixture,fixtureColor:scene.fixtureColor.slice(1),doorOpenRadians:scene.doorOpenRadians??'animated'},input.sequence);return true;
+    }
+    if(command.sceneRevision!==this.scene.revision)return reject('scene_revision_changed');
+    if(command.type==='look_at'&&command.evidence) {
+      if(command.evidence.capturedTick>this.data.tick||this.data.tick-command.evidence.capturedTick>300)return reject('observation_expired');
+      if(this.visionRules==='lumi-eyes-v1') {
+        if(isCapturedBearingEvidence(command.evidence))return reject('incompatible_observation_evidence');
+        if(!isTargetEligible(this.snapshot(),command.evidence.engineTargetId,command.evidence.captureWidth,command.evidence.captureHeight))return reject('target_no_longer_visible');
+      } else {
+        if(!isCapturedBearingEvidence(command.evidence))return reject('legacy_observation_evidence');
+        const target=observedHeadTarget(command.evidence,this.data.character.heading);
+        if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch)return reject('observed_bearing_exceeds_head_limits');
+      }
+    }
+    const h=this.head;
+    if(h.status!=='idle')this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId:h.activeActionId!,command:command.type},input.sequence);
+    if(this.visionRules!== 'lumi-eyes-v1')h.observedAim=null;
+    const actionId=h.nextActionId++;
+    if(command.type==='cancel_head'){h.status='idle';h.targetYaw=h.yaw;h.targetPitch=h.pitch;h.scan=null;h.activeActionId=null;this.emit(events,'HEAD_CANCELLED','head','idle',{actionId},input.sequence);return true;}
+    h.activeActionId=actionId;
+    if(command.type==='scan_area') {
+      const points=Array.from({length:command.passes*2},(_,i)=>({yaw:i%2===0?command.minYaw:command.maxYaw,pitch:command.pitch}));
+      h.status='scanning';h.scan={points,cursor:0};h.targetYaw=points[0].yaw;h.targetPitch=points[0].pitch;
+    }else{h.status='turning';h.scan=null;
+      // Relative turns use the pose at this ordered execution tick; saturating at
+      // anatomical limits is deterministic and never snaps the current pose.
+      const observed=command.type==='look_at'&&command.evidence&&isCapturedBearingEvidence(command.evidence)?observedHeadTarget(command.evidence,this.data.character.heading):null;
+      if(command.type==='look_at'&&command.evidence&&isCapturedBearingEvidence(command.evidence))h.observedAim=observedWorldDirection(command.evidence);
+      h.targetYaw=command.type==='turn_head'?Math.max(HEAD_LIMITS.minYaw,Math.min(HEAD_LIMITS.maxYaw,h.yaw+command.yawDelta)):observed?.yaw??command.yaw;
+      h.targetPitch=command.type==='turn_head'?Math.max(HEAD_LIMITS.minPitch,Math.min(HEAD_LIMITS.maxPitch,h.pitch+command.pitchDelta)):observed?.pitch??command.pitch;
+    }
+    this.emit(events,'HEAD_ACTION_STARTED','head',h.status,{actionId,command:command.type,targetYaw:h.targetYaw,targetPitch:h.targetPitch,sceneRevision:this.scene.revision,...(command.type==='look_at'&&command.evidence?{observationId:command.evidence.observationId,frameHash:command.evidence.frameHash,capturedTick:command.evidence.capturedTick}: {})},input.sequence);
+    return true;
+  }
+  override step():DeterministicEvent[] {
+    const events=super.step(),h=this.head;if(h.status==='idle')return events;
+    if(h.observedAim) {
+      // Base movement can turn the body on this same tick. Rebase the perceived
+      // ray after that movement, without consulting a target or world geometry.
+      const target=relativeObservedAim(h.observedAim,this.data.character.heading);
+      if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch) {
+        const actionId=h.activeActionId!;h.status='idle';h.targetYaw=h.yaw;h.targetPitch=h.pitch;h.scan=null;h.activeActionId=null;h.observedAim=null;
+        this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId,reason:'observed_direction_out_of_head_range'});return events;
+      }
+      h.targetYaw=target.yaw;h.targetPitch=target.pitch;
+    }
+    const maximum=HEAD_LIMITS.radiansPerSecond/this.data.config.hz,dx=h.targetYaw-h.yaw,dy=h.targetPitch-h.pitch,distance=Math.hypot(dx,dy);
+    if(distance<=maximum){h.yaw=h.targetYaw;h.pitch=h.targetPitch;
+      if(h.status==='scanning'&&h.scan&&h.scan.cursor+1<h.scan.points.length){h.scan.cursor++;const p=h.scan.points[h.scan.cursor];h.targetYaw=p.yaw;h.targetPitch=p.pitch;this.emit(events,'HEAD_SCAN_POINT','head','next',{actionId:h.activeActionId!,cursor:h.scan.cursor,targetYaw:h.targetYaw,targetPitch:h.targetPitch});}
+      else{const actionId=h.activeActionId!;h.status='idle';h.scan=null;h.activeActionId=null;if(this.visionRules!== 'lumi-eyes-v1')h.observedAim=null;this.emit(events,'HEAD_ACTION_COMPLETE','head','idle',{actionId,yaw:h.yaw,pitch:h.pitch});}
+    }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
+    return events;
+  }
+  override checkpoint():CheckpointV3{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
