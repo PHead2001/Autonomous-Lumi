@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Current repair verification passes: **263/263** offline tests, lint/build, actual `vision:verify` **8/8**, attention **2/2**, and a bounded **six-call actual prompt-v4 run**. All six main HTTP 200 responses normalized successfully with `validationError: null`; six COMPLETE bundles replay with matching canonical results. No automated retries or Decisions calls occurred in this correction. Independent ZIP inspection and hosted review of the new patch remain pending; earlier source approvals are historical. PR #8 remains open/unmerged.
+Current repair verification passes: **263/263** offline tests, lint/build, actual `vision:verify` **8/8**, attention **2/2**, and a bounded **six-call actual prompt-v4 run**. All six main HTTP 200 responses normalized successfully with `validationError: null`; six COMPLETE bundles replay with matching canonical results. No automated retries or Decisions calls occurred in this correction. Independent ZIP inspection passed; hosted review of the new patch remains pending; earlier source approvals are historical. PR #8 remains open/unmerged.
 
 ## Current contract and local verification
 
@@ -17,7 +17,8 @@ All six harness cases run even after a case failure, with strict overall accepta
 | Actual renderer / attention | **8/8 / 2/2 PASS**, `v4-repair-vision-verify.log` / `v4-repair-vision-attention.log` |
 | Actual pixel + FAKE transport | **3/3 PASS**, zero external calls |
 | Cleanup | **15/15** focused checks, actual **8/8**, lint/TypeScript and independent Astra review clean |
-| New repair hosted review / independent ZIP check | **PENDING** |
+| New repair hosted review | **PENDING**, `dfcf49c`, review comment `6508571913` |
+| Independent new ZIP inspection | **PASS**, temporary LIVE and dark artifacts inspected; exact LIVE replay matched |
 
 Paths without a prefix are under `diagnostics/`. Cleanup has a structural fallback for a confirmed owned-renderer exit within the original shared **2,500 ms** deadline and a server-filtered CIM query; queried PIDs are never killed. This repairs the fallback race and reduces query work. The external four-failure sequence and its reported paths were unavailable here, so its exact cause and elimination are not proven.
 
@@ -53,7 +54,9 @@ npm.cmd run replay -- --bundle diagnostics/phase2c-paid-v4-repair-20261029/tempo
 | Events | `d97a0926e40d875879ff5c5595b5e6ac5221e493943b5fc51a811a2b3f37482d` |
 | Runtime | `dba9519c5b95f84e87a8a9cf3c8a8c0dabd891f03e0178cfd0c5765570b34d05` |
 
-Independent inspection of this new ZIP remains pending. Earlier independent artifact proof and optional Decisions results below are kept as historical evidence, not substituted for the new artifact or re-run here.
+Independent inspection of this actual temporary-LIVE ZIP found **36,860 bytes**, **13 entries**, **105 records**, zero gaps/drops, **9 inputs / 60 events**. The documented `npm.cmd` replay independently **passed at tick 388** with the exact state/event/runtime hashes above; output is `diagnostics/phase2c-paid-v4-repair-live-replay.log`. Current v4/wire-v2 normalized request/result identifiers match the server-bound observation/frame identity. The rejected head-limit action and `RealExperience.actionOutcome: null` remain distinct from the retained perception.
+
+The dark ZIP was also inspected: **24,288 bytes**, **13 entries**, **48 records**, zero gaps/drops, no shapes or prior experiences in its input context and uncertainty **1**. Its source report confirms actual PNG maximum RGB **0**. Inspection of both ZIPs found no credentials, raw replies, image payloads, full prompts or private geometry. This is bounded artifact/replay inspection, not certification of an exact modified source tree. Earlier artifact proof and optional Decisions results below remain historical.
 
 ## Earlier pixel-confidence correction (historical)
 
