@@ -26,7 +26,8 @@ function connect() {
   current.onmessage = event => {
     const message = JSON.parse(event.data) as ServerMessage;
     const state = message.state;
-    if (latestWorld !== state.worldId) { latestWorld = state.worldId; lastSound = 0; }
+    const identity = `${state.worldId}/${state.runId}`;
+    if (latestWorld !== identity) { latestWorld = identity; lastSound = 0; }
     scene?.setState(state);
     element('world-time').textContent = `World time ${Math.floor(state.time / 60)}:${Math.floor(state.time % 60).toString().padStart(2, '0')}`;
     element('activity').textContent = state.character.moving ? 'Lumi is wandering' : 'Lumi is taking a breath';
