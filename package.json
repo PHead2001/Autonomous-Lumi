@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n world,viewer \"npm:dev:server\" \"npm:dev:viewer\"",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "tsx server/dev.ts",
     "dev:viewer": "vite --host 127.0.0.1",
     "start": "tsx server/index.ts",
     "test": "tsx --test tests/*.test.ts",

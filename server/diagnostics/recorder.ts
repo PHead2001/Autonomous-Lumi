@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { Checkpoint, DeterministicEvent, OrderedInput } from '../simulation.js';
 import {validateRuntimeCheckpoint,validateRuntimeOperation,type RuntimeCheckpoint,type RuntimeOperation} from '../branch-runtime.js';
+import {assertOwnedPath} from '../checkpoint-storage.js';
 type SimulationCheckpoint = Checkpoint;
 
 export type Category = 'WORLD_TRUTH' | 'FOX_EXPERIENCE' | 'PRIVATE_SENSOR' | 'OPERATIONAL_REPLAY';
@@ -46,6 +47,7 @@ export interface RecorderHealth {
   loggingMode: LoggingMode; disabledRecords: number;
   compressClosed: boolean;
 }
+export interface RunSnapshot {metadata:Record<string,unknown>;start:unknown;end:unknown;records:DiagnosticRecord[];readGaps:string[];runtimeStart?:unknown;runtimeEnd?:unknown}
 interface RecorderOptions {
   directory?: string; worldId: string; runId: string; branchId?: string; worldMode?: 'LIVE' | 'EXPERIMENT'; loggingMode?: LoggingMode; compressClosed?: boolean;
   hz?: number; now?: () => number; minSeverity?: Severity;
@@ -63,7 +65,7 @@ const dataKeys = new Set([
   'queuedViewers', 'connectedViewers', 'displayed', 'audioPlayed', 'viewers',
   'provenance', 'attended', 'encoded', 'observationId', 'cue', 'valueSeconds', 'estimateSeconds', 'uncertaintySeconds', 'calibrated', 'rate', 'bias',
   'activityId', 'cursor', 'total', 'progress', 'completed', 'completionCount', 'paused', 'speed', 'ticks', 'remainingTicks', 'controlSequence', 'action', 'checkpointHash',
-  'sensed','experienceId','observedSeconds','totalTicks','control','kind',
+  'sensed','experienceId','observedSeconds','totalTicks','control','kind','historyId','generation','fallback','checkpointAgeMs','enabled',
 ]);
 const safeLabel = (value: string) => value.replace(/[^A-Za-z0-9_. :/-]/g, '_').slice(0, 160);
 export function sanitizeData(data: Record<string, Primitive> = {}): Record<string, Primitive> {
@@ -80,6 +82,7 @@ export function sanitizeData(data: Record<string, Primitive> = {}): Record<strin
 /** Observational writer. It never throws from record/capture or consumes simulation IDs/randomness. */
 export class FlightRecorder {
   readonly runDirectory: string;
+  private readonly ownedRoot:string;
   readonly limits: RecorderLimits;
   private readonly now: () => number;
   private readonly append: (path: string, data: string) => Promise<void>;
@@ -89,7 +92,7 @@ export class FlightRecorder {
   private loggingMode: LoggingMode;
   private disabledRecords = 0;
   private compressClosed: boolean;
-  private queue: { line: string; critical: boolean }[] = [];
+  private queue: { line: string; critical: boolean; sequence:number }[] = [];
   private bytes = 0;
   private inFlightRecords = 0;
   private inFlightBytes = 0;
@@ -108,6 +111,12 @@ export class FlightRecorder {
   private closed = false;
   private pending: Promise<void> = Promise.resolve();
   private writing = false;
+  private snapshotInProgress = false;
+  private snapshotFinished:Promise<void>|null=null;
+  private durableCheckpointRecorderSequence = 0;
+  private durableLastRecorderSequence = 0;
+  private writerDroppedRecords = 0;
+  private writerCriticalDroppedRecords = 0;
   private timer: ReturnType<typeof setInterval>;
   private counters = { writtenRecords: 0, droppedRecords: 0, criticalDroppedRecords: 0, filteredRecords: 0, writerFailures: 0, evictedRecords: 0 };
   private lastError: string | null = null;
@@ -122,6 +131,7 @@ export class FlightRecorder {
     for (const value of Object.values(this.limits)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid recorder limit');
     if (this.limits.reserveCriticalRecords >= this.limits.queueRecords || this.limits.recordBytes > this.limits.queueBytes || this.limits.recordBytes > this.limits.fileBytes || this.limits.fileBytes > this.limits.diskBytes) throw new Error('Inconsistent recorder limits');
     this.identity = { worldId: options.worldId, runId: options.runId,...(options.branchId===undefined?{}:{branchId:options.branchId,worldMode:options.worldMode}) };
+    this.ownedRoot=resolve(options.directory??'diagnostics/runs');
     this.runDirectory = options.branchId===undefined?join(options.directory ?? 'diagnostics/runs', options.runId):join(options.directory??'diagnostics/runs',options.worldId,options.branchId,'runs',options.runId);
     this.loggingMode=options.loggingMode??'default';this.compressClosed=options.compressClosed??false;
     if(this.loggingMode==='off')this.gap('logging_disabled');
@@ -134,6 +144,9 @@ export class FlightRecorder {
     this.timer.unref();
   }
   private gap(message: string): void { if (!this.gaps.includes(message) && this.gaps.length < 32) this.gaps.push(message); }
+  /** Preparation is a failable lifecycle boundary; ordinary observational flushes remain nonthrowing. */
+  async prepare():Promise<void>{await this.prepareDirectory();await this.flush();if(this.counters.writerFailures)throw new Error('Diagnostic writer initialization failed; replacement was not activated');}
+  private async prepareDirectory():Promise<void>{await mkdir(this.ownedRoot,{recursive:true});await assertOwnedPath(this.ownedRoot,this.runDirectory);await mkdir(this.runDirectory,{recursive:true});await assertOwnedPath(this.ownedRoot,this.runDirectory);}
   setLoggingMode(mode:LoggingMode,compressClosed=this.compressClosed):void{if(!['off','default','verbose'].includes(mode)||typeof compressClosed!=='boolean')throw new Error('Invalid logging mode');this.loggingMode=mode;this.compressClosed=compressClosed;if(mode==='off')this.gap('logging_disabled');}
   private enabled():boolean{if(this.closed)return false;if(this.loggingMode==='off'){this.disabledRecords++;this.gap('logging_disabled');return false;}return true;}
   record(request: RecordRequest, critical = false): void {
@@ -165,7 +178,7 @@ export class FlightRecorder {
       this.counters.droppedRecords++; if (critical) this.counters.criticalDroppedRecords++;
       this.gap(critical ? 'critical_queue_or_record_limit' : 'queue_or_record_limit'); return;
     }
-    this.queue.push({ line, critical }); this.bytes += bytes;
+    this.queue.push({ line, critical,sequence:record.sequence }); this.bytes += bytes;
   }
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
@@ -217,21 +230,55 @@ export class FlightRecorder {
       retainedFiles: this.files.length, retainedBytes: this.files.reduce((n, f) => n + f.bytes, 0), lastError: this.lastError, gaps: [...this.gaps], ...this.globalHealth,loggingMode:this.loggingMode,disabledRecords:this.disabledRecords,compressClosed:this.compressClosed };
   }
   flush(): Promise<void> {
+    if (this.snapshotInProgress) return this.pending;
     if (this.writing) return this.pending;
     this.writing = true;
     this.pending = this.writeBatch().finally(() => { this.writing = false; });
     return this.pending;
   }
+  /** Pin a complete evidence prefix without pausing LIVE or waiting for future arrivals. */
+  async snapshotForExport():Promise<RunSnapshot>{
+    if(this.closed)throw new Error('Closed recorder exports must use its durable run');
+    if(this.snapshotInProgress)throw new Error('Diagnostic export snapshot is already in progress');
+    if(!this.initial||!this.latest)throw new Error('Export requires captured checkpoints');
+    const pin={start:structuredClone(this.initial),end:structuredClone(this.latest),runtimeStart:this.initialRuntime?structuredClone(this.initialRuntime):undefined,runtimeEnd:this.latestRuntime?structuredClone(this.latestRuntime):undefined,
+      startSequence:this.startRecorderSequence,endSequence:this.checkpointRecorderSequence,health:this.health(),writerDropped:this.writerDroppedRecords,writerCriticalDropped:this.writerCriticalDroppedRecords};
+    if(pin.endSequence!==this.sequence)throw new Error('Capture the current runtime immediately before pinning its export');
+    this.snapshotInProgress=true;
+    let finish!:()=>void;this.snapshotFinished=new Promise<void>(resolveFinished=>{finish=resolveFinished;});
+    try{
+      // The current batch may predate the captured terminal operation. Drain that prefix as a second batch.
+      await this.pending;
+      this.writing=true;
+      this.pending=this.writeBatch(pin.endSequence).finally(()=>{this.writing=false;});
+      await this.pending;
+      // Writer exclusion makes this bounded file read stable; simulation may still enqueue newer evidence.
+      await assertOwnedPath(this.ownedRoot,this.runDirectory);
+      const durable=await readRun(this.runDirectory),now=this.health();
+      const relevantGaps=new Set(pin.health.gaps);
+      for(const gap of now.gaps)if(gap==='writer_failure'||gap==='retention_evicted_records'||gap.startsWith('global_')||gap.startsWith('unaccounted_')||gap.startsWith('unowned_'))relevantGaps.add(gap);
+      const health:RecorderHealth={...pin.health,queuedRecords:0,queuedBytes:0,inFlightRecords:0,inFlightBytes:0,writtenRecords:now.writtenRecords,
+        droppedRecords:pin.health.droppedRecords+this.writerDroppedRecords-pin.writerDropped,criticalDroppedRecords:pin.health.criticalDroppedRecords+this.writerCriticalDroppedRecords-pin.writerCriticalDropped,
+        writerFailures:now.writerFailures,evictedRecords:now.evictedRecords,retainedFiles:now.retainedFiles,retainedBytes:now.retainedBytes,lastError:now.lastError,
+        globalRetainedBytes:now.globalRetainedBytes,globalRetainedRuns:now.globalRetainedRuns,globalCapExceeded:now.globalCapExceeded,globalAccountingComplete:now.globalAccountingComplete,protectedActiveRuns:now.protectedActiveRuns,
+        gaps:[...relevantGaps],status:relevantGaps.size?'INCOMPLETE':'HEALTHY'};
+      return {...durable,start:pin.start,end:pin.end,runtimeStart:pin.runtimeStart,runtimeEnd:pin.runtimeEnd,
+        records:durable.records.filter(record=>record.sequence>pin.startSequence&&record.sequence<=pin.endSequence),
+        metadata:{...durable.metadata,...this.identity,startRecorderSequence:pin.startSequence,checkpointRecorderSequence:pin.endSequence,lastRecorderSequence:pin.endSequence,health}};
+    }finally{this.snapshotInProgress=false;this.snapshotFinished=null;finish();if(this.queue.length||this.dirtyCheckpoint)void this.flush();}
+  }
   private async atomic(name: string, value: unknown): Promise<void> {
     const target = join(this.runDirectory, name), temp = target + '.tmp';
+    await assertOwnedPath(this.ownedRoot,target);await assertOwnedPath(this.ownedRoot,temp);
     await writeFile(temp, JSON.stringify(value, null, 2), 'utf8'); await rename(temp, target);
   }
   private async enforceGlobalRetention(): Promise<void> {
     const root = resolve(dirname(this.runDirectory));
+    await assertOwnedPath(this.ownedRoot,root);
     const generated = /^(events-\d{5}\.jsonl(\.gz)?|checkpoint-(start|end)\.json|runtime-(start|end)\.json|run\.json|_active\.json)(\.tmp)?$/;
     const runs: { path: string; bytes: number; modified: number; removable: boolean; active: boolean; files: string[] }[] = [];
     let unownedBytes = 0, accountingComplete = true;
-    const boundedRetentionJSON=async(path:string)=>{if((await stat(path)).size>64*1024)throw new Error('Oversized retention metadata');return JSON.parse(await readFile(path,'utf8'));};
+    const boundedRetentionJSON=async(path:string)=>{await assertOwnedPath(this.ownedRoot,path);if((await stat(path)).size>64*1024)throw new Error('Oversized retention metadata');return JSON.parse(await readFile(path,'utf8'));};
     for (const entry of await readdir(root,{withFileTypes:true})) {
       if (!entry.isDirectory() || !safeId(entry.name)) {
         if (entry.isFile()) unownedBytes += (await stat(join(root,entry.name))).size;
@@ -240,6 +287,7 @@ export class FlightRecorder {
       }
       const path=resolve(root,entry.name);
       if (!path.startsWith(root+sep)) throw new Error('Retention path escaped root');
+      await assertOwnedPath(this.ownedRoot,path);
       const entries=await readdir(path,{withFileTypes:true}); let bytes=0, removable=true;
       const files:string[]=[];
       for(const file of entries) {
@@ -261,43 +309,49 @@ export class FlightRecorder {
       if(count<=this.limits.retainedRuns && total<=this.limits.globalDiskBytes)break;
       if(run.active || !run.removable)continue;
       // Only known generated files are unlinked, followed by an empty-directory removal.
-      for(const name of run.files)await unlink(join(run.path,name));
+      for(const name of run.files){await assertOwnedPath(this.ownedRoot,join(run.path,name));await unlink(join(run.path,name));}
       const {rmdir}=await import('node:fs/promises');await rmdir(run.path);
       total-=run.bytes;count--;
     }
     this.globalHealth={globalRetainedBytes:total,globalRetainedRuns:count,globalCapExceeded:count>this.limits.retainedRuns || total>this.limits.globalDiskBytes,globalAccountingComplete:accountingComplete,protectedActiveRuns:runs.filter(r=>r.active).length};
     if(this.globalHealth.globalCapExceeded)this.gap('global_retention_cap_blocked_by_active_or_unowned_data');
   }
-  private async writeBatch(): Promise<void> {
+  private async writeBatch(throughSequence=Number.MAX_SAFE_INTEGER): Promise<void> {
     if (!this.queue.length && !this.dirtyCheckpoint && this.persistedHealth === JSON.stringify(this.health())) return;
-    const batch = this.queue; this.queue = []; this.inFlightRecords = batch.length; this.inFlightBytes = this.bytes; this.bytes = 0;
+    const count=this.queue.findIndex(entry=>entry.sequence>throughSequence);
+    const batch=this.queue.splice(0,count<0?this.queue.length:count),batchBytes=batch.reduce((sum,entry)=>sum+Buffer.byteLength(entry.line),0);
+    this.bytes-=batchBytes;this.inFlightRecords=batch.length;this.inFlightBytes=batchBytes;
+    // Capture one immutable checkpoint generation before asynchronous writes begin.
+    const checkpoint=this.dirtyCheckpoint&&this.initial&&this.latest&&this.checkpointRecorderSequence<=throughSequence?{
+      start:this.initial,end:this.latest,runtimeStart:this.initialRuntime,runtimeEnd:this.latestRuntime,sequence:this.checkpointRecorderSequence}:null;
     let written = 0;
     try {
-      await mkdir(this.runDirectory, { recursive: true });
+      await this.prepareDirectory();
       if(!this.activeMarkerWritten){await this.atomic('_active.json',{pid:process.pid,runId:this.identity.runId});this.activeMarkerWritten=true;}
       for (const entry of batch) {
         const bytes = Buffer.byteLength(entry.line);
         if (this.fileBytes && (this.fileBytes + bytes > this.limits.fileBytes || this.now() - this.fileStarted >= this.limits.fileAgeMs)) { if(this.compressClosed)await this.compressFile(this.files.at(-1)!);this.fileSequence++; this.fileBytes = 0; }
         const newFile = !this.fileBytes;
         const file = newFile ? { name: `events-${this.fileSequence.toString().padStart(5, '0')}.jsonl`, bytes: 0, records: 0 } : this.files.at(-1)!;
-        await this.append(join(this.runDirectory, file.name), entry.line);
+        await assertOwnedPath(this.ownedRoot,join(this.runDirectory,file.name));await this.append(join(this.runDirectory, file.name), entry.line);
         // A failed first append must not create phantom descriptors for the same filename.
         if (newFile) { this.fileStarted=this.now(); this.files.push(file); }
         this.fileBytes += bytes; file.bytes += bytes; file.records++; this.counters.writtenRecords++; written++;
+        this.durableLastRecorderSequence=entry.sequence;
         while (this.files.length > this.limits.retainedFiles || this.files.reduce((n, f) => n + f.bytes, 0) > this.limits.diskBytes) {
-          const old = this.files.shift()!; await unlink(join(this.runDirectory, old.name)); this.counters.evictedRecords += old.records; this.gap('retention_evicted_records');
+          const old = this.files.shift()!; await assertOwnedPath(this.ownedRoot,join(this.runDirectory,old.name));await unlink(join(this.runDirectory, old.name)); this.counters.evictedRecords += old.records; this.gap('retention_evicted_records');
           if (!this.files.length) { this.fileSequence++; this.fileBytes = 0; }
         }
       }
-      if (this.dirtyCheckpoint && this.initial && this.latest) {
-        const latest = this.latest;
-        await this.atomic('checkpoint-start.json', this.initial); await this.atomic('checkpoint-end.json', latest);
-        if(this.initialRuntime&&this.latestRuntime){await this.atomic('runtime-start.json',this.initialRuntime);await this.atomic('runtime-end.json',this.latestRuntime);}
-        if (latest === this.latest) this.dirtyCheckpoint = false;
+      if (checkpoint) {
+        await this.atomic('checkpoint-start.json', checkpoint.start); await this.atomic('checkpoint-end.json', checkpoint.end);
+        if(checkpoint.runtimeStart&&checkpoint.runtimeEnd){await this.atomic('runtime-start.json',checkpoint.runtimeStart);await this.atomic('runtime-end.json',checkpoint.runtimeEnd);}
+        this.durableCheckpointRecorderSequence=checkpoint.sequence;
+        if (checkpoint.end === this.latest&&checkpoint.sequence===this.checkpointRecorderSequence) this.dirtyCheckpoint = false;
       }
       this.inFlightRecords = 0; this.inFlightBytes = 0;
       const health = this.health();
-      const metadata={schema_version:1,...this.identity,limits:this.limits,startRecorderSequence:this.startRecorderSequence,checkpointRecorderSequence:this.checkpointRecorderSequence,lastRecorderSequence:this.sequence};
+      const metadata={schema_version:1,...this.identity,limits:this.limits,startRecorderSequence:this.startRecorderSequence,checkpointRecorderSequence:this.durableCheckpointRecorderSequence,lastRecorderSequence:this.durableLastRecorderSequence};
       await this.atomic('run.json', { ...metadata, health });
       await this.enforceGlobalRetention();
       if(JSON.stringify(this.health())!==JSON.stringify(health))await this.atomic('run.json',{...metadata,health:this.health()});
@@ -305,23 +359,24 @@ export class FlightRecorder {
     } catch {
       this.counters.writerFailures++; this.counters.droppedRecords += batch.length - written;
       this.counters.criticalDroppedRecords += batch.slice(written).filter(entry => entry.critical).length;
+      this.writerDroppedRecords+=batch.length-written;this.writerCriticalDroppedRecords+=batch.slice(written).filter(entry=>entry.critical).length;
       this.lastError = 'diagnostic_write_failed'; this.gap('writer_failure');
       // No raw exception messages/paths are persisted: they can contain private payloads.
     } finally { this.inFlightRecords = 0; this.inFlightBytes = 0; }
   }
   async close(): Promise<void> {
-    if (this.closed) return; clearInterval(this.timer); await this.flush(); if (this.queue.length || this.dirtyCheckpoint) await this.flush(); this.closed = true;
-    try {if(this.compressClosed&&this.files.at(-1)&&!this.files.at(-1)!.name.endsWith('.gz')){await this.compressFile(this.files.at(-1)!);await this.flush();}await unlink(join(this.runDirectory,'_active.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
+    if (this.closed) return; clearInterval(this.timer); if(this.snapshotFinished)await this.snapshotFinished;await this.flush(); if (this.queue.length || this.dirtyCheckpoint) await this.flush(); this.closed = true;
+    try {if(this.compressClosed&&this.files.at(-1)&&!this.files.at(-1)!.name.endsWith('.gz')){await this.compressFile(this.files.at(-1)!);await this.flush();}await assertOwnedPath(this.ownedRoot,join(this.runDirectory,'_active.json'));await unlink(join(this.runDirectory,'_active.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
   }
   private async compressFile(file:{name:string;bytes:number;records:number}):Promise<void>{
     if(file.name.endsWith('.gz'))return;
-    const original=join(this.runDirectory,file.name);if((await stat(original)).size>this.limits.fileBytes)throw new Error('Closed log exceeds compression bound');
+    const original=join(this.runDirectory,file.name);await assertOwnedPath(this.ownedRoot,original);await assertOwnedPath(this.ownedRoot,original+'.gz');await assertOwnedPath(this.ownedRoot,original+'.gz.tmp');if((await stat(original)).size>this.limits.fileBytes)throw new Error('Closed log exceeds compression bound');
     const bytes=await compress(await readFile(original));const compressed=original+'.gz';await writeFile(compressed+'.tmp',bytes);await rename(compressed+'.tmp',compressed);await unlink(original);
     file.name+='.gz';file.bytes=bytes.length;
   }
 }
 
-export async function readRun(directory: string): Promise<{ metadata: Record<string, unknown>; start: unknown; end: unknown; records: DiagnosticRecord[]; readGaps: string[];runtimeStart?:unknown;runtimeEnd?:unknown }> {
+export async function readRun(directory: string): Promise<RunSnapshot> {
   const allNames=await readdir(directory);const names = allNames.filter(name => /^events-\d{5}\.jsonl(\.gz)?$/.test(name)).sort();
   let bytes = 0; const records: DiagnosticRecord[] = [],readGaps:string[]=[];
   for (const name of names) {

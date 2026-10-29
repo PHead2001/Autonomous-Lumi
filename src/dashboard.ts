@@ -1,6 +1,8 @@
 import './dashboard.css';
-import type { ActiveTarget, BranchSummary, ControlAction } from '../shared/lab-protocol';
+import { EXPERIMENT_PLAYBACK, type ActiveTarget, type BranchSummary, type ControlAction } from '../shared/lab-protocol';
 import { selectTimelineRun, type PendingRestoredRun } from './dashboard-selection';
+import { parsePlaybackSpeed, playbackPresentation } from './dashboard-playback';
+import { runCapturedControl } from './dashboard-control';
 
 interface TimelineRecord {
   event_id: string; world_id: string; branch_id: string; run_id: string;
@@ -10,6 +12,10 @@ interface TimelineRecord {
 }
 interface TimelineResponse { scope: ActiveTarget; records: TimelineRecord[]; health: unknown; coverage: unknown }
 interface ExportResponse { downloadUrl: string; manifest: { evidence_status: string; coverage?: unknown }; assertions?: unknown }
+interface RecoveryPoint { tick: number; worldTime: number; savedAt: string; generation: number }
+interface RecoveryStatus { historyId: string; status: 'fresh' | 'recovered' | 'override'; lastCommitted: RecoveryPoint | null; saveError: string | null; recovered: RecoveryPoint | null; fallback: boolean; intervalMs: number; checkpointAgeMs: number | null }
+interface SavedCheckpoint { worldId: string; branchId: string; id: string; tick: number; mode: 'LIVE' | 'EXPERIMENT'; historyId: string | null; legacy: boolean }
+interface CheckpointCatalog { checkpoints: SavedCheckpoint[]; errors: { source: string; error: string }[] }
 
 const key = (target: { worldId: string; branchId: string }) => `${target.worldId}/${target.branchId}`;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -21,7 +27,7 @@ export function mountDashboard(): void {
   document.getElementById('app')!.innerHTML = `
     <header class="lab-header"><a class="brand" href="/">lumi<span> / experiment laboratory</span></a><a class="lab-return" href="/">Open LIVE viewer ↗</a></header>
     <main class="lab-main">
-      <div class="lab-heading"><div><p class="eyebrow">PHASE 1.5b · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, explicit test observations, and the evidence behind them.</p></div><span class="lab-local">Local / private</span></div>
+      <div class="lab-heading"><div><p class="eyebrow">PHASE 1.5c · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, explicit test observations, and the evidence behind them.</p></div><span class="lab-local">Local / private</span></div>
       <div id="lab-message" class="lab-message" role="status" aria-live="polite">Connecting to the laboratory…</div>
       <section class="lab-selection lab-panel" aria-label="World and branch selection">
         <label class="lab-field lab-select-field">World / branch<select id="lab-branch" aria-label="World and branch"></select></label>
@@ -35,14 +41,16 @@ export function mountDashboard(): void {
         <article class="lab-panel lab-metric"><p class="lab-label">GENERIC ACTIVITY</p><strong id="lab-activity">—</strong><progress id="lab-progress" max="1" value="0"></progress><span id="lab-activity-detail">No activity</span></article>
         <article class="lab-panel lab-metric"><p class="lab-label">MODEL RESPONSE METRIC</p><strong>N/A</strong><span>world_seconds_per_model_response</span><small>No model calls exist.</small></article>
       </section>
+      <section class="lab-panel lab-recovery" aria-labelledby="lab-recovery-heading"><div class="lab-section-title"><h2 id="lab-recovery-heading">LIVE recovery</h2><span id="lab-recovery-status" class="lab-badge">Waiting</span></div><p id="lab-history" class="lab-note">History —</p><div class="lab-health-grid"><div><span>Last committed recovery point</span><strong id="lab-recovery-committed">Unavailable</strong></div><div><span>Startup recovery</span><strong id="lab-recovery-startup">Unavailable</strong></div></div><p id="lab-recovery-detail" class="lab-note">Waiting for recovery status.</p><p id="lab-recovery-error" class="lab-note warning"></p><p class="lab-note">A crash can lose progress after the last committed save. Server downtime does not advance lived world time. Recovery remains separate from diagnostic replay coverage.</p></section>
       <div class="lab-columns">
         <section class="lab-panel" aria-labelledby="lab-control-heading"><div class="lab-section-title"><h2 id="lab-control-heading">Experiment controls</h2><span id="lab-speed-label">—</span></div><p id="lab-control-note" class="lab-note">Select an experiment to change time or inject test observations. LIVE remains at 1×.</p>
           <div class="lab-button-row"><button id="lab-pause" class="lab-button experiment">Pause</button><button id="lab-resume" class="lab-button secondary experiment">Resume</button><button id="lab-step" class="lab-button secondary experiment">Step one tick</button></div>
-          <div class="lab-inline"><label class="lab-field">Unpaused speed<input id="lab-speed" type="number" min="1" max="60" step="1" value="6"></label><button id="lab-set-speed" class="lab-button secondary experiment">Set speed</button></div>
+          <div class="lab-inline"><label class="lab-field">Requested unpaused speed<input id="lab-speed" type="number" min="1" max="${EXPERIMENT_PLAYBACK.maxSpeed}" step="any" value="${EXPERIMENT_PLAYBACK.defaultSpeed}"></label><button id="lab-set-speed" class="lab-button secondary experiment">Set speed</button></div><p id="lab-achieved-speed" class="lab-note">Achieved —</p><p id="lab-playback-detail" class="lab-note">Collecting a playback sample.</p>
           <div class="lab-inline"><label class="lab-field">Fast-forward ticks<input id="lab-forward-ticks" type="number" min="1" max="100000" step="1" value="300"></label><button id="lab-forward" class="lab-button secondary experiment">Fast-forward</button><button id="lab-cancel-forward" class="lab-button text experiment">Cancel</button></div><p id="lab-forward-state" class="lab-note">No fast-forward work pending.</p>
           <div class="lab-divider"></div><h3>Checkpointed activity</h3><p class="lab-note">A simple tick-count task. Saved progress and milestone effects resume exactly once.</p><div class="lab-inline"><label class="lab-field">Duration in ticks<input id="lab-activity-ticks" type="number" min="1" max="100000" step="1" value="120"></label><button id="lab-activity-start" class="lab-button secondary experiment">Start activity</button></div><div class="lab-button-row"><button id="lab-activity-pause" class="lab-button secondary experiment">Pause activity</button><button id="lab-activity-resume" class="lab-button secondary experiment">Resume activity</button></div>
         </section>
         <section class="lab-panel" aria-labelledby="lab-checkpoint-heading"><h2 id="lab-checkpoint-heading">Checkpoints & forks</h2><p class="lab-note">Forking copies a recorded checkpoint into an independent experiment. Restores are restricted to the selected experiment.</p><button id="lab-save" class="lab-button secondary">Record checkpoint</button><label class="lab-field lab-wide">Recorded checkpoint<select id="lab-checkpoint" aria-label="Recorded checkpoint"></select></label><p id="lab-checkpoint-detail" class="lab-note">—</p><div class="lab-inline"><label class="lab-field">New experiment branch<input id="lab-new-branch" placeholder="experiment-1" value="experiment-1" pattern="[A-Za-z0-9_-]+" maxlength="64"></label><button id="lab-fork" class="lab-button">Fork experiment</button></div><button id="lab-restore" class="lab-button secondary experiment">Restore selected checkpoint</button><p class="lab-note">Restoration creates a new run. Old controls cannot change that replacement run. Experiments cannot restore into LIVE.</p>
+          <div class="lab-divider"></div><h3>Reopen a saved experiment</h3><p class="lab-note">Load a validated checkpoint from disk into a fresh experiment branch. This catalog survives application restarts.</p><label class="lab-field">Saved experiment checkpoint<select id="lab-saved-checkpoint" aria-label="Saved experiment checkpoint"></select></label><p id="lab-catalog-detail" class="lab-note">Loading saved checkpoints…</p><div class="lab-inline"><label class="lab-field">Reopened experiment branch<input id="lab-reopen-branch" value="experiment-restored" maxlength="64"></label><button id="lab-reopen" class="lab-button secondary">Reopen saved experiment</button></div><label class="lab-checkbox"><input id="lab-allow-legacy" type="checkbox"> Explicitly import a legacy checkpoint with unverified history</label><p class="lab-note">Legacy import is deliberate and experiment-only. Unsupported saved playback speeds fail with an explanation.</p><button id="lab-refresh-catalog" class="lab-button text">Refresh saved checkpoints</button>
         </section>
       </div>
       <div class="lab-columns">
@@ -64,6 +72,7 @@ export function mountDashboard(): void {
   let summaries: BranchSummary[] = [], current: BranchSummary | undefined, selected = '', busy = false, stopped = false;
   let filterGeneration = 0, renderedIdentity = '', refreshGeneration = 0;
   let restoredRunSelection: PendingRestoredRun | undefined;
+  let recovery: RecoveryStatus | null | undefined, catalog: CheckpointCatalog = { checkpoints: [], errors: [] }, catalogLoaded = false;
   const lastExports = new Map<string, string>();
   const message = (value: string, error = false) => { text('lab-message', value); el('lab-message').classList.toggle('error', error); };
   const active = (): ActiveTarget => {
@@ -94,19 +103,31 @@ export function mountDashboard(): void {
   function render() {
     current = summaries.find(item => key(item) === selected);
     if (!current) {
-      document.querySelectorAll<HTMLButtonElement>('.experiment, #lab-save, #lab-fork, #lab-export').forEach(button => { button.disabled = true; });
+      document.querySelectorAll<HTMLButtonElement>('.experiment, #lab-save, #lab-fork, #lab-export, #lab-reopen').forEach(button => { button.disabled = true; });
       text('lab-state', 'Selected branch unavailable');
       return;
     }
     const c = current, health = record(c.logging), experiment = c.mode === 'EXPERIMENT';
     text('lab-mode', c.mode); el('lab-mode').classList.toggle('experiment-badge', experiment);
     text('lab-state', c.paused ? 'Paused' : 'Running'); text('lab-scope', `${c.worldId} / ${c.branchId}`); text('lab-run', `Run ${c.runId}`);
+    if (recovery) {
+      const point = (p: RecoveryPoint) => `Tick ${format(p.tick, 0)} · ${format(p.worldTime, 3)} world s · saved ${p.savedAt}`;
+      text('lab-recovery-status', recovery.saveError ? 'Save failed' : recovery.fallback ? 'Recovered fallback' : recovery.status);
+      el('lab-recovery-status').classList.toggle('warning', !!recovery.saveError || recovery.fallback);
+      text('lab-history', `LIVE history ${recovery.historyId}${c.historyId ? ` · selected branch history ${c.historyId}` : ''}`);
+      text('lab-recovery-committed', recovery.lastCommitted ? point(recovery.lastCommitted) : 'No successful save committed yet');
+      text('lab-recovery-startup', recovery.recovered ? `${point(recovery.recovered)}${recovery.fallback ? ' · previous valid generation' : ''}` : recovery.status === 'override' ? 'Explicit checkpoint override' : 'Fresh history initialization');
+      text('lab-recovery-detail', `Periodic save interval ${format(recovery.intervalMs / 1000)} host seconds.${recovery.checkpointAgeMs === null ? '' : ` Time since saved checkpoint at startup: ${format(recovery.checkpointAgeMs / 1000)} host seconds. This includes any unsaved uptime before a crash; it is not measured downtime.`}`);
+      text('lab-recovery-error', recovery.saveError ? `Recovery save failed: ${recovery.saveError}. The last committed point remains the recovery boundary.` : '');
+    }
     text('lab-tick', `Tick ${format(c.tick, 0)}`); text('lab-world-time', `${format(c.time, 3)} seconds · exact world elapsed time`);
     text('lab-subjective', `${format(c.subjective.estimateSeconds)} s`); text('lab-uncertainty', `Uncertainty ± ${format(c.subjective.uncertaintySeconds)} s`);
     text('lab-calibration', c.subjective.lastCalibrationTick === null ? 'No synthetic clock calibration' : `Last TEST STUB calibration at tick ${c.subjective.lastCalibrationTick}`);
     text('lab-activity', c.activity.status); const progress = el<HTMLProgressElement>('lab-progress'); progress.max = Math.max(1, c.activity.totalTicks); progress.value = c.activity.cursor;
     text('lab-activity-detail', `${c.activity.cursor} / ${c.activity.totalTicks} ticks · ${c.activity.appliedMilestones.length} milestones · ${c.activity.completionCount} completions`);
-    text('lab-speed-label', `${c.speed}×${c.paused ? ' · paused' : ''}`); text('lab-forward-state', c.fastForwardRemaining ? `${c.fastForwardRemaining.toLocaleString()} fast-forward ticks remaining. Work yields between bounded batches.` : 'No fast-forward work pending.');
+    const playback = playbackPresentation(c.playback);
+    text('lab-speed-label', playback.requested); text('lab-achieved-speed', playback.achieved); text('lab-playback-detail', playback.detail); el('lab-playback-detail').classList.toggle('warning', playback.warning);
+    text('lab-forward-state', c.fastForwardRemaining ? `${c.fastForwardRemaining.toLocaleString()} fast-forward ticks remaining. Work yields between bounded batches.` : 'No fast-forward work pending.');
     text('lab-control-note', experiment ? 'Controls affect only this experiment. Paused wall time does not build a catch-up burst.' : 'LIVE is protected at 1×. Record a checkpoint and fork an experiment to use these controls.');
     const query = new URLSearchParams({ worldId: c.worldId, branchId: c.branchId }); el<HTMLAnchorElement>('lab-viewer').href = `/?${query}`;
     document.querySelectorAll<HTMLButtonElement>('.experiment').forEach(button => { button.disabled = busy || !experiment; });
@@ -114,6 +135,7 @@ export function mountDashboard(): void {
     el<HTMLButtonElement>('lab-step').disabled ||= !c.paused || c.fastForwardRemaining > 0;
     el<HTMLButtonElement>('lab-cancel-forward').disabled ||= c.fastForwardRemaining === 0;
     for (const id of ['lab-save', 'lab-fork', 'lab-export']) el<HTMLButtonElement>(id).disabled = busy;
+    el<HTMLButtonElement>('lab-reopen').disabled = busy || !catalog.checkpoints.some(checkpoint => checkpoint.mode === 'EXPERIMENT');
     options(el<HTMLSelectElement>('lab-checkpoint'), c.checkpoints.map(checkpoint => ({ value: checkpoint.id, label: `Tick ${checkpoint.tick} · ${checkpoint.id}` })), val('lab-checkpoint'));
     text('lab-checkpoint-detail', `Latest recorded checkpoint: tick ${c.checkpoint.tick}. ${c.checkpoints.length} checkpoint(s) available.`);
     const runSelection = selectTimelineRun({ targetKey: key(c), currentRunId: c.runId, availableRuns: c.runs, selectedRunId: val('lab-filter-run'), pendingRestore: restoredRunSelection });
@@ -166,9 +188,10 @@ export function mountDashboard(): void {
   async function refresh(showMessage = false) {
     const generation = ++refreshGeneration;
     try {
-      const result = await request<{ branches: BranchSummary[] }>('/api/branches');
+      const result = await request<{ branches: BranchSummary[]; recovery?: RecoveryStatus | null }>('/api/branches');
       if (generation !== refreshGeneration) return;
       summaries = result.branches;
+      recovery = result.recovery;
       if (!selected) selected = summaries.find(item => item.mode === 'LIVE') ? key(summaries.find(item => item.mode === 'LIVE')!) : summaries[0] ? key(summaries[0]) : '';
       if (selected && !summaries.some(item => key(item) === selected)) {
         current = undefined; render(); el('lab-timeline').replaceChildren();
@@ -176,8 +199,23 @@ export function mountDashboard(): void {
         return;
       }
       options(branches, summaries.map(item => ({ value: key(item), label: `${item.mode} · ${item.branchId} · ${item.worldId}` })), selected);
-      render(); await loadTimeline(); if (showMessage) message('Selected branch evidence refreshed.');
+      render(); await loadTimeline(); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
     } catch (error) { if (generation === refreshGeneration) message(error instanceof Error ? error.message : 'Laboratory unavailable', true); }
+  }
+  async function loadCatalog() {
+    try {
+      const result = await request<CheckpointCatalog>('/api/checkpoints');
+      catalog = result; catalogLoaded = true;
+      const experiments = result.checkpoints.filter(checkpoint => checkpoint.mode === 'EXPERIMENT');
+      options(el<HTMLSelectElement>('lab-saved-checkpoint'), experiments.map(checkpoint => ({ value: JSON.stringify([checkpoint.worldId, checkpoint.branchId, checkpoint.id]), label: `${checkpoint.worldId} / ${checkpoint.branchId} · tick ${checkpoint.tick} · ${checkpoint.id}${checkpoint.legacy ? ' · legacy import' : ''}` })), val('lab-saved-checkpoint'));
+      text('lab-catalog-detail', `${experiments.length} saved experiment checkpoint(s).${result.errors.length ? ` Rejected files: ${result.errors.map(error => `${error.source}: ${error.error}`).join('; ')}` : ''}`);
+      el('lab-catalog-detail').classList.toggle('warning', result.errors.length > 0); render();
+    } catch (error) {
+      catalog = { checkpoints: [], errors: [] }; catalogLoaded = false;
+      el<HTMLSelectElement>('lab-saved-checkpoint').replaceChildren();
+      text('lab-catalog-detail', error instanceof Error ? error.message : 'Saved checkpoint catalog unavailable.');
+      el('lab-catalog-detail').classList.add('warning'); render();
+    }
   }
   async function operation(label: string, perform: (target: ActiveTarget) => Promise<void>) {
     if (busy) return;
@@ -186,12 +224,16 @@ export function mountDashboard(): void {
     catch (error) { message(error instanceof Error ? error.message : `${label} failed`, true); await refresh(); }
     finally { busy = false; render(); }
   }
-  const control = (label: string, action: () => ControlAction) => operation(label, async target => { await request<BranchSummary>('/api/control', { ...target, action: action() }); });
+  async function control(label: string, action: () => ControlAction) {
+    try {
+      await runCapturedControl(action, payload => operation(label, async target => { await request<BranchSummary>('/api/control', { ...target, action: payload }); }));
+    } catch (error) { message(error instanceof Error ? error.message : `${label} failed`, true); }
+  }
   const bind = (id: string, run: () => void | Promise<void>) => { el<HTMLButtonElement>(id).onclick = () => { void run(); }; };
   bind('lab-pause', () => control('Pause', () => ({ type: 'pause' })));
   bind('lab-resume', () => control('Resume', () => ({ type: 'resume' })));
   bind('lab-step', () => control('Single tick', () => ({ type: 'step' })));
-  bind('lab-set-speed', () => control('Set speed', () => ({ type: 'speed', speed: number('lab-speed', 1, 60) })));
+  bind('lab-set-speed', () => control('Set speed', () => ({ type: 'speed', speed: parsePlaybackSpeed(val('lab-speed')) })));
   bind('lab-forward', () => control('Fast-forward request', () => ({ type: 'fast-forward', ticks: number('lab-forward-ticks', 1, 100000) })));
   bind('lab-cancel-forward', () => control('Cancel fast-forward', () => ({ type: 'cancel-fast-forward' })));
   bind('lab-activity-start', () => control('Start activity', () => ({ type: 'activity-start', totalTicks: number('lab-activity-ticks', 1, 100000) })));
@@ -201,7 +243,7 @@ export function mountDashboard(): void {
   bind('lab-cue', () => control('Synthetic cue injection', () => ({ type: 'synthetic-cue', ...gates() })));
   bind('lab-clock', () => control('Synthetic clock injection', () => ({ type: 'synthetic-clock', ...gates(), observedSeconds: number('lab-clock-seconds', 0, Number.MAX_SAFE_INTEGER, false), uncertaintySeconds: number('lab-clock-uncertainty', 0, 1000000, false) })));
   bind('lab-logging-apply', () => control('Logging configuration', () => ({ type: 'logging', mode: val('lab-logging-mode') as 'off' | 'default' | 'verbose', compressClosed: el<HTMLInputElement>('lab-compression').checked })));
-  bind('lab-save', () => operation('Record checkpoint', async target => { const result = await request<{ checkpoint: { id: string } }>('/api/checkpoint', target); await refresh(); el<HTMLSelectElement>('lab-checkpoint').value = result.checkpoint.id; }));
+  bind('lab-save', () => operation('Record checkpoint', async target => { const result = await request<{ checkpoint: { id: string } }>('/api/checkpoint', target); catalogLoaded = false; await refresh(); el<HTMLSelectElement>('lab-checkpoint').value = result.checkpoint.id; }));
   bind('lab-fork', () => operation('Fork experiment', async target => {
     const branchId = val('lab-new-branch').trim(); if (!/^[A-Za-z0-9_-]{1,64}$/.test(branchId)) throw new Error('Use 1–64 letters, numbers, underscores or hyphens for a branch ID.');
     const result = await request<BranchSummary>('/api/fork', { ...target, checkpointId: val('lab-checkpoint'), newBranchId: branchId }); selected = key(result); el<HTMLInputElement>('lab-new-branch').value = `${branchId}-next`;
@@ -211,6 +253,17 @@ export function mountDashboard(): void {
     if (key(restored) !== key(target)) throw new Error('Restore response does not match the requested branch.');
     restoredRunSelection = { targetKey: key(target), runId: restored.runId };
   }));
+  bind('lab-reopen', () => operation('Reopen saved experiment', async target => {
+    const selectedCheckpoint = catalog.checkpoints.find(checkpoint => JSON.stringify([checkpoint.worldId, checkpoint.branchId, checkpoint.id]) === val('lab-saved-checkpoint'));
+    if (!selectedCheckpoint || selectedCheckpoint.mode !== 'EXPERIMENT') throw new Error('Select a validated saved experiment checkpoint.');
+    if (selectedCheckpoint.legacy && !el<HTMLInputElement>('lab-allow-legacy').checked) throw new Error('This legacy checkpoint has no verified history metadata. Check the explicit legacy-import option to import it into an experiment.');
+    const newBranchId = val('lab-reopen-branch').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(newBranchId) || newBranchId === 'live') throw new Error('Use a new experiment branch ID: 1–64 letters, numbers, underscores or hyphens, starting with a letter or number.');
+    const result = await request<BranchSummary>('/api/reopen', { ...target, sourceWorldId: selectedCheckpoint.worldId, sourceBranchId: selectedCheckpoint.branchId, checkpointId: selectedCheckpoint.id, newBranchId, allowLegacy: el<HTMLInputElement>('lab-allow-legacy').checked });
+    if (result.mode !== 'EXPERIMENT' || result.branchId !== newBranchId || result.worldId !== selectedCheckpoint.worldId) throw new Error('Reopen response does not match the requested experiment.');
+    selected = key(result); restoredRunSelection = { targetKey: selected, runId: result.runId }; el<HTMLInputElement>('lab-reopen-branch').value = `${newBranchId}-next`;
+  }));
+  bind('lab-refresh-catalog', () => loadCatalog());
   bind('lab-export', () => operation('Diagnostic export', async target => {
     const selectedFilters = filters(), { runId: selectedRunId, ...exportFilters } = selectedFilters;
     const result = await request<ExportResponse>('/api/export', { ...target, selectedRunId, ...exportFilters });
@@ -218,7 +271,7 @@ export function mountDashboard(): void {
     const download = document.createElement('a'); download.href = url.href; download.download = `lumi-${target.branchId}-${selectedFilters.runId}.zip`; document.body.append(download); download.click(); download.remove();
     lastExports.set(`${key(target)}/${selectedFilters.runId}`, `${result.manifest.evidence_status} · ${result.manifest.evidence_status === 'COMPLETE' ? 'replay verified' : 'evidence gaps; replay not certified'}`);
   }));
-  bind('lab-refresh', () => refresh(true));
+  bind('lab-refresh', () => { catalogLoaded = false; return refresh(true); });
   branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void loadTimeline(); message('Selected branch changed. Controls now target this branch’s current run.'); };
   el<HTMLFormElement>('lab-filters').onsubmit = event => { event.preventDefault(); void loadTimeline(); render(); };
   bind('lab-clear-filters', () => { for (const id of ['lab-category', 'lab-component', 'lab-severity', 'lab-causal', 'lab-from', 'lab-to', 'lab-search', 'lab-event-type']) el<HTMLInputElement | HTMLSelectElement>(id).value = ''; if (current) el<HTMLSelectElement>('lab-filter-run').value = current.runId; void loadTimeline(); render(); });

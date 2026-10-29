@@ -3,11 +3,13 @@ export interface HostClock { monotonicMs(): number; utcMs(): number }
 export interface SchedulerConfig { hz: number; maxStepsPerPump: number; maxBacklogSteps: number; suspendThresholdMs: number }
 export interface SchedulerDiagnostic { type: 'HOST_SUSPEND' | 'HOST_RESUME' | 'CATCHUP_SKIPPED' | 'CLOCK_ADJUSTMENT'; data: Record<string, number | string | boolean> }
 export interface SchedulerState { config: SchedulerConfig; backlogMs: number }
+export interface PumpObservation { hostElapsedMs: number; suspended: boolean; skippedWorldMs: number }
 export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = { hz: 30, maxStepsPerPump: 8, maxBacklogSteps: 16, suspendThresholdMs: 5000 };
 export const systemClock: HostClock = { monotonicMs: () => performance.now(), utcMs: () => Date.now() };
 /** Host scheduling is observational; skipped host time never advances authoritative ticks. */
 export class FixedScheduler {
   private mono: number; private utc: number; private accumulator = 0;
+  private lastPump: PumpObservation = { hostElapsedMs: 0, suspended: false, skippedWorldMs: 0 };
   readonly config: SchedulerConfig;
   constructor(private readonly step: () => void, private readonly diagnostic: (event: SchedulerDiagnostic) => void = () => {}, private readonly clock: HostClock = systemClock, config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_SCHEDULER_CONFIG, ...config };
@@ -22,8 +24,12 @@ export class FixedScheduler {
     this.mono = mono; this.utc = utc;
     if (![mono,utc,elapsed,wallElapsed].every(Number.isFinite)) throw new Error('Invalid host clock');
     const stepMs = 1000 / this.config.hz;
+    this.lastPump = { hostElapsedMs: Math.max(0, elapsed), suspended: false, skippedWorldMs: 0 };
     if (elapsed >= this.config.suspendThresholdMs || wallElapsed >= this.config.suspendThresholdMs) {
-      const data = { monotonicGapMs: elapsed, wallDowntimeMs: wallElapsed, skippedCatchupTicks: Math.floor(Math.max(0, elapsed, wallElapsed) / stepMs), discardedBacklogMs: this.accumulator, reason: 'detected_host_suspend_stall_or_clock_discontinuity' };
+      // UTC can jump independently of elapsed host time. Only monotonic elapsed
+      // can quantify requested scheduled work; paused worlds had none to skip.
+      const data = { monotonicGapMs: elapsed, wallGapMs: wallElapsed, skippedCatchupTicks: enabled ? Math.floor((Math.max(0, elapsed) * speed + this.accumulator) / stepMs) : 0, speed, enabled, discardedBacklogMs: this.accumulator, reason: Math.abs(elapsed-wallElapsed)>=1000?'host_gap_or_clock_discontinuity':'detected_host_gap' };
+      this.lastPump.suspended = true;
       this.accumulator = 0; this.report({ type: 'HOST_SUSPEND', data }); this.report({ type: 'HOST_RESUME', data }); return 0;
     }
     if (elapsed < 0 || Math.abs(elapsed - wallElapsed) >= 1000) this.report({ type: 'CLOCK_ADJUSTMENT', data: { monotonicGapMs: elapsed, wallGapMs: wallElapsed } });
@@ -32,6 +38,7 @@ export class FixedScheduler {
     const cap = this.config.maxBacklogSteps * stepMs;
     if (this.accumulator > cap) {
       const skippedMs = this.accumulator - cap; this.accumulator = cap;
+      this.lastPump.skippedWorldMs = skippedMs;
       this.report({ type: 'CATCHUP_SKIPPED', data: { skippedMs, skippedCatchupTicks: Math.floor(skippedMs / stepMs), reason: 'bounded_backlog' } });
     }
     const count = Math.min(this.config.maxStepsPerPump, Math.floor((this.accumulator + 1e-7) / stepMs));
@@ -40,6 +47,7 @@ export class FixedScheduler {
     return count;
   }
   get backlogMs(): number { return Math.max(0, this.accumulator); }
+  get observation(): PumpObservation { return { ...this.lastPump }; }
   checkpoint(): SchedulerState { return {config:{...this.config},backlogMs:this.backlogMs}; }
   rebase(backlogMs = 0): void {
     if (!Number.isFinite(backlogMs) || backlogMs < 0 || backlogMs > this.config.maxBacklogSteps * 1000 / this.config.hz) throw new Error('Invalid scheduler backlog');

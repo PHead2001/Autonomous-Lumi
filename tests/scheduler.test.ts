@@ -13,7 +13,7 @@ test('multi-hour host suspend freezes world across gap, exposes downtime and res
   const scheduler=new FixedScheduler(()=>world.step(),e=>events.push(e),{monotonicMs:()=>mono,utcMs:()=>utc});
   mono=utc=100; scheduler.pump(); const before=world.checkpoint();
   mono+=8*3600000; utc+=8*3600000; assert.equal(scheduler.pump(),0); assert.equal(world.state.tick,before.tick);
-  assert.deepEqual(events.map(e=>e.type),['HOST_SUSPEND','HOST_RESUME']); assert.equal(events[0].data.wallDowntimeMs,8*3600000);
+  assert.deepEqual(events.map(e=>e.type),['HOST_SUSPEND','HOST_RESUME']); assert.equal(events[0].data.wallGapMs,8*3600000);
   mono+=100;utc+=100;scheduler.pump(); assert.equal(world.state.tick,before.tick+3); assert.equal(world.state.time,(before.tick+3)/30);
 });
 test('wall-only sleep gap is detected and observer errors do not change stepping',()=>{
