@@ -1,9 +1,25 @@
 import type { ActiveTarget } from '../shared/lab-protocol';
-import type { CaptureMetadata, CaptureView } from '../shared/capture-protocol';
+import { captureResultDeadlineMs, type CaptureMetadata, type CaptureView } from '../shared/capture-protocol';
 
 export const visionScopeKey = (target: ActiveTarget) => `${target.worldId}/${target.branchId}/${target.runId}`;
 const same = (a: ActiveTarget, b: ActiveTarget) => visionScopeKey(a) === visionScopeKey(b);
 export interface VisionRequest { target: ActiveTarget; generation: number; sequence: number }
+
+/** One completion budget per pending capture, shared by admission and initial status loads. */
+export class VisionCaptureDeadline {
+  private captureId: string | null = null;
+  private deadline = 0;
+  constructor(private readonly now: () => number = Date.now) {}
+  reset(): void { this.captureId = null; this.deadline = 0; }
+  observe(capture: Pick<CaptureMetadata, 'captureId' | 'status'> | null | undefined): void {
+    if (!capture || !['queued', 'pending'].includes(capture.status)) { this.reset(); return; }
+    if (capture.captureId !== this.captureId) { this.captureId = capture.captureId; this.deadline = this.now() + captureResultDeadlineMs(); }
+  }
+  expired(capture: Pick<CaptureMetadata, 'captureId' | 'status'> | null | undefined): boolean {
+    this.observe(capture);
+    return this.captureId !== null && this.now() >= this.deadline;
+  }
+}
 
 /** A delayed response may neither cross a run boundary nor overwrite a newer request. */
 export class VisionRequestGate {

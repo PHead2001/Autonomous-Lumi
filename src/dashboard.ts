@@ -6,7 +6,7 @@ import { runCapturedControl } from './dashboard-control';
 import type { WorldState } from '../shared/protocol';
 import type { HeadAction } from '../shared/vision-protocol';
 import type { CaptureMetadata, CaptureView } from '../shared/capture-protocol';
-import { VisionRequestGate, displayedCapture, validateCaptureViewScope, visionScopeKey } from './dashboard-vision';
+import { VisionCaptureDeadline, VisionRequestGate, displayedCapture, validateCaptureViewScope, visionScopeKey } from './dashboard-vision';
 
 interface TimelineRecord {
   event_id: string; world_id: string; branch_id: string; run_id: string;
@@ -104,7 +104,7 @@ export function mountDashboard(): void {
   const lastExports = new Map<string, string>();
   const visionGate = new VisionRequestGate();
   let visionView: CaptureView | null = null, visionScope = '', visionDirty = true, visionLoading = false, visionError = '';
-  let visionPollDeadline = 0;
+  const visionDeadline = new VisionCaptureDeadline();
   let visionAbort: AbortController | undefined;
   const message = (value: string, error = false) => { text('lab-message', value); el('lab-message').classList.toggle('error', error); };
   const active = (): ActiveTarget => {
@@ -136,7 +136,7 @@ export function mountDashboard(): void {
     const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
     if (identity !== visionScope) {
       visionAbort?.abort(); visionAbort = undefined; visionLoading = false;
-      visionScope = identity; visionGate.select(target); visionView = null; visionError = ''; visionDirty = true; visionPollDeadline = 0;
+      visionScope = identity; visionGate.select(target); visionView = null; visionError = ''; visionDirty = true; visionDeadline.reset();
       text('lab-vision-operation', '');
       const scene = current?.state?.scene;
       if (scene) {
@@ -185,14 +185,14 @@ export function mountDashboard(): void {
     if (!current || visionLoading || stopped) return;
     const pending = visionView?.latest && ['queued', 'pending'].includes(visionView.latest.status);
     if (!force && !visionDirty && !pending) return;
-    if (!force && pending && Date.now() > visionPollDeadline) { visionError = 'Capture status polling deadline reached.'; visionDirty = false; renderVision(); return; }
+    if (!force && pending && visionDeadline.expired(visionView?.latest)) { visionError = 'Capture status polling deadline reached.'; visionDirty = false; renderVision(); return; }
     const token = visionGate.begin(), controller = new AbortController(); visionAbort = controller; visionLoading = true;
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const result = await request<CaptureView>(`/api/vision?${new URLSearchParams({ ...token.target })}`, undefined, controller.signal);
       if (!visionGate.accepts(token) || stopped) return;
       validateCaptureViewScope(result, token.target); visionView = result; visionError = ''; visionDirty = false;
-      if (result.latest && ['queued', 'pending'].includes(result.latest.status) && !visionPollDeadline) visionPollDeadline = Date.now() + result.limits.timeoutMs * result.limits.capacity + 10000;
+      visionDeadline.observe(result.latest);
       renderVision();
     } catch (error) {
       if (visionGate.accepts(token) && !stopped) { visionDirty = false; visionError = error instanceof Error ? error.message : 'Visual sensor unavailable.'; renderVision(); }
@@ -370,7 +370,7 @@ export function mountDashboard(): void {
           if (!visionGate.accepts(token)) return;
           if (visionScopeKey(result) !== visionScopeKey(target)) throw new Error('Capture response does not match the requested world, branch and run.');
           visionView = { latest: result, previousSuccess: visionView?.latest?.status === 'success' ? visionView.latest : visionView?.previousSuccess ?? null, observation: null, privateGrounding: null, cleanupError: visionView?.cleanupError ?? null, limits: visionView?.limits ?? { queued: 0, capacity: 0, retainedFrames: 0, maxRetainedFrames: 0, timeoutMs: 20000 } };
-          visionError = ''; visionDirty = true; visionPollDeadline = Date.now() + (visionView.limits.capacity || 4) * visionView.limits.timeoutMs + 10000; renderVision();
+          visionError = ''; visionDirty = true; visionDeadline.observe(result); renderVision();
         } catch (error) {
           if (visionGate.accepts(token)) { visionError = error instanceof Error ? error.message : 'Capture request failed.'; renderVision(); }
           throw error;
@@ -378,7 +378,7 @@ export function mountDashboard(): void {
       });
     } catch (error) { message(error instanceof Error ? error.message : 'Capture request failed', true); }
   });
-  bind('lab-vision-refresh', () => { visionError = ''; visionDirty = true; visionPollDeadline = 0; return loadVision(true); });
+  bind('lab-vision-refresh', () => { visionError = ''; visionDirty = true; visionDeadline.reset(); return loadVision(true); });
   bind('lab-scene-apply', async () => {
     try {
       const door = val('lab-scene-door');

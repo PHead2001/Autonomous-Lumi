@@ -2,6 +2,15 @@ import type { ActiveTarget } from './lab-protocol.js';
 
 /** Admission includes the running job. Each admitted slot may consume one full render deadline. */
 export const CAPTURE_LIMITS = { capacity: 4, timeoutMs: 20000, cleanupTimeoutMs: 5000 } as const;
+export interface CaptureCompletionTiming { capacity: number; timeoutMs: number; cleanupTimeoutMs: number; transportSlackMs: number }
+export const CAPTURE_COMPLETION_TIMING: CaptureCompletionTiming = { ...CAPTURE_LIMITS, transportSlackMs: 5000 };
+/** Shared by CLI and dashboard: every admitted slot can render and clean up before this result arrives. */
+export function captureResultDeadlineMs(timing: CaptureCompletionTiming = CAPTURE_COMPLETION_TIMING): number {
+  if (!Number.isSafeInteger(timing.capacity) || timing.capacity < 1 || !Number.isSafeInteger(timing.timeoutMs) || timing.timeoutMs < 1 || !Number.isSafeInteger(timing.cleanupTimeoutMs) || timing.cleanupTimeoutMs < 1 || !Number.isSafeInteger(timing.transportSlackMs) || timing.transportSlackMs < 1) throw new Error('Invalid bounded capture client timing');
+  const result = timing.capacity * (timing.timeoutMs + timing.cleanupTimeoutMs) + timing.transportSlackMs;
+  if (!Number.isSafeInteger(result) || result > 0x7fffffff) throw new Error('Capture client deadline exceeds the timer bound');
+  return result;
+}
 export type RendererBackend = 'angle-d3d11' | 'swiftshader';
 export type CaptureStatus = 'queued' | 'pending' | 'success' | 'unavailable' | 'timeout' | 'failed' | 'stale';
 export interface CaptureOptions { reason: 'developer' | 'diagnostic' | 'benchmark'; width?: number; height?: number }
