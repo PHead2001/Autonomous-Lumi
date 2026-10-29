@@ -49,7 +49,16 @@ Default parameters live in `shared/attention-protocol.ts` and are included in co
 | Reflex received intensity / onset | 0.34 / 0.65 | Independent immediate ear-reflex thresholds |
 | Bearing quantization | 15° | Head-relative angular bins |
 
-Bearing uncertainty increases with distance, obstruction and weaker received intensity. Very close sources with no supported horizontal direction receive a null bearing rather than a fabricated angle. Near/middle/far distance evidence is fallible and includes explicit uncertainty. The hearing path covers directions behind the head and outside the visual field. Invalid or unknown sources fail validation before propagation.
+Under current `lumi-attention-v2` rules, receiver-facing uncertainty and distance bands are a declared **received-loudness heuristic**. They do not read exact source distance or the number of crossed barriers. Actual distance and geometry still determine physical attenuation before this sensory boundary. Confusable source configurations with the same received features produce the same eligible evidence and local attention.
+
+| Received intensity | Heuristic distance band | Direction uncertainty | Distance uncertainty |
+| --- | --- | ---: | ---: |
+| At least 0.6 | near | 30° | 0.5 |
+| At least 0.2, below 0.6 | middle | 60° | 0.75 |
+| Audible, below 0.2 | far | 90° | 1 |
+| Below hearing floor | unknown | 180° | 1 |
+
+These bands do not establish physical distance: a weak nearby sound may be confusable with a stronger distant or obstructed sound. An unresolved bearing remains null and always carries 180° direction uncertainty, rather than a fabricated direction. The hearing path includes directions behind the head and outside the visual field. Invalid or unknown sources fail validation before propagation.
 
 The eligible `ReceivedSound` object contains correlation/tick metadata, received strength/onset, coarse bearing and uncertainties, distance band, and Lumi’s own listening orientation. Exact source coordinates, private identities, actual cause and crossed-barrier measurements remain private diagnostics. Own-body/head orientation is retained to compensate subsequent motor motion without remeasuring a hidden source.
 
@@ -95,11 +104,15 @@ This coarse signature can miss small/local changes and cannot recognize objects.
 
 ## Freshness, restore and replay
 
-A successful render proves that an image was produced for its original snapshot. It does not prove that the frame is suitable for a later decision. Logical applicability checks association, capture age, pose, scene context and ordering. Current policy rejects evidence older than 600 ticks, from a changed scene, sufficiently displaced/rotated poses, or older than already accepted evidence. Advancing a few simulation ticks while rendering is allowed. Freshness failures never establish that a suspected source is absent.
+A successful render proves that an image was produced for its original snapshot. It does not prove that the frame is suitable for a later decision. Current `lumi-attention-v2` automatic policy checks association, capture age, pose, ordering and run identity. It rejects evidence older than 600 ticks, sufficiently displaced/rotated poses, or older than already accepted evidence. Advancing a few simulation ticks while rendering is allowed.
+
+A global scene-revision change alone does **not** reject automatic sensor feedback or trigger backoff. The original revision remains diagnostic metadata; actual received image comparison establishes visible change. An edit behind a wall cannot influence automatic attention through a secret revision counter. A visible pixel change can still produce novelty. The existing Phase 2a manual head/observed-target scene-revision validation remains an explicit developer-control guard; this automatic-sensor correction does not remove it. Missing or freshness-rejected frames never establish that a suspected source is absent.
 
 Callbacks submit normalized `sensor_feedback` through the runtime’s ordered input path. Admission, failure/quota outcomes, original captured tick/pose/context, compact signature/hash and actual receipt order are recorded. They do not directly mutate head or attention state. Cross-branch and retired-run results are rejected. A successful stale historical frame remains inspectable while retained and is never relabelled as the present scene.
 
-Schema 4 (`lumi-attention-v1`) persists bounded exposure/adaptation state, commitments, developer arbitration, automatic action association, pending/deferred capture reasons, inspected-view signature, retry/cooldown windows and deterministic counters. Raw PNGs, Chromium processes, promises and transport handles remain outside checkpoints. Active upgrade preserves LIVE history, tick, existing pose, queues and recovery data; historical schema/rule replay retains its original mechanics. In-flight work restored into a new run is explicitly reconciled as interrupted rather than waiting for a dead renderer.
+Schema 4 with current rules `lumi-attention-v2` persists bounded exposure/adaptation state, commitments, developer arbitration, automatic action association, pending/deferred capture reasons, inspected-view signature, retry/cooldown windows and deterministic counters. Raw PNGs, Chromium processes, promises and transport handles remain outside checkpoints. In-flight work restored into a new run is explicitly reconciled as interrupted rather than waiting for a dead renderer.
+
+Active upgrade from `lumi-attention-v1` keeps the schema number and preserves LIVE history, world time, existing pose/state and ordered queues while replacing old `lastReceived` derived uncertainty/distance fields with the received-only heuristic. Recovery archives the source payload before publishing the upgrade and records `STATE_RULES_MIGRATED`. Explicit historical/offline replay retains `lumi-attention-v1` mechanics, including its original sensory and automatic freshness rules, so older diagnostic bundles keep their exact hashes. Historical schema/rule behavior is not silently reinterpreted as current live behavior.
 
 Current schema 4 movement also validates the whole swept body segment against physical colliders, including supported low-Hz/high-speed configurations. A fixture cannot be tunnelled through merely because the next endpoint is clear. Migrated overlap may only escape without moving through a deeper overlap. Historical schema 3 retains its original endpoint-only collision behavior for exact offline replay.
 

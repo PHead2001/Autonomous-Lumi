@@ -8,6 +8,7 @@ import { type FrameRenderer, type RenderedFrame } from '../server/vision/rendere
 import { createVisibilityFixture } from '../shared/vision-fixture.js';
 import type { WorldMode } from '../shared/lab-protocol.js';
 import type { CaptureIntent } from '../shared/attention-protocol.js';
+import { eyePose } from '../shared/eye-pose.js';
 
 const backend:RenderedFrame['backend']={configuration:'angle-d3d11',chromium:'fixture',webglVendor:'fixture',webglRenderer:'fixture',version:'fixture',flags:[]};
 const png=new PNG({width:128,height:128});png.data.fill(255);
@@ -42,6 +43,28 @@ test('automatic capture uses existing queue, coalesced reasons and ordered snaps
     assert.equal(result.lastCapture?.capturedTick,0);assert.equal(result.lastCapture?.receivedTick,7);assert.equal(result.lastCapture?.freshness,'applicable');
     assert.equal(result.baseline?.signature.length,48);assert.equal(runtime.simulation.checkpoint().experiences.length,0);assert.ok(manager.frame(runtime.target,request.captureId).length>100);
   }finally{host.close();await manager.close();await runtime.close();}
+});
+
+test('automatic delayed duplicate frame survives an unseen revision change without changing backoff or probe schedule',async()=>{
+  const original=fixture('hidden-revision'),checkpoint=original.checkpoint();
+  if(checkpoint.simulation.schemaVersion!==4)throw new Error('Current schema');
+  const c=checkpoint.simulation,p=eyePose(original.viewerState());
+  c.attention.baseline={capturedTick:0,sceneRevision:0,pose:{x:p.position[0],y:p.position[1],z:p.position[2],bodyHeading:p.bodyHeading,headYaw:p.headYaw,headPitch:p.headPitch},signature:Array(48).fill(255),frameHash:'a'.repeat(64),captureId:'baseline'};
+  c.attention.lastAcceptedCaptureTick=0;
+  const runtime=new BranchRuntime({worldId:'auto-test',branchId:'hidden-revision',mode:'EXPERIMENT',offline:true,checkpoint});
+  const renderer=new DelayedRenderer(),manager=new CaptureManager(()=>true,renderer),host=new AutomaticCaptureCoordinator(manager,()=>true,()=>0);
+  try{
+    runtime.simulation.step();host.pump([runtime]);const request=manager.view(runtime.target).latest!;
+    runtime.simulation.step();
+    runtime.enqueue({type:'configure_scene',illumination:1,fixture:'visibility',fixtureColor:'#21df68',doorOpenRadians:null});
+    runtime.simulation.step();assert.equal(runtime.simulation.snapshot().scene!.revision,1);
+    renderer.release();await manager.wait(runtime.target,request.captureId);await turn();
+    runtime.simulation.step();const state=logical(runtime);
+    assert.equal(state.lastCapture?.freshness,'applicable');assert.equal(state.lastCapture?.difference,0);
+    assert.equal(state.failureCount,0);assert.equal(state.retryAfterTick,0);
+    assert.equal(state.nextProbeTick,runtime.simulation.state.tick+state.config.probeIntervalTicks);
+    assert.equal(state.baseline?.sceneRevision,request.dynamicRevision);assert.equal(state.baseline?.capturedTick,request.tick);
+  }finally{host.close();await manager.close();await runtime.close();await original.close();}
 });
 test('paused, fast-forward and repeated host pumps cannot dispatch accumulated work; resumed quota rejection is recorded once',async()=>{
   let now=0;const runtime=fixture('pause'),renderer=new DelayedRenderer(),manager=new CaptureManager(()=>true,renderer),host=new AutomaticCaptureCoordinator(manager,()=>true,()=>now);

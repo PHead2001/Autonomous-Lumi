@@ -1,7 +1,7 @@
 import { acousticBarriers, type PhysicalBox, type Vector3Tuple } from '../shared/physical-scene.js';
 import { eyePose } from '../shared/eye-pose.js';
 import type { WorldState } from '../shared/protocol.js';
-import type { AttentionConfig, ReceivedSound } from '../shared/attention-protocol.js';
+import { deriveHearingEstimates, type AttentionConfig, type ReceivedSound } from '../shared/attention-protocol.js';
 import { rayBoxDistance } from './vision/grounding.js';
 
 export interface AcousticSource {x:number;y:number;z:number;intensity:number;suddenness:number;sourceId:string}
@@ -12,7 +12,7 @@ const inside=(point:Vector3Tuple,b:PhysicalBox)=>{
 };
 /** Finite straight-ray approximation, normalized game strength and room-distance units.
  * A barrier containing the emission point radiates out of that surface without self-loss. */
-export function propagateSound(source:AcousticSource,snapshot:WorldState,observationId:string,config:AttentionConfig):AcousticPropagation {
+export function propagateSound(source:AcousticSource,snapshot:WorldState,observationId:string,config:AttentionConfig,historical=false):AcousticPropagation {
   if(![source.x,source.y,source.z].every(v=>Number.isFinite(v)&&Math.abs(v)<=20)||![source.intensity,source.suddenness].every(v=>Number.isFinite(v)&&v>=0&&v<=1)||!source.sourceId||!/^[A-Za-z0-9_-]{1,100}$/.test(source.sourceId))throw new Error('Invalid or unknown acoustic source');
   const listener=eyePose(snapshot).position,origin:Vector3Tuple=[source.x,source.y,source.z];
   const delta=listener.map((v,i)=>v-origin[i]) as Vector3Tuple,distance=Math.hypot(...delta);
@@ -29,5 +29,7 @@ export function propagateSound(source:AcousticSource,snapshot:WorldState,observa
   const relative=Math.atan2(Math.sin(Math.atan2(source.x-listener[0],source.z-listener[2])-bodyHeading-headYaw),Math.cos(Math.atan2(source.x-listener[0],source.z-listener[2])-bodyHeading-headYaw));
   const audible=intensity>=config.hearingFloor;
   const bearingDegrees=audible&&horizontal>.05?Math.max(-180,Math.min(180,Math.round(relative*180/Math.PI/15)*15)):null;
-  return {source:structuredClone(source),listener,distance,transmission,barriers,barrierGroups:[...groups],received:{observationId,tick:snapshot.tick,intensity,suddenness:source.suddenness*(.85+.15*transmission),bearingDegrees,directionUncertaintyDegrees:bearingDegrees===null?180:Math.min(90,15+distance*2+groups.size*15+(1-intensity)*15),distanceBand:!audible?'unknown':distance<2?'near':distance<6?'middle':'far',distanceUncertainty:Math.min(1,.25+groups.size*.2+(1-intensity)*.35),bodyHeading,headYaw,provenance:'SIMULATED_HEARING'}};
+  // The v1 formula exists only to reproduce explicitly historical artifacts.
+  const estimates:Pick<ReceivedSound,'directionUncertaintyDegrees'|'distanceBand'|'distanceUncertainty'>=historical?{directionUncertaintyDegrees:bearingDegrees===null?180:Math.min(90,15+distance*2+groups.size*15+(1-intensity)*15),distanceBand:!audible?'unknown':distance<2?'near':distance<6?'middle':'far',distanceUncertainty:Math.min(1,.25+groups.size*.2+(1-intensity)*.35)}:deriveHearingEstimates({intensity,bearingDegrees},config.hearingFloor);
+  return {source:structuredClone(source),listener,distance,transmission,barriers,barrierGroups:[...groups],received:{observationId,tick:snapshot.tick,intensity,suddenness:source.suddenness*(.85+.15*transmission),bearingDegrees,...estimates,bodyHeading,headYaw,provenance:'SIMULATED_HEARING'}};
 }

@@ -5,7 +5,7 @@ import type { ActivityState, ControlAction, SubjectiveClock, WorldMode } from '.
 import { defaultHeadState, HEAD_LIMITS, isCapturedBearingEvidence, observedHeadTarget, observedWorldDirection, relativeObservedAim, validateHeadAction, validateHeadState, type HeadAction, type HeadState } from '../shared/vision-protocol.js';
 import { defaultPhysicalSceneState, validatePhysicalSceneState, validateSceneConfiguration, canOccupyCharacter, canRestoreCharacter, canMoveCharacter, canSweepCharacter, physicalSceneSnapshot, type PhysicalSceneState } from '../shared/physical-scene.js';
 import { isTargetEligible } from './vision/grounding.js';
-import { defaultAttentionState, validateAttentionState, validateSensoryCommand, imageSignatureDifference, type AttentionState, type AutomaticCaptureReason, type CaptureIntent, type SensorFeedbackCommand, type SensorPose, type SensoryCommand } from '../shared/attention-protocol.js';
+import { defaultAttentionState, deriveHearingEstimates, validateAttentionState, validateSensoryCommand, imageSignatureDifference, type AttentionState, type AutomaticCaptureReason, type CaptureIntent, type SensorFeedbackCommand, type SensorPose, type SensoryCommand } from '../shared/attention-protocol.js';
 import { eyePose } from '../shared/eye-pose.js';
 import { propagateSound } from './hearing.js';
 
@@ -185,8 +185,8 @@ export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rule
 }
 export const CURRENT_VISION_RULES='lumi-eyes-v2' as const;
 export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVersion'> {schemaVersion:3;rulesVersion:'lumi-eyes-v1'|typeof CURRENT_VISION_RULES;head:HeadState;scene:PhysicalSceneState}
-export const CURRENT_ATTENTION_RULES='lumi-attention-v1' as const;
-export interface CheckpointV4 extends Omit<CheckpointV3,'schemaVersion'|'rulesVersion'> {schemaVersion:4;rulesVersion:typeof CURRENT_ATTENTION_RULES;attention:AttentionState;genericSoundCount:number}
+export const CURRENT_ATTENTION_RULES='lumi-attention-v2' as const;
+export interface CheckpointV4 extends Omit<CheckpointV3,'schemaVersion'|'rulesVersion'> {schemaVersion:4;rulesVersion:'lumi-attention-v1'|typeof CURRENT_ATTENTION_RULES;attention:AttentionState;genericSoundCount:number}
 export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
@@ -394,7 +394,7 @@ function sensoryVisionPart(cp:CheckpointV4):CheckpointV3 {
 }
 export function validateSensoryCheckpoint(value:unknown):CheckpointV4 {
   const keys=['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId','head','scene','attention','genericSoundCount'];
-  const raw=object(value,keys,'sensory root');if(raw.schemaVersion!==4||raw.rulesVersion!==CURRENT_ATTENTION_RULES)fail('incompatible attention rules');
+  const raw=object(value,keys,'sensory root');if(raw.schemaVersion!==4||!['lumi-attention-v1',CURRENT_ATTENTION_RULES].includes(raw.rulesVersion as string))fail('incompatible attention rules');
   const cp=value as CheckpointV4;
   if(!integer(cp.genericSoundCount)||!integer(cp.nextSoundId,1)||cp.nextSoundId!==cp.door.slamCount+cp.genericSoundCount+1||!Array.isArray(cp.pendingInputs))fail('sensory sound counter');
   for(const input of cp.pendingInputs)validateCommand(input.command,true,true);
@@ -403,7 +403,13 @@ export function validateSensoryCheckpoint(value:unknown):CheckpointV4 {
   return structuredClone(cp);
 }
 export function upgradeSensoryCheckpoint(value:unknown):CheckpointV4 {
-  const source=validateCheckpoint(value);if(source.schemaVersion===4)return source;
+  const source=validateCheckpoint(value);
+  if(source.schemaVersion===4) {
+    if(source.rulesVersion===CURRENT_ATTENTION_RULES)return source;
+    const attention=source.attention;
+    if(attention.lastReceived)attention.lastReceived={...attention.lastReceived,...deriveHearingEstimates(attention.lastReceived,attention.config.hearingFloor)};
+    return {...source,rulesVersion:CURRENT_ATTENTION_RULES,attention};
+  }
   const cp=upgradeVisionCheckpoint(source);
   return {...cp,schemaVersion:4,rulesVersion:CURRENT_ATTENTION_RULES,genericSoundCount:0,attention:defaultAttentionState(cp.tick)};
 }
@@ -413,12 +419,13 @@ const poseDifference=(a:SensorPose,b:SensorPose)=>({distance:Math.hypot(a.x-b.x,
 
 /** Local sensing never encodes experiences. All future-affecting sensor feedback is an ordered input. */
 export class SensorySimulation extends VisionSimulation {
-  private attention:AttentionState;private genericSoundCount:number;
-  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode}) {
-    const cp=upgradeSensoryCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
+  private attention:AttentionState;private genericSoundCount:number;private readonly attentionRules:CheckpointV4['rulesVersion'];
+  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode;historical?:boolean}) {
+    const source=options.checkpoint??new Simulation({seed:options.seed}).checkpoint();
+    const cp=options.historical&&(source as {schemaVersion?:number}).schemaVersion===4?validateSensoryCheckpoint(source):upgradeSensoryCheckpoint(source);
     super({...options,checkpoint:sensoryVisionPart(cp),historical:true});
     this.data.pendingInputs=structuredClone(cp.pendingInputs);this.data.nextSoundId=cp.nextSoundId;
-    this.attention=cp.attention;this.genericSoundCount=cp.genericSoundCount;
+    this.attention=cp.attention;this.genericSoundCount=cp.genericSoundCount;this.attentionRules=cp.rulesVersion;
   }
   protected override supportsSensoryInputs():boolean{return true;}
   protected override createDoorSound():AcousticEvent&{y:number;sourceId:string} {
@@ -437,7 +444,7 @@ export class SensorySimulation extends VisionSimulation {
   override hear(sound:AcousticEvent,events:DeterministicEvent[]=[],inputSequence?:number,parentSequence?:number):DeterministicEvent[] {
     const a=this.attention,c=a.config;
     let propagation;
-    try {propagation=propagateSound({x:sound.x,y:'y' in sound?Number(sound.y):1.5,z:sound.z,intensity:sound.intensity,suddenness:sound.suddenness,sourceId:'sourceId' in sound?String(sound.sourceId):`sound-${sound.id}`},this.snapshot(),`heard-${a.nextObservationId}`,c);}
+    try {propagation=propagateSound({x:sound.x,y:'y' in sound?Number(sound.y):1.5,z:sound.z,intensity:sound.intensity,suddenness:sound.suddenness,sourceId:'sourceId' in sound?String(sound.sourceId):`sound-${sound.id}`},this.snapshot(),`heard-${a.nextObservationId}`,c,this.attentionRules==='lumi-attention-v1');}
     catch {this.emit(events,'ACOUSTIC_REJECTED','hearing','invalid_source',{reason:'invalid_or_unknown_source'},inputSequence,parentSequence);return events;}
     a.nextObservationId++;const r=propagation.received;a.lastReceived=structuredClone(r);
     const trace=this.emit(events,'ACOUSTIC_PROPAGATION','hearing','computed',{observationId:r.observationId,sourceX:propagation.source.x,sourceY:propagation.source.y,sourceZ:propagation.source.z,sourceId:propagation.source.sourceId,listenerX:propagation.listener[0],listenerY:propagation.listener[1],listenerZ:propagation.listener[2],distance:propagation.distance,transmission:propagation.transmission,barriers:propagation.barriers.join(' '),barrierGroups:propagation.barrierGroups.join(' '),sceneRevision:this.scene.revision,distanceFalloff:c.distanceFalloff,wallTransmission:c.wallTransmission,doorTransmission:c.doorTransmission,objectTransmission:c.objectTransmission},inputSequence,parentSequence);
@@ -546,7 +553,9 @@ export class SensorySimulation extends VisionSimulation {
     let freshness='missing',difference:number|null=null;
     if(command.stage==='result'&&command.outcome==='success') {
       const delta=poseDifference(command.pose,sensorPose(this.snapshot()));
-      freshness=command.capturedTick<=a.lastAcceptedCaptureTick?'superseded':tick-command.capturedTick>c.resultMaxAgeTicks?'age_expired':command.sceneRevision!==this.scene.revision?'scene_changed':delta.distance>2||delta.angle>Math.PI/3?'pose_changed':'applicable';
+      // Scene revision is capture provenance, not perceived evidence. Keep the
+      // old freshness rule only for exact v1 replay; v2 compares recorded pixels.
+      freshness=command.capturedTick<=a.lastAcceptedCaptureTick?'superseded':tick-command.capturedTick>c.resultMaxAgeTicks?'age_expired':this.attentionRules==='lumi-attention-v1'&&command.sceneRevision!==this.scene.revision?'scene_changed':delta.distance>2||delta.angle>Math.PI/3?'pose_changed':'applicable';
       if(freshness==='applicable') {
         const baseline=a.baseline,expected=baseline?poseDifference(command.pose,baseline.pose):null;
         difference=baseline?imageSignatureDifference(command.signature!,baseline.signature):null;
@@ -589,6 +598,6 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:CURRENT_ATTENTION_RULES,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }

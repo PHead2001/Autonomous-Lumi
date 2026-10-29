@@ -4,10 +4,22 @@ export type AutomaticCaptureReason = typeof AUTOMATIC_CAPTURE_REASONS[number];
 export interface ReceivedSound {
   observationId: string; tick: number; intensity: number; suddenness: number;
   bearingDegrees: number | null; directionUncertaintyDegrees: number;
+  /** Fallible loudness-based proximity estimate; never a measurement of source distance. */
   distanceBand: 'near'|'middle'|'far'|'unknown'; distanceUncertainty: number;
   /** Own pose at reception, retained to compensate only for her later rotation. */
   bodyHeading: number; headYaw: number;
   provenance: 'SIMULATED_HEARING';
+}
+/** Current hearing estimates consume only received features. Coarse classes avoid
+ * encoding propagation geometry in uncertainty; emission strength is unknown. */
+export function deriveHearingEstimates(received:Pick<ReceivedSound,'intensity'|'bearingDegrees'>,hearingFloor:number):Pick<ReceivedSound,'directionUncertaintyDegrees'|'distanceBand'|'distanceUncertainty'> {
+  const audible=received.intensity>=hearingFloor;
+  const loud=received.intensity>=.6,moderate=received.intensity>=.2;
+  return {
+    directionUncertaintyDegrees:!audible||received.bearingDegrees===null?180:loud?30:moderate?60:90,
+    distanceBand:!audible?'unknown':loud?'near':moderate?'middle':'far',
+    distanceUncertainty:!audible?1:loud?.5:moderate?.75:1,
+  };
 }
 export interface SensorPose { x:number;y:number;z:number;bodyHeading:number;headYaw:number;headPitch:number }
 export interface CaptureIntent {
