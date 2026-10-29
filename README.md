@@ -52,7 +52,7 @@ The default application-wide spending ceiling is **US$1**, with durable reservat
 
 OpenAI Decisions has an independent `OPENAI_API_KEY` and enable flag. It uses the actual Decisions endpoint for explicit isolated comparisons, remains disabled for normal LIVE use and does not gate reflexes or the main model. Main and Decisions measurements are separate; `world_seconds_per_model_response` stays **N/A** without successful main responses. Ordinary `npm test` never makes paid calls.
 
-See [Multimodal interpretation and experience](docs/multimodal-experience.md) for configuration, budgets, action/provenance boundaries, replay/recovery and explicit integration commands. [Phase 2c results](docs/phase-2c-results.md) separates previous paid acceptance from the pixel-confidence correction. The correction passed 248 offline tests, lint/build and focused actual-renderer checks; latest hosted review is pending. All six previous paid bundles still replay with exact canonical results; no new paid calls were made. Latencies, cost accounting and remaining cleanup/audio limits are explicit.
+See [Multimodal interpretation and experience](docs/multimodal-experience.md) for configuration, budgets, action/provenance boundaries, replay/recovery and explicit integration commands. [Phase 2c results](docs/phase-2c-results.md) separates previous paid acceptance from the pixel-confidence correction. The correction passed 248 offline tests, lint/build and focused actual-renderer checks; hosted source review is clean. All six previous paid bundles still replay with exact canonical results; no new paid calls were made. Latencies, cost accounting and remaining cleanup/audio limits are explicit.
 
 ## Phase 2b: hearing and attention
 
