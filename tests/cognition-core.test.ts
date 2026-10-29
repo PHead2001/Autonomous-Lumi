@@ -104,3 +104,66 @@ test('2c genuine developer override interrupts model look and retains developer 
  const eye=eyePose(f.sim.snapshot()).position;f.enqueue({type:'emit_sound',x:eye[0],y:eye[1],z:eye[2]+1,intensity:1,suddenness:1,sourceId:'nearby-after-developer'});const events=f.sim.step();
  assert.equal(f.sim.attentionState().lastDecision?.outcome,'ignored');assert.equal(f.sim.attentionState().lastDecision?.reason,'developer_priority');assert.equal(f.sim.attentionState().developerUntilTick,priorityUntil);assert.ok(events.some(event=>event.type==='REFLEX_STATE'));
 });
+
+function capacityHistory(count:number):CheckpointV5 {
+ const f=fixture();f.enqueue(f.request);f.sim.step();const result=f.result();result.proposal!.interpretation='x'.repeat(220);f.enqueue(result);f.sim.step();const cp=f.sim.checkpoint(),request=cp.cognition.requests[0],experience=cp.realExperiences[0];
+ cp.cognition.requests=Array.from({length:count},(_,index)=>{
+  const record=structuredClone(request),id='record-'+String(index).padStart(3,'0');record.request.requestId=id;record.result!.requestId=id;record.encoding!.experienceId=index+1;
+  record.request.selection.context.experiences=Array.from({length:8},()=>({interpretation:experience.interpretation,uncertainty:experience.uncertainty}));return record;
+ });
+ cp.realExperiences=Array.from({length:count},(_,index)=>({...structuredClone(experience),id:index+1,requestId:cp.cognition.requests[index].request.requestId,encodingId:cp.cognition.identity.historyId+'_'+cp.cognition.requests[index].request.requestId}));
+ cp.cognition.responses=count;cp.cognition.nextRequestTick=0;return cp;
+}
+
+test('2c maximum escaped normalized reply and real experience fit the explicit terminal and delivery reserves',async t=>{
+ const {cognitionEnvelopeBytes,COGNITION_TERMINAL_BYTES,COGNITION_PENDING_BYTES}=await import('../server/checkpoint-capacity.js');
+ const f=fixture();f.enqueue(f.request);f.sim.step();const pending=f.sim.checkpoint(),record=pending.cognition.requests[0],selection=record.request.selection;
+ const id='i'.repeat(100),escaped='\ud800'.repeat(1200),identity={worldId:id,historyId:id,branchId:id,runId:id,mode:'LIVE' as const};
+ record.request.requestId=id;selection.identity=identity;selection.captureId=id;selection.observationId=id;selection.context.observationId=id;
+ selection.context.shapes=Array.from({length:32},(_,index)=>({handle:String(index).padStart(3,'0')+'h'.repeat(97),bearingDegrees:180,elevationDegrees:90,distanceBand:'unknown',sampleVisibilityBand:'medium',uncertainty:'geometric_samples_only'}));
+ selection.context.experiences=Array.from({length:8},()=>({interpretation:escaped,uncertainty:1.2345678901234567e-100}));
+ record.request.provider='\ud800'.repeat(80);record.request.model='\ud800'.repeat(120);record.request.promptRevision=id;
+ const result:CognitionResultCommand={type:'cognition_result',requestId:id,identity,outcome:'success',proposal:{observationId:id,frameHash,interpretation:escaped,uncertainty:1.2345678901234567e-100,evidenceHandles:selection.context.shapes.slice(0,16).map(shape=>shape.handle),action:{type:'inspect',handle:selection.context.shapes[0].handle}},metrics:{latencyMs:1.2345678901234567e-100,attempts:10,inputTokens:Number.MAX_SAFE_INTEGER,outputTokens:Number.MAX_SAFE_INTEGER,costUsd:Number.MAX_VALUE,costBasis:'reported',modelRevision:'\ud800'.repeat(160)}};
+ assert.doesNotThrow(()=>parseCognitionProposal(result.proposal));const {validateCognitionCommand}=await import('../shared/cognition-protocol.js');assert.doesNotThrow(()=>validateCognitionCommand(result));
+ const delivered=structuredClone(pending);delivered.pendingInputs.push({sequence:1,receivedTick:3,applyTick:4,command:result,admission:'queued'});
+ const completed=structuredClone(pending),r=completed.cognition.requests[0];r.status='completed';r.resultTick=4;r.result=result;r.action={status:'rejected',reason:'r'.repeat(100),actionId:Number.MAX_SAFE_INTEGER,tick:Number.MAX_SAFE_INTEGER};r.encoding={status:'admitted',reason:'trusted_attended_interpretation',experienceId:1};
+ const sample=capacityHistory(1).realExperiences[0];completed.realExperiences=[{...sample,id:1,requestId:id,encodingId:id+'_'+id,identity,captureId:id,observationId:id,interpretation:escaped,uncertainty:result.proposal!.uncertainty,evidenceHandles:result.proposal!.evidenceHandles,actionOutcome:{status:'executed',reason:'\ud800'.repeat(100),actionId:Number.MAX_SAFE_INTEGER,tick:Number.MAX_SAFE_INTEGER}}];
+ const combined=structuredClone(completed);combined.pendingInputs=delivered.pendingInputs;
+ const terminal=cognitionEnvelopeBytes(completed)-cognitionEnvelopeBytes(pending),delivery=cognitionEnvelopeBytes(delivered)-cognitionEnvelopeBytes(pending),total=cognitionEnvelopeBytes(combined)-cognitionEnvelopeBytes(pending);
+ t.diagnostic(JSON.stringify({terminalBytes:terminal,deliveryBytes:delivery,combinedBytes:total,terminalReserve:COGNITION_TERMINAL_BYTES,combinedReserve:COGNITION_PENDING_BYTES}));
+ assert.ok(terminal<COGNITION_TERMINAL_BYTES,`terminal ${terminal} exceeds reserve`);assert.ok(delivery<COGNITION_TERMINAL_BYTES,`delivery ${delivery} exceeds reserve`);assert.ok(total<COGNITION_PENDING_BYTES,`combined ${total} exceeds reserve`);
+});
+
+test('2c near-capacity admission measures actual pretty recovery/named envelopes and keeps pending and encoded state savable',async t=>{
+ const {fitsCognitionStorage,cognitionStorageBytes}=await import('../server/checkpoint-capacity.js');const {checkpointBytes,MAX_CHECKPOINT_BYTES,namedCheckpointPayload,recoveryCheckpointPayload,atomicJson}=await import('../server/checkpoint-storage.js');
+ const directory=await mkdtemp(join(tmpdir(),'lumi-cognition-storage-capacity-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const first=fixture();const candidate=structuredClone(first.request);candidate.requestId='capacity-request';candidate.selection.context.experiences=Array.from({length:8},()=>({interpretation:'x'.repeat(220),uncertainty:.6}));
+ let checkpoint:CheckpointV5|null=null,low=1,high=255;
+ while(low<=high){
+  const count=Math.floor((low+high)/2),cp=capacityHistory(count),projected=structuredClone(cp);projected.cognition.requests.push({request:candidate,requestedTick:cp.tick+1,status:'pending',resultTick:null,result:null,action:null,encoding:null});
+  if(fitsCognitionStorage(projected)){checkpoint=cp;low=count+1;}else high=count-1;
+ }
+ assert.ok(checkpoint);assert.ok(checkpoint.cognition.requests.length>100);assert.doesNotThrow(()=>validateCheckpoint(checkpoint));
+ const sim=new CognitionSimulation({mode:'LIVE',checkpoint,historical:true});assert.equal(sim.enqueue(candidate).input.admission,'queued');sim.step();assert.equal(sim.cognitionState().requests.at(-1)?.status,'pending');
+ const base=new BranchRuntime({mode:'LIVE',worldId:'world',branchId:'live',historyId:'history',offline:true});const runtime=(simulation:CheckpointV5)=>({...base.checkpoint(),simulation});
+ const {store}=await RecoveryStore.open({directory});await store.save(runtime(sim.checkpoint()));
+ const response=first.result();response.requestId=candidate.requestId;response.proposal!.interpretation='\ud800'.repeat(1200);response.metrics.modelRevision='\ud800'.repeat(160);response.metrics.costUsd=123.45;response.metrics.costBasis='reported';
+ assert.equal(sim.enqueue(response).input.admission,'queued');await store.save(runtime(sim.checkpoint()));sim.step();assert.equal(sim.cognitionState().requests.at(-1)?.encoding?.status,'admitted');
+ const encoded=sim.checkpoint();assert.ok(cognitionStorageBytes(encoded)<=MAX_CHECKPOINT_BYTES);const payload=recoveryCheckpointPayload(runtime(encoded),store.historyId,Number.MAX_SAFE_INTEGER),named=namedCheckpointPayload(runtime(encoded),{worldId:'world',branchId:'live',historyId:'history',mode:'LIVE',createdAt:new Date().toISOString()});
+ assert.ok(checkpointBytes(payload)<=MAX_CHECKPOINT_BYTES);assert.ok(checkpointBytes(named)<=MAX_CHECKPOINT_BYTES);assert.ok(checkpointBytes(payload)>MAX_CHECKPOINT_BYTES* .7,'fixture must exercise near-capacity persisted bytes');
+ t.diagnostic(JSON.stringify({records:encoded.realExperiences.length,recoveryBytes:checkpointBytes(payload),namedBytes:checkpointBytes(named),requiredWithFutureGrowth:cognitionStorageBytes(encoded),limit:MAX_CHECKPOINT_BYTES}));
+ const oldHistory=capacityHistory(256);for(const [index,record] of oldHistory.cognition.requests.entries()){const id=String(index).padStart(3,'0')+'r'.repeat(77);record.request.requestId=id;record.result!.requestId=id;oldHistory.realExperiences[index].requestId=id;oldHistory.realExperiences[index].encodingId='history_'+id;record.request.selection.context.shapes[0].handle='h'.repeat(100);record.result!.proposal!.evidenceHandles=['h'.repeat(100)];oldHistory.realExperiences[index].evidenceHandles=['h'.repeat(100)];}
+ const oldUnchecked=runtime(oldHistory),oldCompact=Buffer.byteLength(JSON.stringify(oldUnchecked.simulation)),oldPretty=checkpointBytes(recoveryCheckpointPayload(oldUnchecked,store.historyId,1));t.diagnostic(JSON.stringify({oldCompactBytes:oldCompact,oldPersistedBytes:oldPretty}));assert.ok(oldCompact<1400000,`old compact ${oldCompact}`);assert.ok(oldPretty>MAX_CHECKPOINT_BYTES,`old pretty ${oldPretty}`);assert.doesNotThrow(()=>validateCheckpoint(oldHistory));
+ await store.save(runtime(encoded));await atomicJson(join(directory,'near-capacity-named.json'),named);const loaded=await RecoveryStore.open({directory});assert.deepEqual((loaded.checkpoint as import('../server/branch-runtime.js').RuntimeCheckpoint).simulation,encoded);
+ const rejected=structuredClone(candidate);rejected.requestId='too-large-request';rejected.selection.context.experiences=Array.from({length:8},()=>({interpretation:'\ud800'.repeat(1200),uncertainty:.6}));rejected.selection.context.shapes=Array.from({length:32},(_,index)=>({...candidate.selection.context.shapes[0],handle:'shape-'+index}));
+ const before=sim.cognitionState().requests.length,admission=sim.enqueue(rejected);assert.equal(admission.input.admission,'queue_full');assert.ok(admission.events.some(event=>event.type==='INPUT_ADMITTED'&&event.data.reason==='checkpoint_capacity'));assert.equal(sim.cognitionState().requests.length,before);await store.save(runtime(sim.checkpoint()));
+ const {BranchRegistry}=await import('../server/branch-registry.js');const registry=new BranchRegistry({directory:join(directory,'fork'),checkpoint:runtime(encoded),historyId:'history'});
+ try {
+  const saved=await registry.checkpoint(registry.live.target),experiment=await registry.fork(registry.live.target,saved.id,'near-capacity');
+  for(let index=0;index<256;index++)experiment.applyControl({type:'synthetic-clock',sensed:true,attended:true,encoded:true,observedSeconds:1.2345678901234567e-100,uncertaintySeconds:1.2345678901234567e-100});
+  const full=experiment.checkpoint();full.simulation.tick=100000;full.simulation.activity={status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:Array.from({length:10000},(_,index)=>(index+1)*10),completionCount:1,activityId:1};
+  assert.doesNotThrow(()=>validateRuntimeCheckpoint(full));const namedFull=namedCheckpointPayload(full,{worldId:'lumi',branchId:'near-capacity',historyId:'history',mode:'EXPERIMENT',createdAt:new Date().toISOString()});assert.ok(checkpointBytes(namedFull)<=MAX_CHECKPOINT_BYTES);await atomicJson(join(directory,'full-fork-named.json'),namedFull);await registry.checkpoint(experiment.target);
+  t.diagnostic(JSON.stringify({forkSyntheticCount:full.simulation.experiences.length,fullActivityMilestones:full.simulation.activity.appliedMilestones.length,forkBytes:checkpointBytes(namedFull)}));
+ } finally {await registry.close();}
+ await base.close();
+});

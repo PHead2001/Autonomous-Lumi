@@ -1,0 +1,48 @@
+import { checkpointBytes, MAX_CHECKPOINT_BYTES, namedCheckpointPayload, recoveryCheckpointPayload } from './checkpoint-storage.js';
+import type { CheckpointV5, SyntheticExperience } from './simulation.js';
+
+/** Per pending request: 32 KiB for its largest normalized terminal record plus
+ * real experience, and 32 KiB for delivery through the ordered input queue.
+ * This includes JSON-escaped 1200-code-unit text, 16 evidence handles, maximum
+ * identity fields and bounded metrics. Maximum-shape regressions verify it. */
+export const COGNITION_TERMINAL_BYTES = 32 * 1024;
+export const COGNITION_PENDING_BYTES = 2 * COGNITION_TERMINAL_BYTES;
+/** Fixed-size motor (8 scan points), sensory (8 exposures, 2 intentions with
+ * 12 triggers each, 48-channel baseline), scalar counters and scope migration.
+ * Growing activity/synthetic arrays and input payloads are measured separately. */
+export const COGNITION_MOTOR_SENSOR_BYTES = 64 * 1024;
+const MAX_ID = 'x'.repeat(64); // Runtime/registry/recovery identifiers: validId max64.
+
+/** Same builders and JSON indentation as actual storage. Runtime controls and
+ * wrapper metadata use maximal widths allowed by their validators/writers. */
+export function cognitionEnvelopeBytes(simulation:CheckpointV5):number {
+  const runtime={schemaVersion:4,kind:'lumi-branch-runtime',mode:'EXPERIMENT',simulation,
+    control:{paused:false,speed:1.1234567890123457,fastForwardRemaining:100000,nextOperationSequence:Number.MAX_SAFE_INTEGER,loggingMode:'verbose',compressClosed:false},
+    scheduler:{config:{hz:120,maxStepsPerPump:1000,maxBacklogSteps:10000,suspendThresholdMs:Number.MAX_VALUE},backlogMs:1.2345678901234567e-100}};
+  return Math.max(checkpointBytes(recoveryCheckpointPayload(runtime,MAX_ID,Number.MAX_SAFE_INTEGER)),checkpointBytes(namedCheckpointPayload(runtime,{worldId:MAX_ID,branchId:MAX_ID,historyId:MAX_ID,mode:'EXPERIMENT',createdAt:'+275760-09-13T00:00:00.000Z'})));
+}
+const MAX_MILESTONES=Array.from({length:10000},(_,index)=>(index+1)*10);
+const MAX_SYNTHETIC:SyntheticExperience[]=Array.from({length:256},(_,index)=>({id:index+1,tick:Number.MAX_SAFE_INTEGER,kind:'clock',provenance:'TEST STUB',observedSeconds:1.2345678901234567e-100,uncertaintySeconds:1.2345678901234567e-100}));
+
+/** Required durable bytes, including future work already admitted. No records
+ * are trimmed to make this fit. Replaying the same normalized inputs makes the
+ * same capacity decision without the runtime, filesystem, provider or renderer. */
+export function cognitionStorageBytes(checkpoint:CheckpointV5):number {
+  const future:CheckpointV5={...checkpoint,activity:{...checkpoint.activity,status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:MAX_MILESTONES,completionCount:1,activityId:Number.MAX_SAFE_INTEGER},
+    // A LIVE history may fork into EXPERIMENT, where these slots become legal.
+    experiences:MAX_SYNTHETIC,nextExperienceId:257};
+  const pending=new Set(checkpoint.cognition.requests.filter(request=>request.status==='pending').map(request=>request.request.requestId));
+  for(const input of checkpoint.pendingInputs)if(input.command.type==='cognition_request')pending.add(input.command.requestId);
+  const delivered=new Set<string>();
+  const withoutDelivery=future.pendingInputs.filter(input=>{
+    if(input.command.type==='cognition_result'&&pending.has(input.command.requestId)){delivered.add(input.command.requestId);return false;}
+    return true;
+  });
+  const bytes=cognitionEnvelopeBytes(future);
+  // The reserved delivery allowance is replaced by its actual serialized bytes
+  // once that result is queued. Do not double-count the same pending reply.
+  const deliveryBytes=delivered.size?bytes-cognitionEnvelopeBytes({...future,pendingInputs:withoutDelivery}):0;
+  const pendingBytes=pending.size*COGNITION_PENDING_BYTES-Math.min(delivered.size*COGNITION_TERMINAL_BYTES,deliveryBytes);
+  return bytes+COGNITION_MOTOR_SENSOR_BYTES+pendingBytes;
+}
+export const fitsCognitionStorage=(checkpoint:CheckpointV5):boolean=>cognitionStorageBytes(checkpoint)<=MAX_CHECKPOINT_BYTES;

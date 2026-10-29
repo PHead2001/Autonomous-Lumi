@@ -8,6 +8,7 @@ import { isTargetEligible } from './vision/grounding.js';
 import { defaultAttentionState, deriveHearingEstimates, validateAttentionState, validateSensoryCommand, imageSignatureDifference, type AttentionState, type AutomaticCaptureReason, type CaptureIntent, type SensorFeedbackCommand, type SensorPose, type SensoryCommand } from '../shared/attention-protocol.js';
 import { eyePose } from '../shared/eye-pose.js';
 import { propagateSound } from './hearing.js';
+import { fitsCognitionStorage } from './checkpoint-capacity.js';
 import { COGNITION_RULES, COGNITION_LIMITS, validateCognitionCommand, validateCognitionIdentity, type CognitionCommand, type CognitionState, type CognitionIdentity, type CognitionRequestCommand, type CognitionResultCommand, type RealExperience, type CognitionActionOutcome, type CognitionObservationRequestCommand } from '../shared/cognition-protocol.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
@@ -92,6 +93,7 @@ export class Simulation {
   protected supportsVisionInputs():boolean{return false;}
   protected supportsSensoryInputs():boolean{return false;}
   protected supportsCognitionInputs():boolean{return false;}
+  protected additionalInputCapacityReason(input:OrderedInput):string|null{void input;return null;}
   protected applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean{void input;void events;return false;}
   protected onDoorChanged():void{}
   protected createDoorSound():AcousticEvent {const d=this.data;return {id:d.nextSoundId++,time:d.tick/d.config.hz,intensity:1,suddenness:1,x:3.1,z:-3.4};}
@@ -118,8 +120,10 @@ export class Simulation {
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
     const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
+    const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
+    if(capacityReason!==null)input.admission='queue_full';
     const received = this.emit(events, 'INPUT_RECEIVED', 'input', 'received', { command: normalized.type }, input.sequence);
-    this.emit(events, 'INPUT_ADMITTED', 'input', input.admission, {}, input.sequence, received.sequence);
+    this.emit(events, 'INPUT_ADMITTED', 'input', input.admission, capacityReason===null?{}:{reason:capacityReason}, input.sequence, received.sequence);
     if (input.admission === 'queued') this.data.pendingInputs.push(structuredClone(input));
     return { input: structuredClone(input), events };
   }
@@ -651,6 +655,13 @@ export class CognitionSimulation extends SensorySimulation {
   if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||e.identity.historyId!==this.cognition.identity.historyId)||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
  }
  protected override supportsCognitionInputs():boolean{return true;}
+ protected override additionalInputCapacityReason(input:OrderedInput):string|null {
+  return fitsCognitionStorage({...this.checkpoint(),pendingInputs:[...this.data.pendingInputs,input]})?null:'checkpoint_capacity';
+ }
+ override applyAction(action:ControlAction):DeterministicEvent[]{
+  if((action.type==='activity-start'||action.type==='synthetic-cue'||action.type==='synthetic-clock')&&!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents additional activity or synthetic experience');
+  return super.applyAction(action);
+ }
  cognitionState():CognitionState{return structuredClone(this.cognition);}
  admittedExperiences():RealExperience[]{return structuredClone(this.realExperiences);}
  experienceRecords():Experience[]{return structuredClone([...super.checkpoint().experiences,...this.realExperiences]);}
@@ -672,7 +683,7 @@ export class CognitionSimulation extends SensorySimulation {
   else if(s.context.sound!==null){const received=a.lastReceived;if(!received)reason='unreceived_sound';else{const {tick:ignoreTick,bodyHeading:ignoreBody,headYaw:ignoreHead,...sound}=received;void ignoreTick;void ignoreBody;void ignoreHead;if(received.tick>s.capturedTick||a.lastDecision?.observationId!==received.observationId||a.lastDecision.outcome==='ignored'||canonicalStringify({...sound,relation:received.tick===s.capturedTick?'same_capture':'before_image',ageBand:s.capturedTick-received.tick<=90?'recent':'earlier'})!==canonicalStringify(s.context.sound))reason='unreceived_sound';}}
   if(reason){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason},sequence);return;}
   const candidate={request:structuredClone(command),requestedTick:tick,status:'pending' as const,resultTick:null,result:null,action:null,encoding:null};
-  if(Buffer.byteLength(JSON.stringify({...this.checkpoint(),cognition:{...c,requests:[...c.requests,candidate]}}))>1400000){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason:'checkpoint_capacity'},sequence);return;}
+  if(!fitsCognitionStorage({...this.checkpoint(),cognition:{...c,requests:[...c.requests,candidate]}})){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason:'checkpoint_capacity'},sequence);return;}
   c.requests.push(candidate);c.nextRequestTick=tick+COGNITION_LIMITS.requestIntervalTicks;if(command.purpose==='interpretation')c.firstRequestTick??=tick;c.observationRequestedTick=null;
   this.emit(events,'COGNITION_ATTENTION','attention','selected',{requestId:command.requestId,observationId:s.observationId,captureId:s.captureId,frameHash:s.frameHash,capturedTick:s.capturedTick,attentionTick:s.attentionTick,intentId:s.intentId,source:s.source,attended:true,encoded:false},sequence);
   this.emit(events,'COGNITION_REQUEST','cognition','pending',{requestId:command.requestId,provider:command.provider,model:command.model,observationId:s.observationId,frameHash:s.frameHash,promptRevision:command.promptRevision,schemaRevision:command.schemaRevision},sequence);
@@ -720,7 +731,9 @@ export class CognitionSimulation extends SensorySimulation {
   else if(this.realExperiences.length>=COGNITION_LIMITS.experiences){r.encoding={status:'failed',reason:'experience_capacity',experienceId:null};}
   else {
    const e:RealExperience={id:this.realExperiences.length+1,tick,kind:'perception',provenance:'ATTENDED_RENDERER_INTERPRETATION',encodingId:`${s.identity.historyId}_${command.requestId}`,identity:structuredClone(s.identity),requestId:command.requestId,captureId:s.captureId,observationId:s.observationId,frameHash:s.frameHash,source:'actual_renderer',capturedTick:s.capturedTick,attentionTick:s.attentionTick,interpretationTick:tick,encodedTick:tick,interpretation:p.interpretation,uncertainty:p.uncertainty,evidenceHandles:structuredClone(p.evidenceHandles),actionOutcome:r.action.status==='executed'?structuredClone(r.action):null};
-   if(Buffer.byteLength(JSON.stringify({...this.checkpoint(),realExperiences:[...this.realExperiences,e]}))>1500000)r.encoding={status:'failed',reason:'checkpoint_capacity',experienceId:null};else{this.realExperiences.push(e);r.encoding={status:'admitted',reason:'trusted_attended_interpretation',experienceId:e.id};}
+   const encoded={status:'admitted' as const,reason:'trusted_attended_interpretation',experienceId:e.id};
+   const projected=this.checkpoint();projected.realExperiences.push(e);projected.cognition.requests.find(request=>request.request.requestId===command.requestId)!.encoding=encoded;
+   if(!fitsCognitionStorage(projected))r.encoding={status:'failed',reason:'checkpoint_capacity',experienceId:null};else{this.realExperiences.push(e);r.encoding=encoded;}
   }
   this.emit(events,r.encoding.status==='admitted'?'EXPERIENCE_ENCODED':'EXPERIENCE_ENCODING','experience',r.encoding.status,{requestId:command.requestId,experienceId:r.encoding.experienceId??'none',provenance:'ATTENDED_RENDERER_INTERPRETATION',source:s.source,reason:r.encoding.reason,sensed:true,attended:true,encoded:r.encoding.status==='admitted',capturedTick:s.capturedTick,attentionTick:s.attentionTick,interpretationTick:tick,encodedTick:tick,observationId:s.observationId,frameHash:s.frameHash},sequence);
  }
