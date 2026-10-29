@@ -1,4 +1,4 @@
-import { currentCognitionProfile } from '../shared/cognition-protocol.js';
+import { currentCognitionProfile, COGNITION_SCHEMA_REVISION, cognitionValidationError, validateCognitionProposalReferences } from '../shared/cognition-protocol.js';
 import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../shared/protocol.js';
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
@@ -716,12 +716,14 @@ export class CognitionSimulation extends SensorySimulation {
   if(!r||!sameIdentity(command.identity,r.request.selection.identity)||command.outcome!=='interrupted'&&!sameIdentity(command.identity,c.identity)){this.emit(events,'COGNITION_RESULT','cognition','rejected',{requestId:command.requestId,reason:'foreign_or_unknown_request'},sequence);return;}
   if(r.status!=='pending'){this.emit(events,'COGNITION_RESULT','cognition','duplicate',{requestId:command.requestId,reason:'already_completed'},sequence);return;}
   r.status='completed';r.result=structuredClone(command);r.resultTick=tick;if(r.request.purpose==='interpretation'&&command.outcome==='success'){c.responses++;c.lastResponseTick=tick;}
-  this.emit(events,'COGNITION_RESULT','cognition',command.outcome,{requestId:command.requestId,latencyMs:command.metrics.latencyMs,attempts:command.metrics.attempts,costUsd:command.metrics.costUsd??'unknown',costBasis:command.metrics.costBasis,inputTokens:command.metrics.inputTokens??'unknown',outputTokens:command.metrics.outputTokens??'unknown'},sequence);
+  this.emit(events,'COGNITION_RESULT','cognition',command.outcome,{requestId:command.requestId,latencyMs:command.metrics.latencyMs,attempts:command.metrics.attempts,costUsd:command.metrics.costUsd??'unknown',costBasis:command.metrics.costBasis,...(command.validationError?{reason:command.validationError}:{}),inputTokens:command.metrics.inputTokens??'unknown',outputTokens:command.metrics.outputTokens??'unknown'},sequence);
   const s=r.request.selection,p=command.proposal;
-  if(command.outcome!=='success'||!p){r.encoding={status:'rejected',reason:command.outcome,experienceId:null};this.emit(events,'EXPERIENCE_ENCODING','experience','rejected',{requestId:command.requestId,reason:command.outcome,encoded:false},sequence);return;}
-  const handles=s.context.shapes.filter(shape=>!currentCognitionProfile(r.request)||shape.uncertainty==='geometry_candidates_pixel_checked').map(s=>s.handle);
-  if(p.observationId!==s.observationId||p.frameHash!==s.frameHash||p.evidenceHandles.some(h=>!handles.includes(h))||p.action.type==='inspect'&&!handles.includes(p.action.handle)){
-   r.action={status:'rejected',reason:'fabricated_evidence',actionId:null,tick};r.encoding={status:'rejected',reason:'fabricated_evidence',experienceId:null};this.emit(events,'COGNITION_VALIDATION','cognition','rejected',{requestId:command.requestId,reason:'fabricated_evidence'},sequence);return;
+  if(command.outcome!=='success'||!p){r.encoding={status:'rejected',reason:command.validationError??command.outcome,experienceId:null};this.emit(events,'EXPERIENCE_ENCODING','experience','rejected',{requestId:command.requestId,reason:command.validationError??command.outcome,encoded:false},sequence);return;}
+  try{validateCognitionProposalReferences(p,s.context);}catch(error){
+   // Keep historical event/state hashes for old normalized commands. New wire
+   // generations persist the same bounded category used by the adapter.
+   const reason=r.request.schemaRevision===COGNITION_SCHEMA_REVISION?cognitionValidationError(error):'fabricated_evidence';
+   r.action={status:'rejected',reason,actionId:null,tick};r.encoding={status:'rejected',reason,experienceId:null};this.emit(events,'COGNITION_VALIDATION','cognition','rejected',{requestId:command.requestId,reason},sequence);return;
   }
   this.emit(events,'COGNITION_INTERPRETATION','cognition','normalized',{requestId:command.requestId,observationId:p.observationId,frameHash:p.frameHash,interpretation:p.interpretation,uncertainty:p.uncertainty,action:p.action.type},sequence);
   this.emit(events,'COGNITION_ACTION_PROPOSED','cognition','advisory',{requestId:command.requestId,action:p.action.type},sequence);

@@ -17,15 +17,43 @@ test('nonzero taskkill is accepted only after owned-root exit and independent pr
   const child = fakeChild(), calls: string[] = [];
   await cleanupWindowsBrowser(child, profile, {
     killTree: async () => { calls.push('kill'); throw new CleanupCommandFailure('exit', 128); },
-    waitForExit: async (owned, timeout) => { assert.equal(owned, child); assert.equal(timeout, 500); calls.push('exit'); Object.assign(child, { exitCode: 1 }); },
+    now: () => 0,
+    waitForExit: async (owned, timeout) => { assert.equal(owned, child); assert.equal(timeout, 2500); calls.push('exit'); Object.assign(child, { exitCode: 1 }); },
     profileProcesses: async value => { assert.equal(value, profile); assert.equal(child.exitCode, 1); calls.push('profile'); return []; },
   });
   assert.deepEqual(calls, ['kill', 'exit', 'profile']);
 });
 
 test('Windows exit-race reconciliation stays within the existing manager cleanup budget', () => {
-  const maximum = WINDOWS_CLEANUP_TIMING.treeKillMs + WINDOWS_CLEANUP_TIMING.nonzeroRootExitMs + WINDOWS_CLEANUP_TIMING.profileQueryMs + WINDOWS_CLEANUP_TIMING.queryStopGraceMs;
+  const maximum = WINDOWS_CLEANUP_TIMING.rootCleanupMs + WINDOWS_CLEANUP_TIMING.profileQueryMs + WINDOWS_CLEANUP_TIMING.queryStopGraceMs;
   assert.ok(maximum + 600 <= CAPTURE_LIMITS.cleanupTimeoutMs, 'leave room for the existing 100+200+300ms profile removal retries');
+});
+
+test('nonzero helper terminates only the retained root and observes its delayed fallback exit', async () => {
+  const child = fakeChild(), calls: string[] = [];
+  child.kill = signal => {
+    assert.equal(signal, 'SIGKILL'); calls.push('terminate-owned');
+    setImmediate(() => { Object.assign(child, { signalCode: 'SIGKILL' }); calls.push('actual-exit'); child.emit('exit', null, 'SIGKILL'); });
+    return true;
+  };
+  await cleanupWindowsBrowser(child, profile, {
+    killTree: async () => { throw new CleanupCommandFailure('exit', 128); },
+    waitForExit: async (owned, timeout) => { assert.equal(owned, child); assert.deepEqual(calls, ['terminate-owned']); await waitForOwnedExit(owned, timeout); },
+    profileProcesses: async () => { assert.equal(child.signalCode, 'SIGKILL'); calls.push('verify-profile'); return []; },
+  });
+  assert.deepEqual(calls, ['terminate-owned', 'actual-exit', 'verify-profile']);
+});
+
+test('root confirmation spends only the remaining shared budget after either helper outcome', async () => {
+  for (const helperFailed of [false, true]) {
+    let time = 100;
+    await cleanupWindowsBrowser(fakeChild(), profile, {
+      now: () => time,
+      killTree: async () => { time += 1900; if (helperFailed) throw new CleanupCommandFailure('exit', 128); },
+      waitForExit: async (_, timeout) => { assert.equal(timeout, 600); },
+      profileProcesses: async () => [],
+    });
+  }
 });
 
 test('a live owned root remains a cleanup failure and does not consult a misleading empty profile result', async () => {
@@ -105,7 +133,7 @@ test('a real owned process can exit just after helper failure and reconcile safe
 });
 
 test('Windows profile query finds a quoted owned argument and excludes a live prefix lookalike', { skip: process.platform !== 'win32' }, async () => {
-  const ownedProfile = await mkdtemp(join(tmpdir(), 'lumi-renderer-query with spaces-雪-'));
+  const ownedProfile = await mkdtemp(join(tmpdir(), "lumi-renderer-query with spaces-雪-'[%]_]-"));
   const owned = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', `--user-data-dir=${ownedProfile}`], { stdio: 'ignore', windowsHide: true });
   const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', `--user-data-dir=${ownedProfile}-other`], { stdio: 'ignore', windowsHide: true });
   try { assert.deepEqual(await windowsProfileProcesses(ownedProfile), [owned.pid]); }

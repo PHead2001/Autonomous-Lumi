@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WINDOWS_CLEANUP_TIMING = { treeKillMs: 2000, nonzeroRootExitMs: 500, profileQueryMs: 1250, queryStopGraceMs: 250 } as const;
+export const WINDOWS_CLEANUP_TIMING = { treeKillMs: 2000, rootCleanupMs: 2500, profileQueryMs: 1250, queryStopGraceMs: 250 } as const;
 
 export class CleanupCommandFailure extends Error {
   constructor(readonly kind: 'exit' | 'signal' | 'timeout' | 'launch', readonly exitCode: number | null = null) {
@@ -93,6 +93,7 @@ export interface WindowsCleanupOperations {
   killTree(child: ChildProcess): Promise<void>;
   waitForExit(child: ChildProcess, timeoutMs: number): Promise<void>;
   profileProcesses(profile: string): Promise<number[]>;
+  now?: () => number;
 }
 const operations: WindowsCleanupOperations = {
   killTree: child => waitForCleanupCommand(spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }), WINDOWS_CLEANUP_TIMING.treeKillMs),
@@ -103,14 +104,20 @@ const operations: WindowsCleanupOperations = {
 /** A normal nonzero taskkill exit may race Chromium's own shutdown. Confirm the actual
  * owned root exit and absence of its unique profile processes before accepting that race. */
 export async function cleanupWindowsBrowser(child: ChildProcess, profile: string | undefined, ops: WindowsCleanupOperations = operations): Promise<void> {
+  const now = ops.now ?? (() => performance.now());
+  const rootDeadline = now() + WINDOWS_CLEANUP_TIMING.rootCleanupMs;
   let reconcileProfile = exited(child);
   if (!reconcileProfile) {
     try { await ops.killTree(child); }
     catch (error) {
       if (!(error instanceof CleanupCommandFailure) || error.kind !== 'exit') throw error;
       reconcileProfile = true;
+      // taskkill can report a descendant race while the original root is still alive.
+      // Terminate only our retained process handle, then OBSERVE its exit before
+      // consulting the read-only profile query. Never target a discovered PID.
+      if (!exited(child)) child.kill('SIGKILL');
     }
-    await ops.waitForExit(child, reconcileProfile ? WINDOWS_CLEANUP_TIMING.nonzeroRootExitMs : 1500);
+    await ops.waitForExit(child, Math.max(0, rootDeadline - now()));
   }
   if (reconcileProfile) {
     if (!profile) throw new Error('Owned renderer profile is unavailable for cleanup verification');

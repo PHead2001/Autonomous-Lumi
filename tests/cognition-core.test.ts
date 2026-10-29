@@ -18,7 +18,7 @@ function fixture(mode:'LIVE'|'EXPERIMENT'='LIVE',source:'actual_renderer'|'test_
  const eye=eyePose(sim.snapshot()),pose={x:eye.position[0],y:eye.position[1],z:eye.position[2],bodyHeading:eye.bodyHeading,headYaw:eye.headYaw,headPitch:eye.headPitch};
  enqueue({type:'sensor_feedback',intentId:1,stage:'admitted',captureId:'capture',capturedTick:0,sceneRevision:0,pose,outcome:'success',signature:null,frameHash:null});sim.step();
  enqueue({type:'sensor_feedback',intentId:1,stage:'result',captureId:'capture',capturedTick:0,sceneRevision:0,pose,outcome:'success',signature:Array(48).fill(10),frameHash});sim.step();
- const request:CognitionRequestCommand={type:'cognition_request',purpose:'interpretation',requestId:'request',selection:{identity:fresh.cognition.identity,captureId:'capture',observationId:'observation',frameHash,intentId:1,capturedTick:0,attentionTick:2,pose,source,context:{observationId:'observation',frameHash,shapes:[{handle:'shape',bearingDegrees:15,elevationDegrees:0,distanceBand:'near',sampleVisibilityBand:'high',uncertainty:'geometric_samples_only'}],sound:null,activity:{status:'idle'},experiences:[]}},provider:'fixture',model:'offline',promptRevision:'prompt-v1',schemaRevision:COGNITION_SCHEMA_REVISION};
+ const request:CognitionRequestCommand={type:'cognition_request',purpose:'interpretation',requestId:'request',selection:{identity:fresh.cognition.identity,captureId:'capture',observationId:'observation',frameHash,intentId:1,capturedTick:0,attentionTick:2,pose,source,context:{observationId:'observation',frameHash,shapes:[{handle:'shape',bearingDegrees:15,elevationDegrees:0,distanceBand:'near',sampleVisibilityBand:'high',uncertainty:'geometric_samples_only'}],sound:null,activity:{status:'idle'},experiences:[]}},provider:'fixture',model:'offline',promptRevision:'prompt-v1',schemaRevision:'lumi-interpretation-v1'};
  const result=(action:CognitionAction={type:'continue'}):CognitionResultCommand=>({type:'cognition_result',requestId:'request',identity:structuredClone(fresh.cognition.identity),outcome:'success',proposal:{observationId:'observation',frameHash,interpretation:'A possibly red shape; identity is uncertain.',uncertainty:.6,evidenceHandles:['shape'],action},metrics:{latencyMs:10,attempts:1,inputTokens:100,outputTokens:20,costUsd:.0001,costBasis:'estimated',modelRevision:null}});
  return {sim,inputs,enqueue,request,result,start:fresh};
 }
@@ -168,10 +168,10 @@ test('2c near-capacity admission measures actual pretty recovery/named envelopes
  await base.close();
 });
 
-function pixelFixture() {const f=fixture();f.request.promptRevision=COGNITION_PROMPT_REVISION;f.request.selection.context.shapes[0].uncertainty='geometry_candidates_pixel_checked';f.request.selection.context.shapes[0].qualityFlags=[];return f;}
+function pixelFixture() {const f=fixture();f.request.promptRevision=COGNITION_PROMPT_REVISION;f.request.schemaRevision=COGNITION_SCHEMA_REVISION;f.request.selection.context.shapes[0].uncertainty='geometry_candidates_pixel_checked';f.request.selection.context.shapes[0].qualityFlags=[];return f;}
 test('current profile rejects unqualified geometry contexts and dropped/fabricated handles cannot encode',()=>{
- const old=fixture();old.request.promptRevision=COGNITION_PROMPT_REVISION;old.enqueue(old.request);const events=old.sim.step();assert.equal(old.sim.cognitionState().requests.length,0);assert.ok(events.some(e=>e.data.reason==='unqualified_shape_context'));
- const f=pixelFixture();f.request.selection.context.shapes=[];f.enqueue(f.request);f.sim.step();f.enqueue(f.result({type:'inspect',handle:'shape'}));f.sim.step();assert.equal(f.sim.cognitionState().requests[0].encoding?.reason,'fabricated_evidence');assert.equal(f.sim.admittedExperiences().length,0);
+ const old=fixture();old.request.promptRevision=COGNITION_PROMPT_REVISION;old.request.schemaRevision=COGNITION_SCHEMA_REVISION;old.enqueue(old.request);const events=old.sim.step();assert.equal(old.sim.cognitionState().requests.length,0);assert.ok(events.some(e=>e.data.reason==='unqualified_shape_context'));
+ const f=pixelFixture();f.request.selection.context.shapes=[];f.enqueue(f.request);f.sim.step();f.enqueue(f.result({type:'inspect',handle:'shape'}));f.sim.step();assert.equal(f.sim.cognitionState().requests[0].encoding?.reason,'unknown_handle');assert.equal(f.sim.admittedExperiences().length,0);
 });
 test('current qualified handle inspection executes with normal fresh capture and exact replay/recovery',async t=>{
  const f=pixelFixture();f.enqueue(f.request);f.sim.step();const start=f.sim.checkpoint(),input=f.sim.enqueue(f.result({type:'inspect',handle:'shape'})).input;f.sim.step();for(let i=0;i<30;i++)f.sim.step();const end=f.sim.checkpoint();
@@ -180,5 +180,32 @@ test('current qualified handle inspection executes with normal fresh capture and
 });
 test('future provider context excludes legacy geometry-aided prose without altering stored history',async()=>{
  const {providerExperiences}=await import('../server/cognition/observation.js');const f=fixture();f.enqueue(f.request);f.sim.step();f.enqueue(f.result());f.sim.step();const cp=f.sim.checkpoint(),before=hashCheckpoint(cp);assert.equal(providerExperiences(cp,cp.cognition.identity).length,0);assert.equal(hashCheckpoint(cp),before);assert.equal(cp.realExperiences.length,1);
- const current=structuredClone(cp);current.cognition.requests[0].request.promptRevision=COGNITION_PROMPT_REVISION;assert.equal(providerExperiences(current,current.cognition.identity).length,1);
+ const current=structuredClone(cp);current.cognition.requests[0].request.promptRevision=COGNITION_PROMPT_REVISION;current.cognition.requests[0].request.schemaRevision=COGNITION_SCHEMA_REVISION;assert.equal(providerExperiences(current,current.cognition.identity).length,1);
+});
+
+
+test('v4 deterministic reference validation keeps exact categories and independently rejects effects',()=>{
+ for(const [category,change]of [
+  ['observation_mismatch',(p:NonNullable<CognitionResultCommand['proposal']>)=>{p.observationId='other';}],
+  ['frame_hash_mismatch',(p:NonNullable<CognitionResultCommand['proposal']>)=>{p.frameHash='b'.repeat(64);}],
+  ['unknown_handle',(p:NonNullable<CognitionResultCommand['proposal']>)=>{p.evidenceHandles=['invented'];}],
+ ] as const){const f=pixelFixture();f.enqueue(f.request);f.sim.step();const start=f.sim.checkpoint(),result=f.result();change(result.proposal!);const input=f.sim.enqueue(result).input;const events=f.sim.step(),end=f.sim.checkpoint();assert.equal(end.realExperiences.length,0);assert.equal(end.cognition.requests[0].action?.reason,category);assert.equal(end.cognition.requests[0].encoding?.reason,category);assert.ok(events.some(e=>e.data.reason===category));const offline=replay(start,[input],end.tick);assert.equal(offline.stateHash,hashCheckpoint(end));assert.equal(offline.eventHash,end.eventHash);}
+});
+
+test('v4 categorical provider failure persists without raw output and exactly replays through diagnostics',async t=>{
+ const {FlightRecorder}=await import('../server/diagnostics/recorder.js');const {exportIncident,replayBundle}=await import('../server/diagnostics/bundle.js');
+ const directory=await mkdtemp(join(tmpdir(),'lumi-cognition-rejected-bundle-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const f=pixelFixture();f.enqueue(f.request);f.sim.step();const base=new BranchRuntime({mode:'LIVE',worldId:'world',branchId:'live',historyId:'history',offline:true}),start={...base.checkpoint(),simulation:f.sim.checkpoint()};
+ const runtime=new BranchRuntime({mode:'LIVE',worldId:'world',branchId:'live',historyId:'history',checkpoint:start,offline:true}),recorder=new FlightRecorder({directory,worldId:'world',branchId:'live',worldMode:'LIVE',runId:runtime.target.runId});recorder.captureRuntimeCheckpoint(start);
+ const result:CognitionResultCommand={...f.result(),outcome:'malformed',proposal:null,validationError:'unknown_handle'};
+ const cp=runtime.simulation.checkpoint(),input={sequence:cp.nextInputSequence,receivedTick:cp.tick,applyTick:cp.tick+1,command:result,admission:'queued' as const};
+ const operations:import('../server/branch-runtime.js').RuntimeOperation[]=[{sequence:1,kind:'input',tick:cp.tick,input},{sequence:2,kind:'advance',tick:cp.tick,ticks:1,backlogMs:0,source:'scheduled'}];
+ for(const operation of operations){runtime.replayOperation(operation);recorder.recordRuntimeOperation(operation);if(operation.kind==='input')recorder.recordInput(operation.input);for(const event of runtime.drainEvents())recorder.recordEvent(event);}
+ const end=runtime.simulation.checkpoint() as CheckpointV5;assert.equal(end.cognition.requests[0].result?.validationError,'unknown_handle');assert.equal(end.cognition.requests[0].encoding?.reason,'unknown_handle');assert.doesNotThrow(()=>validateCheckpoint(end));
+ recorder.captureRuntimeCheckpoint(runtime.checkpoint());await recorder.flush();try{const snapshot=await recorder.snapshotForExport();assert.ok(snapshot.records.some(record=>record.event_type==='COGNITION_RESULT'&&record.data.reason==='unknown_handle'));assert.ok(snapshot.records.some(record=>record.ordered_input?.command.type==='cognition_result'&&record.ordered_input.command.validationError==='unknown_handle'));const out=join(directory,'rejected.zip'),exported=await exportIncident({runDirectory:recorder.runDirectory,out});assert.equal(exported.manifest.evidence_status,'COMPLETE');const offline=await replayBundle(out);assert.equal(offline.status,'PASS');assert.equal(offline.stateHash,hashCheckpoint(end));assert.equal(offline.eventHash,end.eventHash);}finally{await recorder.close();await runtime.close();await base.close();}
+});
+
+test('pixel-qualified v3 memories remain eligible verbatim while earlier prompt memories stay excluded',async()=>{
+ const {providerExperiences}=await import('../server/cognition/observation.js');const f=pixelFixture();f.request.promptRevision='lumi-vision-prompt-v3';f.request.schemaRevision='lumi-interpretation-v1';f.enqueue(f.request);f.sim.step();const result=f.result();result.proposal!.interpretation='I think the blue shape may be a chair, although I cannot tell.';f.enqueue(result);f.sim.step();const cp=f.sim.checkpoint(),before=hashCheckpoint(cp);assert.deepEqual(providerExperiences(cp,cp.cognition.identity),[{interpretation:result.proposal!.interpretation,uncertainty:.6}]);assert.equal(hashCheckpoint(cp),before);
+ const legacy=structuredClone(cp);legacy.cognition.requests[0].request.promptRevision='lumi-vision-prompt-v2';assert.deepEqual(providerExperiences(legacy,legacy.cognition.identity),[]);assert.equal(legacy.realExperiences[0].interpretation,result.proposal!.interpretation);
 });

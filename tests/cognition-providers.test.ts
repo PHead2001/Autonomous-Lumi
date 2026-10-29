@@ -8,14 +8,16 @@ import { PNG } from 'pngjs';
 import { loadCognitionConfig, safeCognitionConfig } from '../server/cognition/config';
 import { DurableBudget, BudgetError } from '../server/cognition/budget';
 import { COGNITION_PROMPT_REVISION, CognitionProviders, type ProviderTransport } from '../server/cognition/providers';
-import { INTERPRETATION_JSON_SCHEMA, type CognitionContext } from '../shared/cognition-protocol';
+import { INTERPRETATION_JSON_SCHEMA, type CognitionContext, type CognitionProposal, bindCognitionProposal, parseCognitionProposal, validateCognitionProposalReferences, CognitionValidationError } from '../shared/cognition-protocol';
 
 const image = PNG.sync.write(new PNG({ width: 512, height: 512, fill: true }));
 const context = (): CognitionContext => ({ observationId: 'obs1', frameHash: createHash('sha256').update(image).digest('hex'),
   shapes: [{ handle: 'shape1', bearingDegrees: 15, elevationDegrees: 0, distanceBand: 'near', sampleVisibilityBand: 'medium', uncertainty: 'geometry_candidates_pixel_checked', qualityFlags: [] }],
   sound: null, activity: { status: 'running' }, experiences: [] });
-const proposal = () => ({ observationId: 'obs1', frameHash: context().frameHash, interpretation: 'An uncertain shape is ahead.', uncertainty: 0.6, evidenceHandles: ['shape1'], action: { type: 'inspect', handle: 'shape1' } });
-const envelope = (content: unknown = proposal()) => ({ model: 'qwen/qwen3.7-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 123, completion_tokens: 40, cost: 0.00001 } });
+const proposal = ():CognitionProposal => ({ observationId: 'obs1', frameHash: context().frameHash, interpretation: 'An uncertain shape is ahead.', uncertainty: 0.6, evidenceHandles: ['shape1'], action: { type: 'inspect', handle: 'shape1' } });
+const remoteProposal=()=>{const {observationId,frameHash,...remote}=proposal();void observationId;void frameHash;return remote;};
+const outboundContext=()=>{const {observationId,frameHash,...remote}=context();void observationId;void frameHash;return remote;};
+const envelope = (content: unknown = remoteProposal()) => ({ model: 'qwen/qwen3.7-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 123, completion_tokens: 40, cost: 0.00001 } });
 async function setup(transport: ProviderTransport, extra: NodeJS.ProcessEnv = {}) {
   const root = await mkdtemp(join(tmpdir(), 'lumi-provider-'));
   const config = loadCognitionConfig({ loadEnv: false, env: { OPENROUTER_API_KEY: 'fake-private-key', OPENAI_API_KEY: 'fake-openai-key', LUMI_COGNITION_ENABLED: 'true', LUMI_DECISIONS_ENABLED: 'true', LUMI_COGNITION_BUDGET_DIRECTORY: join(root, 'budget'), LUMI_COGNITION_MIN_REAL_INTERVAL_MS: '100', ...extra } });
@@ -130,13 +132,13 @@ test('OpenRouter sends the bound private 512 PNG with JSON mode, bounded explici
     assert.equal(body.model, 'qwen/qwen3.7-flash'); assert.equal(body.stream, false); assert.equal(body.provider.allow_fallbacks, false); assert.equal(body.provider.require_parameters, true);
     assert.deepEqual(body.provider.max_price, { prompt: 0.1, completion: 0.3 }); assert.deepEqual(body.response_format, { type: 'json_object' });
     assert.equal(body.max_tokens, fixture.config.limits.maxOutputTokens);
-    assert.equal(COGNITION_PROMPT_REVISION, 'lumi-vision-prompt-v3');
+    assert.equal(COGNITION_PROMPT_REVISION, 'lumi-vision-prompt-v4');
     assert.equal(body.messages[0].role, 'system');
     const systemPrompt = body.messages[0].content as string;
     assert.ok(Buffer.byteLength(systemPrompt) <= 8192);
     assert.ok(Buffer.byteLength(systemPrompt) + Buffer.byteLength(body.messages[1].content[0].text) <= fixture.config.limits.maxContextBytes);
     assert.deepEqual(JSON.parse(systemPrompt.slice(systemPrompt.indexOf('\n') + 1)), INTERPRETATION_JSON_SCHEMA);
-    const content = body.messages[1].content; assert.deepEqual(JSON.parse(content[0].text), context());
+    const content = body.messages[1].content; assert.deepEqual(JSON.parse(content[0].text), outboundContext());
     assert.equal(content[1].image_url.url, 'data:image/png;base64,' + image.toString('base64'));
     for (const forbidden of ['worldId', 'runId', 'worldTimeSeconds', 'privateGrounding', 'bodyHeading']) assert.equal((init.body as string).includes(forbidden), false);
     return Response.json(envelope());
@@ -151,9 +153,9 @@ test('OpenRouter sends the bound private 512 PNG with JSON mode, bounded explici
 
 test('strict parser rejects privileged fields, fabricated handles, refusal and partial envelopes', async () => {
   const variants = [
-    { response: envelope({ ...proposal(), privateGrounding: 'injected' }), status: 'malformed' },
-    { response: envelope({ ...proposal(), evidenceHandles: ['invented'] }), status: 'malformed' },
-    { response: envelope({ ...proposal(), action: { type: 'inspect', handle: 'invented' } }), status: 'malformed' },
+    { response: envelope({ ...remoteProposal(), privateGrounding: 'injected' }), status: 'malformed' },
+    { response: envelope({ ...remoteProposal(), evidenceHandles: ['invented'] }), status: 'malformed' },
+    { response: envelope({ ...remoteProposal(), action: { type: 'inspect', handle: 'invented' } }), status: 'malformed' },
     { response: { ...envelope(), choices: [{ finish_reason: 'length', message: { content: JSON.stringify(proposal()) } }] }, status: 'malformed' },
     { response: { ...envelope(), choices: [{ finish_reason: 'stop', message: { refusal: 'no', content: '' } }] }, status: 'refused' },
     { response: { ...envelope(), model: 'silent-fallback' }, status: 'malformed' },
@@ -200,7 +202,7 @@ test('timeouts do not wait for ignored aborts, charge unknown usage and block la
   try {
     const first = await fixture.providers.interpret(input()); assert.equal(first.status, 'timeout'); assert.equal(first.attempts, 1); assert.equal(first.costBasis, 'unknown');
     assert.equal((await fixture.budget.snapshot()).unknown, 1);
-    const second = await new CognitionProviders(fixture.config, new DurableBudget(fixture.config.budget.directory, 0.15), async () => { calls++; return Response.json(envelope()); }).interpret(input('request2', 30));
+    const second = await new CognitionProviders(fixture.config, new DurableBudget(fixture.config.budget.directory, 0.15,()=>Date.now()+fixture.config.limits.minRealIntervalMs), async () => { calls++; return Response.json(envelope()); }).interpret(input('request2', 30));
     assert.equal(second.status, 'budget_exhausted'); assert.equal(calls, 1);
   } finally { await fixture.close(); }
 });
@@ -238,10 +240,10 @@ test('one bounded queue holds immutable context/image and rejects excess work wi
     const first = fixture.providers.interpret(input());
     const secondInput = { ...input('request2', 30), png: Buffer.from(image) };
     const second = fixture.providers.interpret(secondInput);
-    secondInput.context.shapes[0].handle = 'changed_after_queue'; secondInput.png.fill(0);
+    secondInput.context.shapes[0].handle = 'changed_after_queue'; secondInput.context.observationId='changed_id';secondInput.context.frameHash='b'.repeat(64);secondInput.png.fill(0);
     assert.equal((await fixture.providers.interpret(input('request3', 60))).status, 'queue_full');
     await new Promise(resolve => setTimeout(resolve, 130)); assert.ok(release); release();
-    assert.equal((await first).status, 'ok'); assert.equal((await second).status, 'ok');
+    assert.equal((await first).status, 'ok'); const secondResult=await second;assert.equal(secondResult.status, 'ok');assert.deepEqual(JSON.parse(secondResult.content!),proposal());
     assert.equal(calls, 2); assert.equal(contexts[1].shapes[0].handle, 'shape1');
   } finally { release?.(); await fixture.close(); }
 });
@@ -291,4 +293,29 @@ test('separate Decisions contract uses fixed endpoint/model typed choices, conse
 test('both current adapters reject old unmeasured geometry labels and never send private mask machinery',async()=>{
  let calls=0;const fixture=await setup(async(url,init)=>{calls++;const body=JSON.parse(init.body as string),dto=JSON.parse(url.includes('openrouter')?body.messages[1].content[0].text:body.input);for(const key of ['privateMask','physicalIds','pixelQualification','private-target','visiblePixels','interiorPixels'])assert.equal(JSON.stringify(dto).includes(key),false);return Response.json(envelope());});
  try{const old=context();old.shapes[0].uncertainty='geometric_samples_only';delete old.shapes[0].qualityFlags;assert.equal((await fixture.providers.interpret({...input(),context:old})).status,'invalid_input');assert.equal((await fixture.providers.decide({requestId:'old-decision',worldTimeSeconds:0,context:old,choices:[{value:'continue',description:'Continue'},{value:'request_observation',description:'Fresh image'}]})).status,'invalid_input');assert.equal(calls,0);const privateFlag=context();privateFlag.shapes[0].qualityFlags=['private_engine_target'];assert.equal((await fixture.providers.interpret({...input(),context:privateFlag})).status,'invalid_input');assert.equal(calls,0);assert.equal((await fixture.providers.interpret(input())).status,'ok');assert.equal(calls,1);}finally{await fixture.close();}
+});
+
+
+test('v4 wire failure categories are bounded and never retain rejected reply content',async()=>{
+ const variants:[unknown,string][]=[
+  [{...remoteProposal(),uncertainty:2},'schema'],
+  [{...remoteProposal(),observationId:'attacker_supplied_id'},'schema'],
+  [{...remoteProposal(),frameHash:'f'.repeat(64)},'schema'],
+  [{...remoteProposal(),evidenceHandles:['private_fabricated_handle']},'unknown_handle'],
+  [{...remoteProposal(),action:{type:'inspect',handle:'private_fabricated_handle'}},'unknown_handle'],
+  [{...remoteProposal(),action:{type:'move',target:'private_hidden_target'}},'unsupported_action'],
+ ];
+ for(const [content,category]of variants){const f=await setup(async()=>Response.json(envelope(content)));try{const result=await f.providers.interpret(input());assert.equal(result.status,'malformed');assert.equal(result.validationError,category);assert.equal(result.content,null);assert.ok(!JSON.stringify(result).includes('private_'));}finally{await f.close();}}
+ const f=await setup(async()=>Response.json({...envelope(),choices:[{finish_reason:'stop',message:{content:'{"private_raw_reply":'}}]}));try{const result=await f.providers.interpret(input());assert.equal(result.status,'malformed');assert.equal(result.validationError,'invalid_json');assert.equal(result.content,null);assert.ok(!JSON.stringify(result).includes('private_raw_reply'));}finally{await f.close();}
+});
+
+test('shared normalized parser distinguishes malformed JSON, schema, references and unknown handles',()=>{
+ const fails=(code:string)=>(error:unknown)=>error instanceof CognitionValidationError&&error.code===code;
+ assert.throws(()=>parseCognitionProposal('{private'),fails('invalid_json'));
+ assert.throws(()=>parseCognitionProposal({...proposal(),uncertainty:'uncertain'}),fails('schema'));
+ assert.throws(()=>validateCognitionProposalReferences({...proposal(),observationId:'other'},context()),fails('observation_mismatch'));
+ assert.throws(()=>validateCognitionProposalReferences({...proposal(),frameHash:'b'.repeat(64)},context()),fails('frame_hash_mismatch'));
+ assert.throws(()=>validateCognitionProposalReferences({...proposal(),evidenceHandles:['invented']},context()),fails('unknown_handle'));
+ assert.throws(()=>bindCognitionProposal({...remoteProposal(),frameHash:context().frameHash},context()),fails('schema'));
+ assert.deepEqual(bindCognitionProposal(remoteProposal(),context()),proposal());
 });

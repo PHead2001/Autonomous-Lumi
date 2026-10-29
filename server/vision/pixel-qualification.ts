@@ -5,7 +5,7 @@ import { filterVisibleGrounding, type GroundingResult, type VisibleGrounding } f
 /** Versioned engineering heuristic, not a physiological or recognition model.
  * All contrast is measured from the paired final 8-bit RGB frame, never materials/light settings. */
 export const PIXEL_QUALIFICATION = {
- revision:'rgb-mask-contrast-v1', erosionRadius:1, ringRadius:3,
+ revision:'rgb-mask-contrast-v2', erosionRadius:1, ringRadius:3,
  minVisiblePixels:32, minInteriorPixels:16, minRingPixels:24,
  minInteriorFraction:.1, minRingPerBoundary:.5,
  minAbsoluteContrast:14, minRelativeContrast:.12, minCorrectedContrast:8, minSignalLuminance:6,
@@ -51,11 +51,15 @@ export function qualifyPixelGrounding(geometry:GroundingResult,rgb:Uint8Array,ma
    for(const pixel of boundary){const x=pixel%width,y=Math.floor(pixel/width);for(let dy=-PIXEL_QUALIFICATION.ringRadius;dy<=PIXEL_QUALIFICATION.ringRadius;dy++)for(let dx=-PIXEL_QUALIFICATION.ringRadius;dx<=PIXEL_QUALIFICATION.ringRadius;dx++){const xx=x+dx,yy=y+dy;if(xx<0||xx>=width||yy<0||yy>=height)continue;const other=yy*width+xx;if(labels[other]!==label&&!seen[other]){seen[other]=1;ring.push(other);}}}
    const a=distribution(pixels,inside),b=distribution(pixels,ring),absolute=Math.max(...a.rgb.map((value,i)=>Math.abs(value-b.rgb[i]))),luminance=Math.abs(a.luminance-b.luminance),relative=absolute/Math.max(16,a.luminance,b.luminance),spread=Math.max(a.spread,b.spread),corrected=Math.max(0,absolute-PIXEL_QUALIFICATION.robustSpreadPenalty*spread);
    const coverage=positions.length>=PIXEL_QUALIFICATION.minVisiblePixels&&inside.length>=PIXEL_QUALIFICATION.minInteriorPixels&&ring.length>=PIXEL_QUALIFICATION.minRingPixels&&inside.length/Math.max(1,positions.length)>=PIXEL_QUALIFICATION.minInteriorFraction&&ring.length/Math.max(1,boundary.length)>=PIXEL_QUALIFICATION.minRingPerBoundary;
+   // Absence requires zero RGB throughout the actual raster support. Median/brightness
+   // thresholds only cap confidence: a dim edge or a tiny highlight is still evidence.
+   const hasRgbSupport=positions.some(pixel=>pixels[pixel*4]!==0||pixels[pixel*4+1]!==0||pixels[pixel*4+2]!==0)||ring.some(pixel=>pixels[pixel*4]!==0||pixels[pixel*4+1]!==0||pixels[pixel*4+2]!==0);
    const signalLuminance=Math.max(a.luminance,b.luminance),signal=signalLuminance>=PIXEL_QUALIFICATION.minSignalLuminance,strongSignal=signalLuminance>=PIXEL_QUALIFICATION.strongSignalLuminance;
    const contrast=absolute>=PIXEL_QUALIFICATION.minAbsoluteContrast&&relative>=PIXEL_QUALIFICATION.minRelativeContrast&&corrected>=PIXEL_QUALIFICATION.minCorrectedContrast;
-   const qualified=object.eligible,marginal=qualified&&(!coverage||!strongSignal||!contrast||positions.length<PIXEL_QUALIFICATION.strongVisiblePixels||inside.length<PIXEL_QUALIFICATION.strongInteriorPixels||ring.length<PIXEL_QUALIFICATION.strongRingPixels||absolute<PIXEL_QUALIFICATION.strongAbsoluteContrast||relative<PIXEL_QUALIFICATION.strongRelativeContrast||corrected<PIXEL_QUALIFICATION.strongCorrectedContrast);
-   const reason=!object.eligible?'geometric_candidate_ineligible':!positions.length?'no_pixel_support':!coverage?'limited_pixel_resolution':!signal?'no_rgb_support':!strongSignal?'low_rgb_signal':!contrast?(spread>30?'clutter_limited_pixel_contrast':'low_pixel_contrast'):marginal?'marginal_pixel_contrast':'pixel_contrast_pass';
+   const qualified=object.eligible&&positions.length>0&&hasRgbSupport,marginal=qualified&&(!coverage||!strongSignal||!contrast||positions.length<PIXEL_QUALIFICATION.strongVisiblePixels||inside.length<PIXEL_QUALIFICATION.strongInteriorPixels||ring.length<PIXEL_QUALIFICATION.strongRingPixels||absolute<PIXEL_QUALIFICATION.strongAbsoluteContrast||relative<PIXEL_QUALIFICATION.strongRelativeContrast||corrected<PIXEL_QUALIFICATION.strongCorrectedContrast);
+   const reason=!object.eligible?'geometric_candidate_ineligible':!positions.length?'no_pixel_support':!hasRgbSupport?'no_rgb_support':!coverage?'limited_pixel_resolution':!signal||!strongSignal?'low_rgb_signal':!contrast?(spread>30?'clutter_limited_pixel_contrast':'low_pixel_contrast'):marginal?'marginal_pixel_contrast':'pixel_contrast_pass';
    result.pixelQualification.objects.push({privateId:object.id,visiblePixels:positions.length,interiorPixels:inside.length,ringPixels:ring.length,boundaryPixels:boundary.length,absoluteRgbContrast:absolute,luminanceContrast:luminance,relativeContrast:relative,robustSpread:spread,correctedContrast:corrected,interiorLuminance:a.luminance,ringLuminance:b.luminance,qualified,marginal,reason});
+   if(object.eligible&&!qualified){object.eligible=false;object.qualityFlags.push(reason);}
    if(marginal)object.qualityFlags.push('limited_pixel_support',reason);
   }
  }catch{
@@ -64,7 +68,7 @@ export function qualifyPixelGrounding(geometry:GroundingResult,rgb:Uint8Array,ma
  }
  return result;
 }
-/** Opaque handles are minted only after valid paired-pixel measurement; weak support lowers confidence rather than claiming absence. */
+/** Opaque handles require raster pixels and nonzero local RGB; weak positive support lowers confidence. */
 export function filterPixelQualifiedGrounding(result:PixelGroundingResult,handleFor:(privateId:string)=>string):VisibleGrounding[]{
  return filterVisibleGrounding(result,handleFor).map(shape=>({...shape,uncertainty:'geometry_candidates_pixel_checked',sampleVisibilityBand:shape.qualityFlags.includes('limited_pixel_support')?'low':shape.sampleVisibilityBand}));
 }

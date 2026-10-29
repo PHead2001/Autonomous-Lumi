@@ -1,8 +1,61 @@
 # Phase 2c verification results
 
-The pixel-confidence correction is implemented: intended geometry-assisted handles and `inspect` are retained, with confidence calibrated from paired actual RGB/private-mask evidence. Weak/dim/small/cluttered eligible candidates remain LOW/uncertain; hidden/out-of-view geometry stays ineligible. **248/248 offline tests**, lint/build and actual attention **2/2** passed before the final low-signal correction; its affected checks are recorded below. Independent renderer/consumer reviews are clean. Hosted review of source `9fc8dbb` completed **PASS**, with no findings and no unresolved findings. Subsequent `fe5e04c` is documentation-only and is not claimed as reviewed source. PR #8 remains open and unmerged. No new paid calls were made, and all six existing paid bundles still replay with exact canonical results.
+Current repair verification passes: **263/263** offline tests, lint/build, actual `vision:verify` **8/8**, attention **2/2**, and a bounded **six-call actual prompt-v4 run**. All six main HTTP 200 responses normalized successfully with `validationError: null`; six COMPLETE bundles replay with matching canonical results. No automated retries or Decisions calls occurred in this correction. Independent ZIP inspection and hosted review of the new patch remain pending; earlier source approvals are historical. PR #8 remains open/unmerged.
 
-## Pixel-confidence correction: actual evidence
+## Current contract and local verification
+
+The active contract is `lumi-vision-prompt-v4` / `lumi-interpretation-v2`, with `rgb-mask-contrast-v2`. The model returns interpretation, uncertainty, evidence handles and action; the server binds immutable observation/frame identifiers after strict remote parsing, then independently validates references/actions/encoding. Optional bounded `validationError` categories distinguish malformed JSON, schema, unsupported action, observation/frame mismatch, unknown handle, provider envelope, incomplete output and model mismatch. API/ordered diagnostics/bundles preserve only the category, not raw rejected content.
+
+The prompt requests plain first-person perception. Existing v3 memories remain verbatim history and eligible context; the repair does not rewrite them. Historical schema-5 requests and old paid bundles retain exact replay semantics. `rgb-mask-contrast-v2` excludes only no-raster-pixel or zero-local-RGB candidates. Positive weak/same-wall evidence remains LOW; the actual same-wall case retained three LOW hints. The actual pixel + FAKE transport **3/3** verifies visible `inspect`→fresh capture, black without shapes and invented-handle rejection with zero memory.
+
+All six harness cases run even after a case failure, with strict overall acceptance and attempted LIVE recovery. Immutable case identity/generation/deadline, abortable pacing, `endCase` cleanup and a synchronous dispatch guard prevent delayed calls leaking into later cases. Configured pacing beyond the 60-second case budget yields a timeout without a late call. Provider checks **54** and pacing/provider/verification checks **27/27** passed; focused reviews are resolved. The initial **259/260** run is superseded by the final **263/263** result, not presented as an all-green earlier run.
+
+| Check | Actual result / local evidence |
+| --- | --- |
+| `npm test` | **263/263 PASS**, `diagnostics/v4-repair-final-tests.log` |
+| Lint / build including TypeScript | **PASS**, `v4-repair-final-lint.log` / `v4-repair-final-build.log` |
+| Actual renderer / attention | **8/8 / 2/2 PASS**, `v4-repair-vision-verify.log` / `v4-repair-vision-attention.log` |
+| Actual pixel + FAKE transport | **3/3 PASS**, zero external calls |
+| Cleanup | **15/15** focused checks, actual **8/8**, lint/TypeScript and independent Astra review clean |
+| New repair hosted review / independent ZIP check | **PENDING** |
+
+Paths without a prefix are under `diagnostics/`. Cleanup has a structural fallback for a confirmed owned-renderer exit within the original shared **2,500 ms** deadline and a server-filtered CIM query; queried PIDs are never killed. This repairs the fallback race and reduces query work. The external four-failure sequence and its reported paths were unavailable here, so its exact cause and elimination are not proven.
+
+## Actual prompt-v4 paid acceptance
+
+Sources: `diagnostics/phase2c-paid-v4-repair-20261029/{verification.json,acceptance-summary.json,http-evidence.json}`. Six main calls used actual 512×512 images on the same Qwen route; all six succeeded, with no validation category, retries or optional Decisions call. Zero forbidden context fields were found. This bounded sample is not a reliability/failure-rate estimate and does not explain the inaccessible earlier v3 reports at `C:\Users\PhillipHead\lumi-paid-2c-v3` and `lumi-paid-2c-v3b`.
+
+| Case | Provider latency (s) | Ordered request→result wall time (s) | Model uncertainty | Local action result |
+| --- | ---: | ---: | ---: | --- |
+| visible | 11.221 | 11.270 | 0.2 | continued |
+| partial | 9.443 | 9.462 | 0.25 | continued |
+| dark | 5.093 | 5.145 | 1 | continued |
+| absent | 7.749 | 10.933 | 0.1 | continued |
+| hidden | 5.973 | 6.974 | 0.95 | continued |
+| temporary-live | 9.464 | 11.409 | 0.65 | observed_bearing_exceeds_head_limits |
+
+The dark input was actual **512×512 RGB max 0**, with **zero shape hints and zero prior experiences before the response**. The model reported completely black/no visual information, uncertainty **1**, empty evidence handles and no object claim. Its fallible darkness interpretation was then admitted; this is not memory-free after encoding. All six admitted texts match the model response verbatim, and the developer-geometry-wording scan found **zero** occurrences. Existing stored v3 text was preserved rather than rewritten.
+
+In temporary LIVE, the proposal's `look` action was rejected at tick **388** with `observed_bearing_exceeds_head_limits`. Its actual-renderer perception independently qualified for encoding, without claiming a completed action (`RealExperience.actionOutcome: null`). Restart with cognition disabled retained **one** record in the **same** isolated temporary history. The harness did not use owner LIVE history.
+
+The run reported **5,057 input / 2,119 output tokens**, **US$0.00042718** main cost. Durable accounted spending moved from **US$0.100942505** to **US$0.101369685**, with **pending 0 / unknown 1**. The original failed request's **US$0.1002304** unknown reservation remains charged; no ledger reset/refund was used. Provider latency was **5.093–11.221 s**, ordered end-to-end **5.145–11.409 s**; separate HTTP intervals are recorded in the source report. Uncertainty is not calibrated accuracy and provider revision metadata remains unavailable.
+
+All six new bundles are COMPLETE and their recorded CLI replay results are PASS. For example:
+
+```powershell
+npm.cmd run replay -- --bundle diagnostics/phase2c-paid-v4-repair-20261029/temporary-live.zip
+```
+
+| Temporary LIVE canonical evidence | Result |
+| --- | --- |
+| Tick / ordered inputs / events | 388 / 9 / 60 |
+| State | `9e31d1da1e2d6724e0bf0a946ba353a5d69b941dea3ac1eeeb6a51e499aba068` |
+| Events | `d97a0926e40d875879ff5c5595b5e6ac5221e493943b5fc51a811a2b3f37482d` |
+| Runtime | `dba9519c5b95f84e87a8a9cf3c8a8c0dabd891f03e0178cfd0c5765570b34d05` |
+
+Independent inspection of this new ZIP remains pending. Earlier independent artifact proof and optional Decisions results below are kept as historical evidence, not substituted for the new artifact or re-run here.
+
+## Earlier pixel-confidence correction (historical)
 
 The renderer is `three-room-pixel-evidence-v2`; qualification is `rgb-mask-contrast-v1`, provider profile `pixel_checked_v3`, prompt `lumi-vision-prompt-v3`. Output schema remains `lumi-interpretation-v1`; handles and `inspect` keep their existing format. Current hints use `geometry_candidates_pixel_checked` with bounded quality flags; old geometry-only records preserve their original offline semantics. The [guide](multimodal-experience.md) documents the actual thresholds.
 
@@ -34,7 +87,7 @@ Paths without a prefix in this table are under `diagnostics/`. Missing/corrupt p
 
 Cleanup diagnosis passed **13/13** focused checks (actual Windows query **469 ms**) and an exclusive pre-change `vision:verify` run **8/8** in **21.01 s** (`diagnostics/newgoalteardown-real.log`). It changed no source, ownership logic or timeout. The historical timeout was 750 ms versus the existing current 1,250 ms; this task did not inflate it. The reported cleanup flake was not reproduced; Windows query/host-load latency remains a candidate, not a confirmed cause or repaired defect.
 
-## Previous profile acceptance (historical)
+## Previous paid-profile acceptance (historical)
 
 Previous paid acceptance passed: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. That review and acceptance apply to the previous profile; the current correction has separate checks above and clean hosted review of source `9fc8dbb`. Merging remains the owner's action.
 

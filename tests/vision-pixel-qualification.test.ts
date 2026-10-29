@@ -12,9 +12,20 @@ test('strong measured pixel contrast permits high confidence after paired eviden
  const result=qualified(pair());let minted=0;const shapes=filterPixelQualifiedGrounding(result,()=>{minted++;return 'opaque';});assert.equal(minted,1);assert.equal(shapes[0].uncertainty,'geometry_candidates_pixel_checked');assert.equal(shapes[0].sampleVisibilityBand,'high');assert.equal(result.pixelQualification.revision,PIXEL_QUALIFICATION.revision);assert.ok(result.pixelQualification.objects[0].interiorPixels>1000);
  const partial=geometry();partial.objects[0].sampleVisibilityFraction=.25;partial.objects[0].status='partially_occluded';assert.equal(filterPixelQualifiedGrounding(qualified(pair(200,80,18),partial),()=> 'partial')[0].sampleVisibilityBand,'low');
 });
-test('same geometry with camouflaged, black, tiny or insufficiently covered pixels retains only low-confidence handles',()=>{
- for(const pixels of [pair(80,80),pair(0,0),pair(200,80,4),pair(200,80,1)]){const result=qualified(pixels);let minted=0;const shapes=filterPixelQualifiedGrounding(result,()=>{minted++;return 'possible';});assert.equal(shapes.length,1);assert.equal(shapes[0].sampleVisibilityBand,'low');assert.equal(minted,1);assert.equal(result.objects[0].eligible,true);assert.ok(shapes[0].qualityFlags.includes('limited_pixel_support'));}
+test('same geometry with camouflaged, tiny or insufficiently covered positive RGB retains low-confidence handles',()=>{
+ for(const pixels of [pair(80,80),pair(1,0),pair(200,80,4),pair(200,80,1)]){const result=qualified(pixels);let minted=0;const shapes=filterPixelQualifiedGrounding(result,()=>{minted++;return 'possible';});assert.equal(shapes.length,1);assert.equal(shapes[0].sampleVisibilityBand,'low');assert.equal(minted,1);assert.equal(result.objects[0].eligible,true);assert.ok(shapes[0].qualityFlags.includes('limited_pixel_support'));}
  const ringClutter=qualified(pair(125,80,48,true));assert.equal(ringClutter.pixelQualification.objects[0].marginal,true);assert.equal(filterPixelQualifiedGrounding(ringClutter,()=> 'uncertain')[0].sampleVisibilityBand,'low');assert.ok(ringClutter.pixelQualification.objects[0].robustSpread>15);
+});
+test('black and zero-raster candidates are ineligible before any provider handle is minted',()=>{
+ for(const [pixels,reason] of [[pair(0,0),'no_rgb_support'],[pair(0,0,1),'no_rgb_support'],[pair(200,80,0),'no_pixel_support']] as const){
+  const source=geometry(),result=qualified(pixels,source);let minted=0;
+  assert.equal(result.pixelQualification.status,'checked');assert.equal(result.pixelQualification.objects[0].reason,reason);assert.equal(result.pixelQualification.objects[0].qualified,false);assert.equal(result.objects[0].eligible,false);assert.ok(result.objects[0].qualityFlags.includes(reason));
+  assert.deepEqual(filterPixelQualifiedGrounding(result,()=>{minted++;return 'forbidden';}),[]);assert.equal(minted,0);assert.equal(source.objects[0].eligible,true,'qualification must not alter historical geometry');
+ }
+});
+test('sparse positive RGB below the median and black silhouettes keep LOW assistive hints',()=>{
+ const sparse=pair(0,0),image=PNG.sync.read(sparse.rgb);image.data[(50*128+50)*4]=1;sparse.rgb=PNG.sync.write(image);
+ for(const pixels of [sparse,pair(0,1),pair(1,0,1)]){const result=qualified(pixels),shapes=filterPixelQualifiedGrounding(result,()=> 'supported');assert.equal(shapes.length,1);assert.equal(shapes[0].sampleVisibilityBand,'low');assert.equal(result.pixelQualification.objects[0].qualified,true);assert.ok(!shapes[0].qualityFlags.includes('no_rgb_support'));}
 });
 test('marginal and dim actual RGB signal uses measured contrast and caps the hint at low',()=>{
  const marginal=qualified(pair(100,80)),dim=qualified(pair(30,4));for(const result of [marginal,dim]){const shapes=filterPixelQualifiedGrounding(result,()=> 'coarse');assert.equal(shapes.length,1);assert.equal(shapes[0].sampleVisibilityBand,'low');assert.ok(shapes[0].qualityFlags.includes(result===dim?'low_rgb_signal':'marginal_pixel_contrast'));}

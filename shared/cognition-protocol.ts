@@ -3,9 +3,10 @@ import type { ReceivedSound, SensorPose } from './attention-protocol.js';
 import { validateSensorPose } from './attention-protocol.js';
 import type { WorldMode } from './lab-protocol.js';
 export const COGNITION_RULES = 'lumi-cognition-v1' as const;
-export const COGNITION_PROMPT_REVISION = 'lumi-vision-prompt-v3' as const;
+export const COGNITION_PROMPT_REVISION = 'lumi-vision-prompt-v4' as const;
 export const DECISIONS_PROMPT_REVISION = 'lumi-decisions-prompt-v2' as const;
-export const COGNITION_SCHEMA_REVISION = 'lumi-interpretation-v1' as const;
+export const COGNITION_SCHEMA_REVISION = 'lumi-interpretation-v2' as const;
+export type CognitionSchemaRevision = typeof COGNITION_SCHEMA_REVISION | 'lumi-interpretation-v1';
 export const COGNITION_LIMITS = { pending:4, requests:256, experiences:512, contextExperiences:8, resultMaxAgeTicks:600, requestIntervalTicks:90, actionCooldownTicks:90 } as const;
 export type CognitionAction = {type:'continue'}|{type:'look';bearingDegrees:number;elevationDegrees:number}|{type:'inspect';handle:string}|{type:'request_observation'};
 export interface CognitionProposal {observationId:string;frameHash:string;interpretation:string;uncertainty:number;evidenceHandles:string[];action:CognitionAction}
@@ -15,11 +16,17 @@ export interface CognitionContext {observationId:string;frameHash:string;shapes:
 export interface CognitionIdentity {worldId:string;historyId:string;branchId:string;runId:string;mode:WorldMode}
 /** Private correlation metadata, never serialize this entire structure to a provider. */
 export interface CognitionSelection {identity:CognitionIdentity;captureId:string;observationId:string;frameHash:string;intentId:number;capturedTick:number;attentionTick:number;pose:SensorPose;source:'actual_renderer'|'test_fixture';context:CognitionContext}
-export interface CognitionRequestCommand {type:'cognition_request';purpose:'interpretation'|'decisions_evaluation';requestId:string;selection:CognitionSelection;provider:string;model:string;promptRevision:string;schemaRevision:typeof COGNITION_SCHEMA_REVISION}
-export function currentCognitionProfile(request:Pick<CognitionRequestCommand,'purpose'|'promptRevision'|'schemaRevision'>):boolean {return request.schemaRevision===COGNITION_SCHEMA_REVISION&&request.promptRevision===(request.purpose==='interpretation'?COGNITION_PROMPT_REVISION:DECISIONS_PROMPT_REVISION);}
+export interface CognitionRequestCommand {type:'cognition_request';purpose:'interpretation'|'decisions_evaluation';requestId:string;selection:CognitionSelection;provider:string;model:string;promptRevision:string;schemaRevision:CognitionSchemaRevision}
+/** Both pixel-qualified generations can supply admitted fallible memories. */
+export function currentCognitionProfile(request:Pick<CognitionRequestCommand,'purpose'|'promptRevision'|'schemaRevision'>):boolean {return request.purpose==='interpretation'?(request.schemaRevision===COGNITION_SCHEMA_REVISION&&request.promptRevision===COGNITION_PROMPT_REVISION||request.schemaRevision==='lumi-interpretation-v1'&&request.promptRevision==='lumi-vision-prompt-v3'):['lumi-interpretation-v1',COGNITION_SCHEMA_REVISION].includes(request.schemaRevision)&&request.promptRevision===DECISIONS_PROMPT_REVISION;}
+export const COGNITION_VALIDATION_ERRORS = ['invalid_json','schema','unsupported_action','frame_hash_mismatch','observation_mismatch','unknown_handle','provider_envelope','incomplete_output','model_mismatch'] as const;
+export type CognitionValidationErrorCode = typeof COGNITION_VALIDATION_ERRORS[number];
+/** The message contains only a bounded category, never rejected reply content. */
+export class CognitionValidationError extends Error {constructor(readonly code:CognitionValidationErrorCode){super(code);this.name='CognitionValidationError';}}
+export function cognitionValidationError(error:unknown):CognitionValidationErrorCode {return error instanceof CognitionValidationError?error.code:'schema';}
 export type CognitionFailure = 'failed'|'refused'|'malformed'|'timeout'|'unavailable'|'rate_limit'|'budget_exhausted'|'cancelled'|'interrupted'|'superseded';
 export interface CognitionMetrics {latencyMs:number;attempts:number;inputTokens:number|null;outputTokens:number|null;costUsd:number|null;costBasis:'reported'|'estimated'|'unknown';modelRevision:string|null}
-export interface CognitionResultCommand {type:'cognition_result';requestId:string;identity:CognitionIdentity;outcome:'success'|CognitionFailure;proposal:CognitionProposal|null;metrics:CognitionMetrics}
+export interface CognitionResultCommand {type:'cognition_result';requestId:string;identity:CognitionIdentity;outcome:'success'|CognitionFailure;proposal:CognitionProposal|null;metrics:CognitionMetrics;validationError?:CognitionValidationErrorCode}
 export interface CognitionObservationRequestCommand {type:'cognition_observation_request';requestId:string;identity:CognitionIdentity;captureId:string;frameHash:string;intentId:number}
 export type CognitionCommand=CognitionRequestCommand|CognitionResultCommand|CognitionObservationRequestCommand;
 export interface CognitionActionOutcome {status:'executed'|'rejected';reason:string;actionId:number|null;tick:number}
@@ -34,11 +41,26 @@ const text=(v:unknown,max:number):v is string=>typeof v==='string'&&v.trim().len
 const hash=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 export function validateCognitionIdentity(v:unknown):CognitionIdentity {const a=v as CognitionIdentity;if(!exact(a,['worldId','historyId','branchId','runId','mode'])||![a.worldId,a.historyId,a.branchId,a.runId].every(id)||!['LIVE','EXPERIMENT'].includes(a.mode))throw new Error('Invalid cognition identity');return structuredClone(a);}
 export function parseCognitionProposal(value:unknown):CognitionProposal {
- const p=(typeof value==='string'?JSON.parse(value):value) as CognitionProposal;
- if(!exact(p,['observationId','frameHash','interpretation','uncertainty','evidenceHandles','action'])||!id(p.observationId)||!hash(p.frameHash)||!text(p.interpretation,1200)||!finite(p.uncertainty,0,1)||!Array.isArray(p.evidenceHandles)||p.evidenceHandles.length>16||p.evidenceHandles.some(h=>!id(h))||new Set(p.evidenceHandles).size!==p.evidenceHandles.length)throw new Error('Invalid cognition proposal');
+ let p:CognitionProposal;try{p=(typeof value==='string'?JSON.parse(value):value) as CognitionProposal;}catch{throw new CognitionValidationError('invalid_json');}
+ if(!exact(p,['observationId','frameHash','interpretation','uncertainty','evidenceHandles','action'])||!id(p.observationId)||!hash(p.frameHash)||!text(p.interpretation,1200)||!finite(p.uncertainty,0,1)||!Array.isArray(p.evidenceHandles)||p.evidenceHandles.length>16||p.evidenceHandles.some(h=>!id(h))||new Set(p.evidenceHandles).size!==p.evidenceHandles.length)throw new CognitionValidationError('schema');
  const a=p.action;
- if(!((a?.type==='continue'||a?.type==='request_observation')&&exact(a,['type'])||a?.type==='look'&&exact(a,['type','bearingDegrees','elevationDegrees'])&&integer(a.bearingDegrees,-180,180)&&a.bearingDegrees%15===0&&integer(a.elevationDegrees,-45,45)&&a.elevationDegrees%15===0||a?.type==='inspect'&&exact(a,['type','handle'])&&id(a.handle)))throw new Error('Invalid cognition action');
+ if(!['continue','request_observation','look','inspect'].includes(a?.type))throw new CognitionValidationError('unsupported_action');
+ if(!((a?.type==='continue'||a?.type==='request_observation')&&exact(a,['type'])||a?.type==='look'&&exact(a,['type','bearingDegrees','elevationDegrees'])&&integer(a.bearingDegrees,-180,180)&&a.bearingDegrees%15===0&&integer(a.elevationDegrees,-45,45)&&a.elevationDegrees%15===0||a?.type==='inspect'&&exact(a,['type','handle'])&&id(a.handle)))throw new CognitionValidationError('schema');
  return structuredClone(p);
+}
+/** Strict remote v2 wire has no binding fields. Inject only after exact parsing. */
+export function bindCognitionProposal(value:unknown,context:CognitionContext):CognitionProposal {
+ let remote:unknown;try{remote=typeof value==='string'?JSON.parse(value):value;}catch{throw new CognitionValidationError('invalid_json');}
+ if(!exact(remote,['interpretation','uncertainty','evidenceHandles','action']))throw new CognitionValidationError('schema');
+ const proposal=parseCognitionProposal({...remote as Omit<CognitionProposal,'observationId'|'frameHash'>,observationId:context.observationId,frameHash:context.frameHash});
+ validateCognitionProposalReferences(proposal,context);return proposal;
+}
+/** Shared by transport normalization and the independent deterministic gate. */
+export function validateCognitionProposalReferences(proposal:CognitionProposal,context:CognitionContext):void {
+ if(proposal.observationId!==context.observationId)throw new CognitionValidationError('observation_mismatch');
+ if(proposal.frameHash!==context.frameHash)throw new CognitionValidationError('frame_hash_mismatch');
+ const handles=new Set(context.shapes.map(shape=>shape.handle));
+ if(proposal.evidenceHandles.some(handle=>!handles.has(handle))||proposal.action.type==='inspect'&&!handles.has(proposal.action.handle))throw new CognitionValidationError('unknown_handle');
 }
 export function validateCognitionContext(value:unknown):CognitionContext {
  const c=value as CognitionContext;
@@ -52,11 +74,14 @@ export function validateCognitionSelection(value:unknown):CognitionSelection {co
 export function validateCognitionCommand(value:unknown):CognitionCommand {
  const c=value as CognitionCommand;if(!c||!id(c.requestId))throw new Error('Invalid cognition request ID');
  if(c.type==='cognition_observation_request'&&exact(c,['type','requestId','identity','captureId','frameHash','intentId'])&&id(c.captureId)&&hash(c.frameHash)&&integer(c.intentId,1)){validateCognitionIdentity(c.identity);return structuredClone(c);}
- if(c.type==='cognition_request'&&exact(c,['type','purpose','requestId','selection','provider','model','promptRevision','schemaRevision'])&&['interpretation','decisions_evaluation'].includes(c.purpose)&&text(c.provider,80)&&text(c.model,120)&&id(c.promptRevision)&&c.schemaRevision===COGNITION_SCHEMA_REVISION){validateCognitionSelection(c.selection);return structuredClone(c);}
- if(c.type==='cognition_result'&&exact(c,['type','requestId','identity','outcome','proposal','metrics'])&&['success','failed','refused','malformed','timeout','unavailable','rate_limit','budget_exhausted','cancelled','interrupted','superseded'].includes(c.outcome)){
+ if(c.type==='cognition_request'&&exact(c,['type','purpose','requestId','selection','provider','model','promptRevision','schemaRevision'])&&['interpretation','decisions_evaluation'].includes(c.purpose)&&text(c.provider,80)&&text(c.model,120)&&id(c.promptRevision)&&['lumi-interpretation-v1',COGNITION_SCHEMA_REVISION].includes(c.schemaRevision)){validateCognitionSelection(c.selection);return structuredClone(c);}
+ if(c.type==='cognition_result'&&exact(c,['type','requestId','identity','outcome','proposal','metrics',...(Object.hasOwn(c,'validationError')?['validationError']:[])])&&['success','failed','refused','malformed','timeout','unavailable','rate_limit','budget_exhausted','cancelled','interrupted','superseded'].includes(c.outcome)){
+  if(Object.hasOwn(c,'validationError')&&(c.outcome!=='malformed'||!COGNITION_VALIDATION_ERRORS.includes(c.validationError!)))throw new Error('Invalid cognition validation category');
   validateCognitionIdentity(c.identity);const m=c.metrics;
   if(!exact(m,['latencyMs','attempts','inputTokens','outputTokens','costUsd','costBasis','modelRevision'])||!finite(m.latencyMs,0,3600000)||!integer(m.attempts,0,10)||!(m.inputTokens===null||integer(m.inputTokens))||!(m.outputTokens===null||integer(m.outputTokens))||!(m.costUsd===null||finite(m.costUsd,0,Number.MAX_VALUE))||!['reported','estimated','unknown'].includes(m.costBasis)||!(m.modelRevision===null||text(m.modelRevision,160))||m.costBasis==='unknown'&&m.costUsd!==null)throw new Error('Invalid cognition metrics');
   if(c.outcome==='success')parseCognitionProposal(c.proposal);else if(c.proposal!==null)throw new Error('Failed cognition must not carry proposal');return structuredClone(c);
  }throw new Error('Invalid cognition command');
 }
-export const INTERPRETATION_JSON_SCHEMA={type:'object',additionalProperties:false,required:['observationId','frameHash','interpretation','uncertainty','evidenceHandles','action'],properties:{observationId:{type:'string'},frameHash:{type:'string'},interpretation:{type:'string',maxLength:1200},uncertainty:{type:'number',minimum:0,maximum:1},evidenceHandles:{type:'array',maxItems:16,items:{type:'string'}},action:{oneOf:[{type:'object',additionalProperties:false,required:['type'],properties:{type:{enum:['continue','request_observation']}}},{type:'object',additionalProperties:false,required:['type','bearingDegrees','elevationDegrees'],properties:{type:{const:'look'},bearingDegrees:{type:'integer',minimum:-180,maximum:180,multipleOf:15},elevationDegrees:{type:'integer',minimum:-45,maximum:45,multipleOf:15}}},{type:'object',additionalProperties:false,required:['type','handle'],properties:{type:{const:'inspect'},handle:{type:'string'}}}]}}} as const;
+export const LEGACY_INTERPRETATION_JSON_SCHEMA={type:'object',additionalProperties:false,required:['observationId','frameHash','interpretation','uncertainty','evidenceHandles','action'],properties:{observationId:{type:'string'},frameHash:{type:'string'},interpretation:{type:'string',maxLength:1200},uncertainty:{type:'number',minimum:0,maximum:1},evidenceHandles:{type:'array',maxItems:16,items:{type:'string'}},action:{oneOf:[{type:'object',additionalProperties:false,required:['type'],properties:{type:{enum:['continue','request_observation']}}},{type:'object',additionalProperties:false,required:['type','bearingDegrees','elevationDegrees'],properties:{type:{const:'look'},bearingDegrees:{type:'integer',minimum:-180,maximum:180,multipleOf:15},elevationDegrees:{type:'integer',minimum:-45,maximum:45,multipleOf:15}}},{type:'object',additionalProperties:false,required:['type','handle'],properties:{type:{const:'inspect'},handle:{type:'string'}}}]}}} as const;
+
+export const INTERPRETATION_JSON_SCHEMA={type:'object',additionalProperties:false,required:['interpretation','uncertainty','evidenceHandles','action'],properties:{interpretation:LEGACY_INTERPRETATION_JSON_SCHEMA.properties.interpretation,uncertainty:LEGACY_INTERPRETATION_JSON_SCHEMA.properties.uncertainty,evidenceHandles:LEGACY_INTERPRETATION_JSON_SCHEMA.properties.evidenceHandles,action:LEGACY_INTERPRETATION_JSON_SCHEMA.properties.action}} as const;

@@ -35,6 +35,7 @@ export interface CaptureMetadata extends ActiveTarget {
 export const SHAPE_QUALITY_FLAGS = ['small_projected_size','frustum_clipped','partial_sample_visibility','limited_pixel_support','no_pixel_support','limited_pixel_resolution','no_rgb_support','low_rgb_signal','low_pixel_contrast','clutter_limited_pixel_contrast','marginal_pixel_contrast'] as const;
 export type SampleVisibilityBand = 'low' | 'medium' | 'high';
 export interface EligibleShape {
+  /** Current pixel-checked hints require raster coverage and nonzero local RGB; weak support is LOW. */
   handle: string; identity: 'unknown'; bearingDegrees: number; elevationDegrees: number;
   distanceBand: string; sampleVisibilityBand: SampleVisibilityBand; qualityFlags: string[]; uncertainty: 'geometric_samples_only' | 'geometry_candidates_pixel_checked';
 }
