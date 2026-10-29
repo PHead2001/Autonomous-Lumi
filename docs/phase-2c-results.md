@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Actual paid acceptance now passes: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Prior hosted review was clean at `da6b1b2`; hosted review of the subsequent provider JSON-mode and sanitizer corrections is pending.
+Actual paid acceptance now passes: six main OpenRouter responses cover five 512×512 experiment fixtures and a genuine temporary LIVE admission that survives a cognition-disabled restart. One actual matched Decisions comparison ran separately; one case is insufficient to adopt it, and normal LIVE Decisions remains disabled. All six corrected diagnostic bundles are COMPLETE and replay offline. Earlier offline checks passed **231 tests**, lint/build and **2/2** actual Chromium attention checks. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) remains open and unmerged. Final targeted hosted Codex review of `ac08c9c` completed clean with no findings and no unresolved findings. Phase 2c acceptance is fulfilled within the bounded checks and limitations below; merging remains the owner's action.
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
@@ -24,7 +24,7 @@ The hosted P2 cost-overage finding was fixed and pushed in `808a870`; its thread
 
 The hosted P1 checkpoint-capacity fix passed **76 affected tests**, owned ESLint and build including TypeScript, with **clean independent Astra review**. Both initial hosted findings are resolved. Targeted hosted Codex re-review of `da6b1b2` completed with no findings and no unresolved findings; independent Astra re-reviews are also clean. The old compact-size guard admitted a counterexample of **1,390,041 compact bytes** whose actual stored envelope was **2,145,509 bytes**, above the **2,097,152-byte** limit. The replacement measures the actual pretty-printed recovery/named envelopes and reserves future activity, synthetic, motor/sensor and terminal-delivery growth. Supplied corrected fixtures measured **1,743,094 actual recovery bytes** for 221 real experiences with a **2,042,291-byte derived budget**, and **1,972,720 named-checkpoint bytes** after LIVE→EXPERIMENT fork with 256 synthetic records and 10,000 activity milestones. Maximum escaped terminal-result and ordered-delivery fixtures measured **23,886 / 12,002 bytes**, below their individual **32 KiB** allowances; combined growth was **35,888 bytes**, below **64 KiB**. These are focused capacity fixtures and affected checks, not a fresh full-suite result.
 
-The later sanitizer correction passed **3 affected tests**, lint and TypeScript, with clean independent re-review. The provider JSON-mode/prompt correction passed **16 provider tests**, lint and TypeScript, with clean focused review. The earlier hosted clean result predates these corrections and is not approval of their latest code.
+The later sanitizer correction passed **3 affected tests**, lint and TypeScript, with clean independent re-review. The provider JSON-mode/prompt correction passed **16 provider tests**, lint and TypeScript, with clean focused review. Final hosted re-review of `ac08c9c` includes these corrections and completed clean with no findings or unresolved findings.
 
 ## Earlier actual renderer plus explicitly MOCK interpretation
 
@@ -90,6 +90,10 @@ These provider latencies include adapter scheduling/queueing; the separate HTTP 
 
 The genuine **temporary LIVE** chain admitted real experience **1** at tick **412**, with `look_started`. Restarting that isolated history with cognition disabled retained **one** real experience in the **same history**. The harness used disposable temporary data; owner LIVE history was not used for these fixtures. The sanitized bundle is `diagnostics/phase2c-paid-json-20261029/temporary-live.zip`; it is COMPLETE and replays at tick 412 with **9 inputs / 61 events**:
 
+Independent inspection of this actual ZIP found **37,311 bytes**, **13 entries** and **106 records**, with zero evidence gaps or drops. Its nine normalized commands preserve the sound → sensor/attention → request/result → local `look_started` validation → LIVE `actual_renderer` `EXPERIENCE_ENCODED` chain under the same correlated identity. Two quota-rejected feedback inputs remain useful failure evidence before the later successful capture. Privacy inspection found no credentials, raw image payloads, full prompts or private evaluation data. Inspection confirmed the script/checkpoint identity results report `survived: true`, `retainedCount: 1` and `sameHistory: true`; the independent artifact check did not rerun that restart.
+
+The documented `npm.cmd` replay command was independently run and **passed**, matching the state/event/runtime hashes below at tick 412, with **9 inputs / 61 events**. Output: `diagnostics/phase2c-paid-live-replay.log`. This is artifact inspection and deterministic replay evidence, not a source-provenance certification.
+
 | Canonical evidence | Hash |
 | --- | --- |
 | State | `af32a2290f95f5a895b1026e3dc09ea1a23c81fb6b33d7fb56174f021a59bd3d` |
@@ -130,7 +134,7 @@ The optional command also needs the independent local `OPENAI_API_KEY`. Both com
 | `2c-4` genuine temporary LIVE admission/restart | **PASS**, experience 1 retained with cognition disabled, same temporary history |
 | Optional Decisions comparison | One actual matched case evaluated; **insufficient evidence to adopt**, normal LIVE disabled |
 | Original viewer browser regression | Upright avatar, walking/idle and advancing-world reconnect observed; audio unverified and no reliable new door/ear transient capture |
-| Final review | Initial capacity/cost findings fixed and resolved with clean independent and prior hosted reviews; subsequent JSON-mode/sanitizer focused reviews clean, latest hosted review pending. Draft PR #8 open/unmerged |
+| Final review | Initial capacity/cost findings fixed and resolved with clean independent and prior hosted reviews; subsequent JSON-mode/sanitizer focused reviews clean. **PASS:** final hosted review of `ac08c9c` clean, no findings or unresolved findings. Draft PR #8 open/unmerged; owner merge |
 
 ## Material limits
 
