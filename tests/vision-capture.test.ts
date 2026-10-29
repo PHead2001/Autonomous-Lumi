@@ -11,11 +11,14 @@ import { join, resolve, sep } from 'node:path';
 import { BranchRegistry } from '../server/branch-registry.js';
 import { readRun } from '../server/diagnostics/recorder.js';
 import { createVisionApi } from '../server/vision/http-api.js';
+import { VisionSimulation } from '../server/simulation.js';
 
 const frame: RenderedFrame = { bytes: new Uint8Array([137,80,78,71,13,10,26,10]), backend: { configuration: 'angle-d3d11', chromium: 'test', webglVendor: 'test', webglRenderer: 'test', version: 'test', flags: [] } };
 function runtime(branchId = 'experiment') {
   const original = new BranchRuntime({ worldId: 'vision-test', branchId, mode: 'EXPERIMENT', offline: true });
+  // Retain the Phase 2a replay fixture explicitly; new automatic-policy tests use V4.
   const cp = original.checkpoint(), fixture = createVisibilityFixture();
+  cp.schemaVersion=2;cp.simulation=new VisionSimulation({mode:'EXPERIMENT'}).checkpoint();
   assert.equal(cp.simulation.schemaVersion, 3);
   if (cp.simulation.schemaVersion !== 3) throw new Error('Vision schema required');
   cp.simulation.character = fixture.character; cp.simulation.scene = fixture.scene!; cp.simulation.head = fixture.head!;

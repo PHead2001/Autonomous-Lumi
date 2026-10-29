@@ -1,4 +1,5 @@
 import type { ActiveTarget } from './lab-protocol.js';
+import type { AutomaticCaptureReason } from './attention-protocol.js';
 
 /** Admission includes the running job. Each admitted slot may consume one full render deadline. */
 export const CAPTURE_LIMITS = { capacity: 4, timeoutMs: 20000, cleanupTimeoutMs: 5000 } as const;
@@ -13,7 +14,10 @@ export function captureResultDeadlineMs(timing: CaptureCompletionTiming = CAPTUR
 }
 export type RendererBackend = 'angle-d3d11' | 'swiftshader';
 export type CaptureStatus = 'queued' | 'pending' | 'success' | 'unavailable' | 'timeout' | 'failed' | 'stale';
-export interface CaptureOptions { reason: 'developer' | 'diagnostic' | 'benchmark'; width?: number; height?: number }
+export const MANUAL_CAPTURE_REASONS = ['developer', 'diagnostic', 'benchmark'] as const;
+export type CaptureReason = typeof MANUAL_CAPTURE_REASONS[number] | AutomaticCaptureReason;
+export interface CaptureOptions { reason: CaptureReason; width?: number; height?: number }
+export interface AutomaticCaptureAssociation { intentId: number; reasons: AutomaticCaptureReason[]; parentSequence: number | null }
 export interface CameraEvidence {
   position: [number, number, number]; direction: [number, number, number]; up: [number, number, number];
   bodyHeading: number; headYaw: number; headPitch: number; horizontalFovDegrees: number; verticalFovDegrees: number;
@@ -26,6 +30,7 @@ export interface CaptureMetadata extends ActiveTarget {
   camera: CameraEvidence; reason: CaptureOptions['reason']; width: number; height: number; format: 'image/png';
   status: CaptureStatus; requestedAt: string; completedAt: string | null; durationMs: number | null;
   frameHash: string | null; backend: RendererIdentity | null; error: string | null;
+  automatic?: AutomaticCaptureAssociation;
 }
 export type SampleVisibilityBand = 'low' | 'medium' | 'high';
 export interface EligibleShape {

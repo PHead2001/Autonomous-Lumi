@@ -4,6 +4,7 @@ import { validId } from '../branch-runtime.js';
 import type { ActiveTarget } from '../../shared/lab-protocol.js';
 import { CaptureManager } from './capture-manager.js';
 import type { FrameRenderer } from './renderer.js';
+import { MANUAL_CAPTURE_REASONS } from '../../shared/capture-protocol.js';
 
 function target(query: Record<string, unknown>): ActiveTarget {
   if (![query.worldId, query.branchId, query.runId].every(validId)) throw new Error('Explicit vision world, branch and run required');
@@ -24,7 +25,10 @@ export function createVisionApi({ registry, renderer }: { registry: BranchRegist
       return { status: 200, bytes: manager.frame(scope, query.captureId), contentType: 'image/png' };
     },
     async post(pathname: string, runtime: BranchRuntime, input: Record<string, unknown>): Promise<object | null> {
-      if (pathname === '/api/vision/capture') return manager.request(runtime, { reason: input.reason as 'developer', ...(input.width === undefined ? {} : { width: input.width as number }), ...(input.height === undefined ? {} : { height: input.height as number }) });
+      if (pathname === '/api/vision/capture') {
+        if (!MANUAL_CAPTURE_REASONS.includes(input.reason as typeof MANUAL_CAPTURE_REASONS[number])) throw new Error('Manual capture reason required');
+        return manager.request(runtime, { reason: input.reason as 'developer', ...(input.width === undefined ? {} : { width: input.width as number }), ...(input.height === undefined ? {} : { height: input.height as number }) });
+      }
       if (pathname === '/api/vision/head') { const action = manager.resolveHeadAction(runtime, input.action); const result = runtime.enqueue(action); return { input: result.input, state: runtime.viewerState() }; }
       return null;
     },

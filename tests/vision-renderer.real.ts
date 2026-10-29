@@ -56,7 +56,7 @@ test('actual delayed zero-viewer capture preserves admission snapshot while worl
   const manager = new CaptureManager(() => true, renderer), requested = manager.request(runtime, { reason: 'diagnostic' });
   const timer = setInterval(() => runtime.simulation.step(), 1000 / 30);
   runtime.enqueue({ type: 'slam' });
-  try { const completed = await manager.wait(runtime.target, requested.captureId); assert.equal(completed.status, 'success'); assert.equal(completed.tick, requested.tick); assert.equal(completed.stateHash, requested.stateHash); assert.ok(runtime.simulation.state.tick > requested.tick); assert.equal(runtime.simulation.state.door.slamCount, 1); assert.equal(runtime.simulation.state.reflex.strength, 1); const capturedBytes = manager.frame(runtime.target, requested.captureId); assert.ok(capturedBytes.length > 100); const reproduced = await renderer.render(admittedSnapshot, 512, 512); assert.equal(digest(capturedBytes), digest(reproduced.bytes)); assert.deepEqual(manager.view(runtime.target).privateGrounding, groundSnapshot(admittedSnapshot, 512, 512)); }
+  try { const completed = await manager.wait(runtime.target, requested.captureId); assert.equal(completed.status, 'success'); assert.equal(completed.tick, requested.tick); assert.equal(completed.stateHash, requested.stateHash); assert.ok(runtime.simulation.state.tick > requested.tick); assert.equal(runtime.simulation.state.door.slamCount, 1); assert.ok(runtime.simulation.state.reflex.strength > 0 && runtime.simulation.state.reflex.strength < 1); assert.equal(runtime.simulation.state.reflex.start, runtime.simulation.state.door.lastSlam); const capturedBytes = manager.frame(runtime.target, requested.captureId); assert.ok(capturedBytes.length > 100); const reproduced = await renderer.render(admittedSnapshot, 512, 512); assert.equal(digest(capturedBytes), digest(reproduced.bytes)); assert.deepEqual(manager.view(runtime.target).privateGrounding, groundSnapshot(admittedSnapshot, 512, 512)); }
   finally { clearInterval(timer); await manager.close(); await runtime.close(); }
 });
 test('idle cleanup failure is contained, visible, and retried only by an explicit new capture', async () => {
@@ -74,7 +74,7 @@ test('actual Chromium capture deadline cleans its process while world/reflex con
     await renderer.render(createVisibilityFixture(), 128, 128); hooks.renderDelayMs = 3000;
     const tick = runtime.simulation.state.tick; timer = setInterval(() => runtime.simulation.step(), 1000 / 30); runtime.enqueue({ type: 'slam' });
     await assert.rejects(renderer.render(createVisibilityFixture(), 128, 128), /timed out/);
-    assert.equal(renderer.pid, undefined); assert.ok(runtime.simulation.state.tick > tick); assert.equal(runtime.simulation.state.reflex.strength, 1);
+    assert.equal(renderer.pid, undefined); assert.ok(runtime.simulation.state.tick > tick); assert.ok(runtime.simulation.state.reflex.strength > 0 && runtime.simulation.state.reflex.strength < 1); assert.equal(runtime.simulation.state.reflex.start, runtime.simulation.state.door.lastSlam);
     hooks.renderDelayMs = 0; assert.ok((await renderer.render(createVisibilityFixture(), 128, 128)).bytes.length > 100);
   } finally { clearInterval(timer); await renderer.close(); await runtime.close(); }
 });

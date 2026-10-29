@@ -64,10 +64,11 @@ test('runtime export restores controls, activity, eligible synthetic experience 
   runtime.applyControl({type:'synthetic-cue',sensed:true,attended:false,encoded:true});
   runtime.applyControl({type:'synthetic-cue',sensed:true,attended:true,encoded:true});
   runtime.applyControl({type:'synthetic-clock',sensed:true,attended:true,encoded:true,observedSeconds:30,uncertaintySeconds:2});
-  for(let i=0;i<15;i++)runtime.applyControl({type:'step'});
+  // The received slam now creates a bounded attention commitment before work resumes.
+  for(let i=0;i<65;i++)runtime.applyControl({type:'step'});
   const expected=runtime.checkpoint();await runtime.close();
   const out=join(directory,'runtime.zip'),result=await exportIncident({runDirectory:runtime.recorder!.runDirectory,out,expectedWorldId:runtime.target.worldId,expectedBranchId:runtime.target.branchId,expectedRunId:runtime.target.runId});
-  assert.equal(result.manifest.schema_version,2);assert.equal(result.manifest.evidence_status,'COMPLETE');assert.equal(result.assertions.runtimeControlStateMatches,true);
+  assert.equal(result.manifest.schema_version,2);assert.equal(result.manifest.evidence_status,'COMPLETE',JSON.stringify(result.manifest));assert.equal(result.assertions.runtimeControlStateMatches,true);
   const replayed=await replayBundle(out);assert.equal(replayed.stateHash,hashCheckpoint(expected.simulation));assert.equal(typeof replayed.runtimeHash,'string');
   const reproduction=strFromU8((await inspectBundle(out))['REPRODUCTION.md']);
   assert.ok(reproduction.includes(JSON.stringify({type:'synthetic-cue',sensed:true,attended:false,encoded:true})));assert.ok(reproduction.includes(JSON.stringify({type:'synthetic-clock',sensed:true,attended:true,encoded:true,observedSeconds:30,uncertaintySeconds:2})));
