@@ -1,6 +1,7 @@
 import './style.css';
 import { createScene } from './scene';
 import { SlamAudio } from './audio';
+import { ViewerLifecycle } from './viewer-lifecycle';
 import type { ServerMessage } from '../shared/protocol';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -11,10 +12,15 @@ let scene: ReturnType<typeof createScene> | null = null;
 try { scene = createScene(element<HTMLCanvasElement>('scene')); }
 catch { element('scene-error').hidden = false; element('scene-error').textContent = 'This viewer needs WebGL. Enable hardware acceleration or try a current desktop browser.'; }
 let socket: WebSocket | null = null, reconnect: ReturnType<typeof setTimeout> | undefined;
-let intentionalDisconnect = false, latestWorld = '', lastSound = 0;
+let latestWorld = '', lastSound = 0;
 function status(text: string, live: boolean) { connection.textContent = text; dot.classList.toggle('connected', live); slam.disabled = !live; }
+const lifecycle = new ViewerLifecycle(window, {
+  resume: connect,
+  suspend: () => { clearTimeout(reconnect); socket?.close(); },
+});
 function connect() {
-  clearTimeout(reconnect); intentionalDisconnect = false; status('Connecting', false);
+  if (!lifecycle.shouldReconnect) return;
+  clearTimeout(reconnect); status('Connecting', false);
   const current = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/world`); socket = current;
   current.onopen = () => { status('Live world', true); toggle.disabled = false; toggle.textContent = 'Disconnect viewer'; };
   current.onmessage = event => {
@@ -28,9 +34,9 @@ function connect() {
   };
   current.onclose = () => {
     if (socket !== current) return;
-    status(intentionalDisconnect ? 'Viewer disconnected' : 'Reconnecting…', false);
+    status(lifecycle.shouldReconnect ? 'Reconnecting…' : 'Viewer disconnected', false);
     toggle.disabled = false; toggle.textContent = 'Reconnect viewer';
-    if (!intentionalDisconnect) reconnect = setTimeout(connect, 1200);
+    if (lifecycle.shouldReconnect) reconnect = setTimeout(connect, 1200);
   };
   current.onerror = () => current.close();
 }
@@ -41,9 +47,8 @@ slam.onclick = async () => {
 };
 toggle.onclick = () => {
   if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
-    intentionalDisconnect = true; clearTimeout(reconnect); socket.close();
-  } else connect();
+    lifecycle.disconnect();
+  } else lifecycle.connect();
 };
 element('reset-camera').onclick = () => scene?.reset();
-window.addEventListener('pagehide', () => { intentionalDisconnect = true; clearTimeout(reconnect); socket?.close(); });
-connect();
+lifecycle.connect();
