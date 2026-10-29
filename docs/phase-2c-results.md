@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Current repair verification passes: **263/263** offline tests, lint/build, actual `vision:verify` **8/8**, attention **2/2**, and a bounded **six-call actual prompt-v4 run**. All six main HTTP 200 responses normalized successfully with `validationError: null`; six COMPLETE bundles replay with matching canonical results. No automated retries or Decisions calls occurred in this correction. Independent ZIP inspection passed; hosted review of the new patch remains pending; earlier source approvals are historical. PR #8 remains open/unmerged.
+Current repair verification passes: **263/263** offline tests, lint/build, actual `vision:verify` **8/8**, attention **2/2**, and a bounded **six-call actual prompt-v4 run**. All six main HTTP 200 responses normalized successfully with `validationError: null`; six COMPLETE bundles replay with matching canonical results. No automated retries or Decisions calls occurred in this correction. Independent ZIP inspection passed. Hosted source review of `dfcf49c` completed **PASS**, with no findings and no unresolved findings; later `f0153b7` is documentation-only and is not claimed as reviewed source. PR #8 remains open/unmerged.
 
 ## Current contract and local verification
 
@@ -17,7 +17,7 @@ All six harness cases run even after a case failure, with strict overall accepta
 | Actual renderer / attention | **8/8 / 2/2 PASS**, `v4-repair-vision-verify.log` / `v4-repair-vision-attention.log` |
 | Actual pixel + FAKE transport | **3/3 PASS**, zero external calls |
 | Cleanup | **15/15** focused checks, actual **8/8**, lint/TypeScript and independent Astra review clean |
-| New repair hosted review | **PENDING**, `dfcf49c`, review comment `6508571913` |
+| New repair hosted review | **PASS**, `dfcf49c`: no findings or unresolved findings, review comment `6508571913`; later `f0153b7` documentation-only |
 | Independent new ZIP inspection | **PASS**, temporary LIVE and dark artifacts inspected; exact LIVE replay matched |
 
 Paths without a prefix are under `diagnostics/`. Cleanup has a structural fallback for a confirmed owned-renderer exit within the original shared **2,500 ms** deadline and a server-filtered CIM query; queried PIDs are never killed. This repairs the fallback race and reduces query work. The external four-failure sequence and its reported paths were unavailable here, so its exact cause and elimination are not proven.
