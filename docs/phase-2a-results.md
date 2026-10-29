@@ -2,7 +2,7 @@
 
 Virtual Eyes extends the existing fox-girl viewer and isolated laboratory with a shared physical scene, server-owned head/eye pose, deterministic turn/look/scan actions, an isolated on-demand Chromium renderer, and sight-limited spatial evidence. Operating instructions are in the [README](../README.md), [Virtual Eyes guide](virtual-eyes.md), and [renderer comparison](renderer-benchmarks.md).
 
-Current verification passed **143/143 normal tests**, **7/7 actual renderer cases in one command**, lint and build/typecheck. The observed-direction correction passed independent architect review; hosted re-review of that correction is pending. The retained renderer benchmark and browser evidence remain applicable as described below. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
+Current verification passed **143/143 normal tests**, **7/7 actual renderer cases in one command**, lint and build/typecheck. The observed-direction correction passed independent architect review and hosted code re-review with **no findings and no unresolved findings**. The retained renderer benchmark and browser evidence remain applicable as described below. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
 
 ## Run and try it
 
@@ -115,7 +115,7 @@ Filtered shapes expose only `sampleVisibilityBand` (`low`, `medium` or `high`), 
 
 The rules change keeps checkpoint schema 3 and runtime schema 2. Active upgrades preserve history, tick, pose, counters and queued ordering; original recovery data is archived as `pre-vision-rules-v1-…` and `STATE_RULES_MIGRATED` records the old and new rules. A legacy queued private-ID target is rejected explicitly at its original execution tick because no captured coarse bearing exists to reconstruct. Existing motor turns/scans continue from committed state. Historical `lumi-eyes-v1` replay retains its original semantics and hashes.
 
-Independent architect review accepted this correction with no actionable findings. Hosted re-review is pending. The renderer benchmark is unchanged and remains reusable.
+Independent architect review accepted this correction with no actionable findings. Hosted code re-review of the pushed correction and documentation also completed with **no findings and no unresolved findings**. This refreshed code review does not represent a new security scan. The renderer benchmark is unchanged and remains reusable.
 
 The actual corrected-rules diagnostic artifact is **`diagnostics/observed-aim-regression.zip`** (14,732 bytes). Its 13 entries were inspected: **COMPLETE** coverage for ticks **0–24**, 67 records, 2 ordered inputs and 8 deterministic events, with zero gaps, dropped records, writer failures or evictions. A real Chrome 156 / NVIDIA ANGLE/D3D11 capture supplies the observation. After a 10° head turn, the targeted action uses the captured **−15°** coarse bearing; normalized current action evidence contains no engine target ID. The sanitized ZIP contains no image payload and no experiences.
 
