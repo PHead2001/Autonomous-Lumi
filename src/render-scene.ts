@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { WorldState } from '../shared/protocol';
-import { eyePose } from '../shared/eye-pose';
+import { assertCameraClearance, eyePose } from '../shared/eye-pose';
 import { physicalSceneSnapshot } from '../shared/physical-scene';
 import { createAvatar } from './avatar';
 
@@ -16,7 +16,9 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
   const meshes = new Map<string, THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>>();
   const avatar = createAvatar({ firstPerson: options.firstPerson }); scene.add(avatar.root);
   function applySnapshot(state: WorldState, presentationTime = state.time, placeAvatar = true) {
-    const physical = physicalSceneSnapshot(state, presentationTime), seen = new Set<string>();
+    if (options.firstPerson) assertCameraClearance(state, options.width, options.height);
+    const time = options.firstPerson ? state.time : presentationTime;
+    const physical = physicalSceneSnapshot(state, time), seen = new Set<string>();
     for (const b of physical.boxes) {
       seen.add(b.id);
       let mesh = meshes.get(b.id);
@@ -32,7 +34,7 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
     // A dark room has a dark exterior background as well; no fake ambient/emissive cue remains.
     (scene.background as THREE.Color).set(physical.illumination === 0 ? '#000000' : '#d9ded3');
     if (placeAvatar) { avatar.root.position.set(state.character.x, 0, state.character.z); avatar.root.rotation.y = state.character.heading; }
-    avatar.update(state, presentationTime, state.character.gait);
+    avatar.update(state, time, state.character.gait);
     const pose = eyePose(state, options.width, options.height);
     camera.fov = pose.verticalFovDegrees; camera.aspect = pose.width / pose.height; camera.near = pose.near; camera.far = pose.far;
     camera.position.set(...pose.position); camera.up.set(...pose.up); camera.lookAt(new THREE.Vector3(...pose.position).add(new THREE.Vector3(...pose.direction))); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);

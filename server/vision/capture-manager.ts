@@ -7,6 +7,7 @@ import { eyePose } from '../../shared/eye-pose.js';
 import { PHYSICAL_SCENE_VERSION, RENDER_REVISION } from '../../shared/physical-scene.js';
 import { HEAD_LIMITS, validateHeadAction, type HeadAction } from '../../shared/vision-protocol.js';
 import type { CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
+import { CAPTURE_LIMITS } from '../../shared/capture-protocol.js';
 import { groundSnapshot, filterVisibleGrounding } from './grounding.js';
 import { ChromiumRenderer, RendererFailure, type FrameRenderer } from './renderer.js';
 
@@ -30,8 +31,17 @@ export class CaptureManager {
   private readonly queue: Entry[] = [];
   private running: Entry | undefined;
   private closed = false;
-  readonly capacity = 4; readonly maxRetainedFrames = 16; readonly maxFramesPerRun = 4;
-  constructor(private readonly current: (target: ActiveTarget) => boolean, private readonly renderer: FrameRenderer = new ChromiumRenderer(), readonly timeoutMs = 20000) {}
+  private cleanupFailure: string | null = null;
+  readonly capacity = CAPTURE_LIMITS.capacity; readonly maxRetainedFrames = 16; readonly maxFramesPerRun = 4;
+  constructor(private readonly current: (target: ActiveTarget) => boolean, private readonly renderer: FrameRenderer = new ChromiumRenderer(), readonly timeoutMs: number = CAPTURE_LIMITS.timeoutMs, readonly cleanupTimeoutMs: number = CAPTURE_LIMITS.cleanupTimeoutMs) {}
+  private async cleanupRenderer(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([this.renderer.close(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Renderer cleanup deadline exceeded')), this.cleanupTimeoutMs); })]);
+      this.cleanupFailure = null;
+    } catch (error) { this.cleanupFailure = 'Renderer cleanup failed or exceeded its deadline'; throw error; }
+    finally { clearTimeout(timer); }
+  }
   private record(entry: Entry, eventType: string, outcome: string, extra: Record<string, string | number | boolean | null> = {}) {
     const m = entry.metadata;
     entry.runtime.recorder?.record({ tick: m.tick, category: 'PRIVATE_SENSOR', eventType, component: 'virtual_eyes', outcome, severity: ['failed', 'timeout', 'unavailable', 'stale'].includes(outcome) ? 'warn' : 'info', data: { captureId: m.captureId, observationId: m.observationId, capturedTick: m.tick, stateVersion: m.stateVersion, stateHash: m.stateHash, sceneRevision: m.sceneRevision, dynamicRevision: m.dynamicRevision, renderRevision: m.renderRevision, captureReason: m.reason, width: m.width, height: m.height, bodyHeading: m.camera.bodyHeading, headYaw: m.camera.headYaw, headPitch: m.camera.headPitch, eyeX: m.camera.position[0], eyeY: m.camera.position[1], eyeZ: m.camera.position[2], horizontalFovDegrees: m.camera.horizontalFovDegrees, ...extra } });
@@ -78,7 +88,7 @@ export class CaptureManager {
       entry.metadata.status = error instanceof RendererFailure ? error.status : 'failed';
       entry.metadata.error = error instanceof RendererFailure ? error.message.slice(0, 240) : 'Renderer capture failed';
       this.record(entry, 'CAPTURE_FAILURE', entry.metadata.status, { reason: entry.metadata.error });
-      try { await this.renderer.close(); }
+      try { await this.cleanupRenderer(); }
       catch { this.record(entry, 'CAPTURE_CLEANUP_FAILURE', 'failed', { reason: 'Renderer cleanup failed; inspect sensor health before retry' }); entry.metadata.error += '; renderer cleanup failed'; }
     } finally {
       if (!entry.retired) { entry.metadata.completedAt = new Date().toISOString(); entry.metadata.durationMs = performance.now() - entry.requestedMono;
@@ -95,7 +105,7 @@ export class CaptureManager {
   view(target: ActiveTarget): CaptureView {
     if (!this.current(target)) throw new Error('Vision target is retired');
     const key = scopeKey(target), latest = this.entries.get(this.latest.get(key) ?? ''), success = this.entries.get(this.successes.get(key) ?? '');
-    return structuredClone({ latest: latest?.metadata ?? null, previousSuccess: success?.bytes ? success.metadata : null, observation: latest?.metadata.status === 'success' && latest.bytes ? latest.observation ?? null : null, privateGrounding: latest?.metadata.status === 'success' && latest.bytes ? latest.grounding : null, cleanupError: this.renderer.cleanupError ?? null, limits: { queued: this.queue.length + Number(!!this.running), capacity: this.capacity, retainedFrames: [...this.entries.values()].filter(entry => entry.bytes).length, maxRetainedFrames: this.maxRetainedFrames, timeoutMs: this.timeoutMs } });
+    return structuredClone({ latest: latest?.metadata ?? null, previousSuccess: success?.bytes ? success.metadata : null, observation: latest?.metadata.status === 'success' && latest.bytes ? latest.observation ?? null : null, privateGrounding: latest?.metadata.status === 'success' && latest.bytes ? latest.grounding : null, cleanupError: this.cleanupFailure ?? this.renderer.cleanupError ?? null, limits: { queued: this.queue.length + Number(!!this.running), capacity: this.capacity, retainedFrames: [...this.entries.values()].filter(entry => entry.bytes).length, maxRetainedFrames: this.maxRetainedFrames, timeoutMs: this.timeoutMs } });
   }
   frame(target: ActiveTarget, captureId: string): Uint8Array {
     if (!this.current(target)) throw new Error('Vision target is retired');
@@ -140,7 +150,7 @@ export class CaptureManager {
   async close(): Promise<void> {
     this.closed = true;
     for (const entry of this.queue.splice(0)) { entry.metadata.status = 'failed'; entry.metadata.error = 'Renderer closed before capture'; entry.complete(); }
-    try { await this.renderer.close(); }
+    try { await this.cleanupRenderer(); }
     catch { if (this.running) this.record(this.running, 'CAPTURE_CLEANUP_FAILURE', 'failed', { reason: 'Renderer cleanup failed during shutdown' }); }
   }
 }

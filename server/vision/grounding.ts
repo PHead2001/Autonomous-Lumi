@@ -1,5 +1,5 @@
 import type { WorldState } from '../../shared/protocol.js';
-import { eyePose, type EyePose } from '../../shared/eye-pose.js';
+import { assertCameraClearance, eyePose, type EyePose } from '../../shared/eye-pose.js';
 import { physicalSceneSnapshot, type PhysicalBox, type Vector3Tuple } from '../../shared/physical-scene.js';
 
 export type VisibilityStatus = 'visible' | 'partially_occluded' | 'fully_occluded' | 'outside_frustum' | 'poor_observability';
@@ -54,6 +54,7 @@ function inFrustum(point: Vector3Tuple, camera: EyePose): boolean {
 }
 /** Private measurement from exactly the snapshot used by the image renderer. No attention or semantics. */
 export function groundSnapshot(state: WorldState, width?: number, height?: number): GroundingResult {
+  assertCameraClearance(state, width, height);
   const scene = physicalSceneSnapshot(state), camera = eyePose(state, width, height);
   const objects = scene.boxes.filter(b => b.observable).map((box): GroundingObject => {
     const points = samples(box), view = points.filter(p => inFrustum(p, camera));
@@ -84,5 +85,6 @@ export function filterVisibleGrounding(result: GroundingResult, handleFor: (priv
   return result.objects.filter(o => o.eligible).map(o => ({ handle: handleFor(o.id), identity: 'unknown', bearingDegrees: Math.round(o.bearingRadians * 180 / Math.PI / 15) * 15, elevationDegrees: Math.round(o.elevationRadians * 180 / Math.PI / 15) * 15, distanceBand: o.distance < 2 ? 'near' : o.distance < 6 ? 'room' : 'far', sampleVisibilityFraction: o.sampleVisibilityFraction, qualityFlags: [...o.qualityFlags], uncertainty: 'geometric_samples_only' }));
 }
 export function isTargetEligible(state: WorldState, privateId: string, width?:number, height?:number): boolean {
-  return groundSnapshot(state,width,height).objects.some(o => o.id === privateId && o.eligible);
+  try { return groundSnapshot(state,width,height).objects.some(o => o.id === privateId && o.eligible); }
+  catch { return false; }
 }

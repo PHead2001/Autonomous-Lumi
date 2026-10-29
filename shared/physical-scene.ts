@@ -1,9 +1,17 @@
 import type { WorldState } from './protocol.js';
+import { CHARACTER_CLEARANCE_RADIUS } from './avatar-rig.js';
 
 /** Physical room coordinates: Y up, +Z forward. Cutaways are a renderer choice. */
 export const PHYSICAL_SCENE_VERSION = 'lumi-room-v1';
 export const RENDER_REVISION = 'three-room-v1';
 export const PHYSICAL_ROOM = { width: 9, depth: 7, walkX: 3.2, walkZ: 2.3 } as const;
+const DOOR_SWING_AMPLITUDE = 0.5;
+const DOOR_HINGE: Vector3Tuple = [2.05, 0, -3.53];
+const DOOR_PARTS: { id: string; size: Vector3Tuple; position: Vector3Tuple; color: string; observable?: boolean }[] = [
+  { id: 'door-leaf', size: [1.84, 2.8, 0.12], position: [0.92, 1.4, 0], color: '#b86d4b', observable: true },
+  { id: 'door-panel', size: [1.46, 1.8, 0.04], position: [0.92, 1.55, 0.09], color: '#c98660' },
+  { id: 'door-knob', size: [0.13, 0.13, 0.18], position: [1.6, 1.25, 0.16], color: '#eac58a' },
+];
 export type Vector3Tuple = [number, number, number];
 export interface PhysicalSceneState {
   revision: number;
@@ -51,7 +59,7 @@ export function doorAngle(state: WorldState, time = state.time): number {
   const override = state.scene?.doorOpenRadians;
   if (override !== undefined && override !== null) return override;
   const age = time - state.door.lastSlam;
-  return age >= 0 && age < 0.4 ? -0.5 * Math.exp(-age * 10) * Math.cos(age * 20) : 0;
+  return age >= 0 && age < 0.4 ? -DOOR_SWING_AMPLITUDE * Math.exp(-age * 10) * Math.cos(age * 20) : 0;
 }
 /** Every visible environment mesh and every visibility/collision box comes from here. */
 export function physicalSceneSnapshot(state: WorldState, time = state.time): PhysicalSceneSnapshot {
@@ -78,14 +86,12 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
   box('door-frame-left', [0.11, 2.9, 0.21], [1.995, 1.45, -3.48], '#42645e');
   box('door-frame-right', [0.11, 2.9, 0.21], [3.945, 1.45, -3.48], '#42645e');
   box('door-frame-top', [2.06, 0.11, 0.21], [2.97, 2.85, -3.48], '#42645e');
-  const yaw = doorAngle(state, time), hinge: Vector3Tuple = [2.05, 0, -3.53];
+  const yaw = doorAngle(state, time), hinge = DOOR_HINGE;
   const doorPart = (id: string, size: Vector3Tuple, p: Vector3Tuple, color: string, observable = false) => {
     const x = p[0] * Math.cos(yaw) + p[2] * Math.sin(yaw), z = -p[0] * Math.sin(yaw) + p[2] * Math.cos(yaw);
     box(id, size, [hinge[0] + x, p[1], hinge[2] + z], color, { yaw, observable });
   };
-  doorPart('door-leaf', [1.84, 2.8, 0.12], [0.92, 1.4, 0], '#b86d4b', true);
-  doorPart('door-panel', [1.46, 1.8, 0.04], [0.92, 1.55, 0.09], '#c98660');
-  doorPart('door-knob', [0.13, 0.13, 0.18], [1.6, 1.25, 0.16], '#eac58a');
+  for (const part of DOOR_PARTS) doorPart(part.id, part.size, part.position, part.color, part.observable);
   // The Phase 1 window is painted opaque decoration on a solid wall, not an opening.
   box('painted-window-frame', [0.06, 1.9, 2.4], [-4.47, 2.1, -0.7], '#efe5cf');
   box('painted-window-pane', [0.07, 1.65, 2.15], [-4.42, 2.1, -0.7], '#a8d6d2', { observable: true });
@@ -103,15 +109,52 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
   }
   return { revision: PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision, illumination: s.illumination, boxes };
 }
-/** Server navigation uses these same colliders; decorations below the feet are ignored. */
-export function canOccupyCharacter(scene: PhysicalSceneState, x: number, z: number): boolean {
-  if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > PHYSICAL_ROOM.walkX || Math.abs(z) > PHYSICAL_ROOM.walkZ) return false;
+/** Conservative keepout for the entire ordinary slam sweep, not an invisible occluder. */
+function animatedDoorKeepout(): PhysicalBox {
+  const reach = Math.max(...DOOR_PARTS.map(p => p.position[0] + p.size[0] / 2));
+  const thickness = Math.max(...DOOR_PARTS.map(p => Math.abs(p.position[2]) + p.size[2] / 2));
+  const side = thickness * Math.sin(DOOR_SWING_AMPLITUDE), depth = reach * Math.sin(DOOR_SWING_AMPLITUDE) + thickness;
+  return { id: 'navigation-door-sweep', position: [DOOR_HINGE[0] + reach / 2, 1.4, DOOR_HINGE[2]], size: [reach + side * 2, 2.8, depth * 2], yaw: 0, color: '#000000', collides: true, occludes: false, observable: false, cutaway: false };
+}
+/** Server navigation and V3 admission reserve the whole head/eye envelope.
+ * Normal animated doors reserve their bounded sweep even before a slam starts.
+ * Fixed experimental door poses use the real posed colliders. */
+function characterCollisionDepths(scene: PhysicalSceneState, x: number, z: number, reserveDoorSweep: boolean): Map<string, number> | null {
+  if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > PHYSICAL_ROOM.walkX || Math.abs(z) > PHYSICAL_ROOM.walkZ) return null;
   const state = { scene, time: 0, door: { lastSlam: -100, slamCount: 0 } } as WorldState;
-  const radius = 0.22;
-  return !physicalSceneSnapshot(state).boxes.some(b => {
-    if (!b.collides || b.position[1] + b.size[1] / 2 <= 0.06 || b.position[1] - b.size[1] / 2 >= 3.45) return false;
+  const radius = CHARACTER_CLEARANCE_RADIUS;
+  const boxes = physicalSceneSnapshot(state).boxes;
+  if (reserveDoorSweep && scene.doorOpenRadians === null) boxes.push(animatedDoorKeepout());
+  const depths = new Map<string, number>();
+  for (const b of boxes) {
+    if (!b.collides || b.position[1] + b.size[1] / 2 <= 0.06 || b.position[1] - b.size[1] / 2 >= 3.45) continue;
     const dx = x - b.position[0], dz = z - b.position[2];
     const localX = dx * Math.cos(b.yaw) - dz * Math.sin(b.yaw), localZ = dx * Math.sin(b.yaw) + dz * Math.cos(b.yaw);
-    return Math.abs(localX) < b.size[0] / 2 + radius && Math.abs(localZ) < b.size[2] / 2 + radius;
-  });
+    const depth = Math.min(b.size[0] / 2 + radius - Math.abs(localX), b.size[2] / 2 + radius - Math.abs(localZ));
+    if (depth > 0) depths.set(b.id, depth);
+  }
+  return depths;
+}
+export function canOccupyCharacter(scene: PhysicalSceneState, x: number, z: number): boolean {
+  return characterCollisionDepths(scene, x, z, true)?.size === 0;
+}
+/** Saved poses must satisfy solid/static clearance, but an anticipated future slam
+ * must not invalidate a valid pre-vision position or rewrite its history. Transient
+ * animated-door camera validity is checked against its actual tick on capture. */
+export function canRestoreCharacter(scene: PhysicalSceneState, x: number, z: number): boolean {
+  return characterCollisionDepths(scene, x, z, false)?.size === 0;
+}
+/** A migrated pose inside a new navigation reserve can leave it monotonically.
+ * It cannot enter a new collider or move deeper into an existing overlap. No
+ * migration flag, teleport or altered historical V1/V2 stepping is involved. */
+export function canMoveCharacter(scene: PhysicalSceneState, fromX: number, fromZ: number, x: number, z: number): boolean {
+  const next = characterCollisionDepths(scene, x, z, true);
+  if (!next) return false;
+  if (!next.size) return true;
+  const previous = characterCollisionDepths(scene, fromX, fromZ, true);
+  if (!previous?.size) return false;
+  let improved = false;
+  for (const [id, depth] of next) if (depth > (previous.get(id) ?? 0) + 1e-12) return false;
+  for (const [id, depth] of previous) if ((next.get(id) ?? 0) < depth - 1e-12) improved = true;
+  return improved;
 }

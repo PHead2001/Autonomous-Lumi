@@ -3,7 +3,7 @@ import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
 import type { ActivityState, ControlAction, SubjectiveClock, WorldMode } from '../shared/lab-protocol.js';
 import { defaultHeadState, HEAD_LIMITS, validateHeadAction, validateHeadState, type HeadAction, type HeadState } from '../shared/vision-protocol.js';
-import { defaultPhysicalSceneState, validatePhysicalSceneState, validateSceneConfiguration, canOccupyCharacter, type PhysicalSceneState } from '../shared/physical-scene.js';
+import { defaultPhysicalSceneState, validatePhysicalSceneState, validateSceneConfiguration, canOccupyCharacter, canRestoreCharacter, canMoveCharacter, type PhysicalSceneState } from '../shared/physical-scene.js';
 import { isTargetEligible } from './vision/grounding.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
@@ -279,7 +279,7 @@ export function validateVisionCheckpoint(value:unknown):CheckpointV3 {
   const cp=value as CheckpointV3;if(!Array.isArray(cp.pendingInputs))fail('vision input queue');
   for(const input of cp.pendingInputs)validateCommand(input.command,true);
   visionLabPart(cp);validateHeadState(cp.head);validatePhysicalSceneState(cp.scene);
-  if(!canOccupyCharacter(cp.scene,cp.character.x,cp.character.z))fail('character overlaps physical collider');
+  if(!canRestoreCharacter(cp.scene,cp.character.x,cp.character.z))fail('character overlaps physical collider');
   return structuredClone(cp);
 }
 /** Deliberate active-world upgrade; offline V1/V2 replay never calls this. */
@@ -296,7 +296,7 @@ export class VisionSimulation extends LabSimulation {
   }
   protected override supportsVisionInputs():boolean{return true;}
   protected override onDoorChanged():void{this.scene.revision++;}
-  protected override canMove(x:number,z:number):boolean{return canOccupyCharacter(this.scene,x,z);}
+  protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
     const command=input.command;if(command.type==='slam'||command.type==='invalid')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};

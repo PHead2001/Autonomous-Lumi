@@ -1,5 +1,6 @@
 import type { WorldState } from './protocol.js';
-import type { Vector3Tuple } from './physical-scene.js';
+import { physicalSceneSnapshot, type Vector3Tuple } from './physical-scene.js';
+import { AVATAR_RIG, cameraNearRadius } from './avatar-rig.js';
 
 export interface EyePose {
   position: Vector3Tuple; direction: Vector3Tuple; up: Vector3Tuple;
@@ -17,15 +18,29 @@ export function eyePose(state: WorldState, width = state.head?.camera.width ?? 5
   const bodyHeading = state.character.heading, heading = bodyHeading + headYaw;
   const horizontalFovDegrees = state.head?.camera.horizontalFovDegrees ?? 80;
   // Eye point local to the head pivot; rotation order is body-Y * head-Y * head-X(-pitch).
-  const eyeY = 0.015 * Math.cos(headPitch) + 0.39 * Math.sin(headPitch);
-  const eyeZ = -0.015 * Math.sin(headPitch) + 0.39 * Math.cos(headPitch);
-  const localX = eyeZ * Math.sin(headYaw), localZ = 0.015 + eyeZ * Math.cos(headYaw);
+  const eyeY = AVATAR_RIG.eyeOffset[1] * Math.cos(headPitch) + AVATAR_RIG.eyeOffset[2] * Math.sin(headPitch);
+  const eyeZ = -AVATAR_RIG.eyeOffset[1] * Math.sin(headPitch) + AVATAR_RIG.eyeOffset[2] * Math.cos(headPitch);
+  const localX = eyeZ * Math.sin(headYaw), localZ = AVATAR_RIG.headPivot[2] + eyeZ * Math.cos(headYaw);
   return {
-    position: [state.character.x + localX * Math.cos(bodyHeading) + localZ * Math.sin(bodyHeading), 2.34 + bodyBob(state) + eyeY, state.character.z - localX * Math.sin(bodyHeading) + localZ * Math.cos(bodyHeading)],
+    position: [state.character.x + localX * Math.cos(bodyHeading) + localZ * Math.sin(bodyHeading), AVATAR_RIG.headPivot[1] + bodyBob(state) + eyeY, state.character.z - localX * Math.sin(bodyHeading) + localZ * Math.cos(bodyHeading)],
     direction: [Math.sin(heading) * Math.cos(headPitch), Math.sin(headPitch), Math.cos(heading) * Math.cos(headPitch)],
     up: [-Math.sin(heading) * Math.sin(headPitch), Math.cos(headPitch), -Math.cos(heading) * Math.sin(headPitch)],
     bodyHeading, headYaw, headPitch, horizontalFovDegrees,
     verticalFovDegrees: 2 * Math.atan(Math.tan(horizontalFovDegrees * Math.PI / 360) / (width / height)) * 180 / Math.PI,
     width, height, near: state.head?.camera.near ?? 0.05, far: state.head?.camera.far ?? 40,
   };
+}
+/** Fail closed when an invalid external pose or unusual lens could clip through a wall.
+ * The sphere conservatively encloses the eye-to-near-plane volume. Actual snapshot
+ * transforms are used, including the door's current slam pose, never its rest pose. */
+export function assertCameraClearance(state: WorldState, width?: number, height?: number): void {
+  const camera = eyePose(state, width, height), radius = cameraNearRadius({ ...camera, near: camera.near });
+  if (![...camera.position, ...camera.direction, ...camera.up, radius].every(Number.isFinite) || radius <= 0) throw new Error('Camera clipping volume is invalid');
+  for (const box of physicalSceneSnapshot(state).boxes) {
+    if (!box.occludes) continue;
+    const dx = camera.position[0] - box.position[0], dz = camera.position[2] - box.position[2];
+    const local = [dx * Math.cos(box.yaw) - dz * Math.sin(box.yaw), camera.position[1] - box.position[1], dx * Math.sin(box.yaw) + dz * Math.cos(box.yaw)];
+    const distanceSquared = local.reduce((sum, coordinate, axis) => sum + Math.max(0, Math.abs(coordinate) - box.size[axis] / 2) ** 2, 0);
+    if (distanceSquared <= radius ** 2) throw new Error('Camera clipping volume intersects opaque physical geometry');
+  }
 }

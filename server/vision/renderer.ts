@@ -7,7 +7,7 @@ import { join, resolve, dirname, basename } from 'node:path';
 import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 import { build } from 'esbuild';
 import type { WorldState } from '../../shared/protocol.js';
-import type { RendererBackend, RendererIdentity } from '../../shared/capture-protocol.js';
+import { CAPTURE_LIMITS, type RendererBackend, type RendererIdentity } from '../../shared/capture-protocol.js';
 
 export const BACKEND_FLAGS: Record<RendererBackend, string[]> = {
   'angle-d3d11': ['--use-gl=angle', '--use-angle=d3d11', '--disable-software-rasterizer'],
@@ -28,6 +28,15 @@ export function configuredBackend(): RendererBackend {
 export interface RenderedFrame { bytes: Uint8Array; backend: RendererIdentity; resources?: { geometries: number; textures: number } }
 export interface FrameRenderer { render(snapshot: WorldState, width: number, height: number): Promise<RenderedFrame>; close(): Promise<void>; readonly cleanupError?: string | null }
 export class RendererFailure extends Error { constructor(readonly status: 'unavailable' | 'timeout' | 'failed', message: string) { super(message); } }
+/** Bounds the helper process too: a stuck taskkill must not hold the render queue forever. */
+export function waitForCleanupCommand(child: ChildProcess, timeoutMs: number): Promise<void> {
+  return new Promise((resolveCommand, reject) => {
+    let expired = false, hardStop: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => { expired = true; child.kill(); hardStop = setTimeout(() => reject(new Error('Renderer cleanup command did not exit')), 1000); }, timeoutMs);
+    child.once('error', () => { clearTimeout(timer); clearTimeout(hardStop); reject(new Error('Renderer cleanup command could not start')); });
+    child.once('exit', code => { clearTimeout(timer); clearTimeout(hardStop); if (expired) reject(new Error('Renderer cleanup command timed out')); else if (code !== 0) reject(new Error('Renderer process tree cleanup failed')); else resolveCommand(); });
+  });
+}
 let javascript: Promise<Uint8Array> | undefined;
 const browserCode = () => javascript ??= build({ entryPoints: [resolve('src/capture-renderer.ts')], bundle: true, write: false, format: 'iife', platform: 'browser', target: 'chrome120', logLevel: 'silent' }).then(result => result.outputFiles[0].contents);
 /** Owns Chromium synchronously from spawn. The browser is the isolated render fault boundary;
@@ -44,8 +53,9 @@ export class ChromiumRenderer implements FrameRenderer {
   private closing: Promise<void> | undefined;
   private generation = 0;
   private readonly cleanupProfiles = new Set<string>();
+  private readonly cleanupChildren = new Set<ChildProcess>();
   cleanupError: string | null = null;
-  constructor(readonly configuration: RendererBackend = configuredBackend(), readonly timeoutMs = 20000, readonly idleMs = 30000, private readonly hooks: { onSpawn?: (child: ChildProcess) => void; renderDelayMs?: number; removeProfile?: (profile: string) => Promise<void> } = {}) {}
+  constructor(readonly configuration: RendererBackend = configuredBackend(), readonly timeoutMs: number = CAPTURE_LIMITS.timeoutMs, readonly idleMs = 30000, private readonly hooks: { onSpawn?: (child: ChildProcess) => void; renderDelayMs?: number; removeProfile?: (profile: string) => Promise<void> } = {}) {}
   get pid() { return this.child?.pid; }
   get chromiumPid() { return this.child?.pid; }
   private async launch(generation: number): Promise<void> {
@@ -79,11 +89,11 @@ export class ChromiumRenderer implements FrameRenderer {
   }
   private async start() {
     if (this.closing) await this.closing;
-    if (this.cleanupProfiles.size) { try { await this.removeProfiles(); } catch { throw new RendererFailure('unavailable', 'Previous renderer profile cleanup failed; inspect local sensor health'); } }
+    if (this.cleanupProfiles.size || this.cleanupChildren.size) { try { await this.close(); } catch { throw new RendererFailure('unavailable', 'Previous renderer resource cleanup failed; inspect local sensor health'); } }
     if (!this.ready) { const generation = ++this.generation; this.ready = this.launch(generation).catch(async error => { if (generation === this.generation) await this.close(); throw error instanceof RendererFailure ? error : new RendererFailure('unavailable', 'Renderer startup failed'); }); }
     return this.ready;
   }
-  private armIdle() { clearTimeout(this.idleTimer); this.idleTimer = setTimeout(() => { void this.close().catch(() => { this.cleanupError = 'Idle renderer profile cleanup failed'; }); }, this.idleMs); this.idleTimer.unref(); }
+  private armIdle() { clearTimeout(this.idleTimer); this.idleTimer = setTimeout(() => { void this.close().catch(() => { this.cleanupError = 'Idle renderer resource cleanup failed'; }); }, this.idleMs); this.idleTimer.unref(); }
   async render(snapshot: WorldState, width: number, height: number): Promise<RenderedFrame> {
     if (this.busy) throw new RendererFailure('failed', 'Renderer is already busy');
     if (!(this.configuration in BACKEND_FLAGS)) throw new RendererFailure('unavailable', 'Unknown renderer backend');
@@ -105,14 +115,14 @@ export class ChromiumRenderer implements FrameRenderer {
         })(),
         new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new RendererFailure('timeout', 'Renderer request timed out')), this.timeoutMs); }),
       ]);
-    } catch (error) { try { await this.close(); } catch { this.cleanupError = 'Renderer profile cleanup failed after capture failure'; } throw error instanceof RendererFailure ? error : new RendererFailure('failed', 'Renderer process failed'); }
+    } catch (error) { try { await this.close(); } catch { this.cleanupError = 'Renderer resource cleanup failed after capture failure'; } throw error instanceof RendererFailure ? error : new RendererFailure('failed', 'Renderer process failed'); }
     finally { clearTimeout(deadline); this.busy = false; }
   }
   /** Actual owned browser-process failure, outside the public control surface. */
   async crash() { await this.close(); }
   async close(): Promise<void> {
     if (this.closing) return this.closing;
-    this.closing = this.closeOwned().catch(error => { this.cleanupError = 'Renderer profile cleanup failed'; throw error; }).finally(() => { this.closing = undefined; }); return this.closing;
+    this.closing = this.closeOwned().catch(error => { this.cleanupError = 'Renderer resource cleanup failed'; throw error; }).finally(() => { this.closing = undefined; }); return this.closing;
   }
   private async closeOwned() {
     clearTimeout(this.idleTimer); const child = this.child, browser = this.browser, server = this.server, profile = this.profile;
@@ -120,15 +130,22 @@ export class ChromiumRenderer implements FrameRenderer {
     this.child = undefined; this.browser = undefined; this.page = undefined; this.server = undefined; this.profile = undefined; this.ready = undefined;
     // Always terminate the owned process tree while its root is still alive. This also covers startup faults
     // before a CDP connection exists. Never enumerate/kill unrelated browser sessions.
-    if (child?.pid && child.exitCode === null && child.signalCode === null) {
-      if (process.platform === 'win32') await new Promise<void>(done => { const cleanup = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); cleanup.once('error', () => { child.kill(); done(); }); cleanup.once('exit', () => done()); });
-      else { try { child.kill('SIGTERM'); } catch { /* already exited */ } }
-      await new Promise<void>(done => { if (child.exitCode !== null || child.signalCode !== null) return done(); const timer = setTimeout(() => { child.kill('SIGKILL'); done(); }, 1500); timer.unref(); child.once('exit', () => { clearTimeout(timer); done(); }); });
+    if (child) this.cleanupChildren.add(child);
+    if (profile) this.cleanupProfiles.add(profile);
+    let cleanupFailure: unknown;
+    for (const owned of this.cleanupChildren) {
+      if (owned.exitCode !== null || owned.signalCode !== null) { this.cleanupChildren.delete(owned); continue; }
+      try {
+        if (process.platform === 'win32') await waitForCleanupCommand(spawn('taskkill', ['/PID', String(owned.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }), 2000);
+        else owned.kill('SIGTERM');
+        await new Promise<void>((done, reject) => { if (owned.exitCode !== null || owned.signalCode !== null) return done(); const timer = setTimeout(() => { owned.kill('SIGKILL'); reject(new Error('Owned renderer did not exit')); }, 1500); owned.once('exit', () => { clearTimeout(timer); done(); }); });
+        this.cleanupChildren.delete(owned);
+      } catch (error) { cleanupFailure = error; }
     }
     browser?.disconnect();
     if (server) { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
-    if (profile) this.cleanupProfiles.add(profile);
-    await this.removeProfiles();
+    try { await this.removeProfiles(); } catch (error) { cleanupFailure ??= error; }
+    if (cleanupFailure) throw cleanupFailure;
   }
   private async removeProfiles() {
     for (const profile of this.cleanupProfiles) {

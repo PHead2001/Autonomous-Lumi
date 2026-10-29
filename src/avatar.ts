@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { earFlick, type WorldState } from '../shared/protocol';
 import { bodyBob } from '../shared/eye-pose';
+import { AVATAR_RIG } from '../shared/avatar-rig';
 
 const material = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true });
 const fur = material('#d98349'), cream = material('#ffe4c2'), hair = material('#a54e32'), outfit = material('#366b68');
@@ -29,7 +30,7 @@ export function createAvatar(options: { firstPerson?: boolean } = {}) {
   mesh(new THREE.CylinderGeometry(0.26, 0.55, 0.57, 8), outfit, body, [0, 1.16, 0]);
   mesh(new THREE.CylinderGeometry(0.275, 0.29, 0.08, 8), cream, body, [0, 1.48, 0]);
   mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.17, 8), cream, body, [0, 2.04, 0]);
-  const head = pivot(body, [0, 2.34, 0.015]);
+  const head = pivot(body, [...AVATAR_RIG.headPivot]);
   head.rotation.order = 'YXZ';
   // Only the wearer's head/hair/ears are hidden for the eye camera. Environment and body remain real.
   head.visible = !options.firstPerson;

@@ -1,5 +1,7 @@
 import type { ActiveTarget } from './lab-protocol.js';
 
+/** Admission includes the running job. Each admitted slot may consume one full render deadline. */
+export const CAPTURE_LIMITS = { capacity: 4, timeoutMs: 20000, cleanupTimeoutMs: 5000 } as const;
 export type RendererBackend = 'angle-d3d11' | 'swiftshader';
 export type CaptureStatus = 'queued' | 'pending' | 'success' | 'unavailable' | 'timeout' | 'failed' | 'stale';
 export interface CaptureOptions { reason: 'developer' | 'diagnostic' | 'benchmark'; width?: number; height?: number }

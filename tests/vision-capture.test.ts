@@ -92,6 +92,16 @@ test('throwing cleanup cannot leave a pending capture or reject the asynchronous
   }
   await a.close();
 });
+test('a hanging renderer cleanup has a separate deadline so admitted queue slots still complete', async () => {
+  const a = runtime(), renderer: FrameRenderer = { render: async () => { throw new RendererFailure('failed', 'controlled renderer fault'); }, close: async () => { await new Promise<void>(() => {}); } };
+  const manager = new CaptureManager(() => true, renderer, 20, 10);
+  try {
+    const first = manager.request(a, { reason: 'diagnostic' }), second = manager.request(a, { reason: 'diagnostic' });
+    assert.equal((await manager.wait(a.target, first.captureId)).status, 'failed'); assert.equal((await manager.wait(a.target, second.captureId)).status, 'failed');
+    assert.equal(manager.view(a.target).limits.queued, 0); assert.match(manager.view(a.target).cleanupError ?? '', /deadline/);
+    a.applyControl({ type: 'step' }); assert.equal(a.simulation.state.tick, 1);
+  } finally { await manager.close(); await a.close(); }
+});
 test('actual registry restore records stale discard before retiring its recorder and clears queued work', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lumi-vision-retire-')); assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep));
   const registry = new BranchRegistry({ directory, beforeRetireRuntime: old => manager.retire(old.target) });
