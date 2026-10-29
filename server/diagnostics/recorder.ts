@@ -34,7 +34,7 @@ export interface RecorderHealth {
   droppedRecords: number; criticalDroppedRecords: number; filteredRecords: number; writerFailures: number;
   evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null;
   gaps: string[];
-  globalRetainedBytes: number; globalRetainedRuns: number; globalCapExceeded: boolean; protectedActiveRuns: number;
+  globalRetainedBytes: number; globalRetainedRuns: number; globalCapExceeded: boolean; globalAccountingComplete: boolean; protectedActiveRuns: number;
 }
 interface RecorderOptions {
   directory?: string; worldId: string; runId: string; hz?: number; now?: () => number; minSeverity?: Severity;
@@ -94,7 +94,7 @@ export class FlightRecorder {
   private gaps: string[] = [];
   private persistedHealth = '';
   private activeMarkerWritten = false;
-  private globalHealth = { globalRetainedBytes: 0, globalRetainedRuns: 0, globalCapExceeded: false, protectedActiveRuns: 0 };
+  private globalHealth = { globalRetainedBytes: 0, globalRetainedRuns: 0, globalCapExceeded: false, globalAccountingComplete: true, protectedActiveRuns: 0 };
   constructor(options: RecorderOptions) {
     if (!safeId(options.worldId) || !safeId(options.runId)) throw new Error('Invalid diagnostic identity');
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
@@ -183,11 +183,12 @@ export class FlightRecorder {
     const root = resolve(dirname(this.runDirectory));
     const generated = /^(events-\d{5}\.jsonl|checkpoint-(start|end)\.json|run\.json|_active\.json)(\.tmp)?$/;
     const runs: { path: string; bytes: number; modified: number; removable: boolean; active: boolean; files: string[] }[] = [];
-    let unownedBytes = 0;
+    let unownedBytes = 0, accountingComplete = true;
     const boundedRetentionJSON=async(path:string)=>{if((await stat(path)).size>64*1024)throw new Error('Oversized retention metadata');return JSON.parse(await readFile(path,'utf8'));};
     for (const entry of await readdir(root,{withFileTypes:true})) {
       if (!entry.isDirectory() || !safeId(entry.name)) {
         if (entry.isFile()) unownedBytes += (await stat(join(root,entry.name))).size;
+        else { accountingComplete=false; this.gap('global_disk_accounting_incomplete_unowned_directory_or_link'); }
         continue;
       }
       const path=resolve(root,entry.name);
@@ -195,7 +196,7 @@ export class FlightRecorder {
       const entries=await readdir(path,{withFileTypes:true}); let bytes=0, removable=true;
       const files:string[]=[];
       for(const file of entries) {
-        if (!file.isFile() || !generated.test(file.name)) { removable=false; if(file.isFile())bytes+=(await stat(join(path,file.name))).size;else this.gap('unaccounted_unowned_directory');continue; }
+        if (!file.isFile() || !generated.test(file.name)) { removable=false; if(file.isFile())bytes+=(await stat(join(path,file.name))).size;else {accountingComplete=false;this.gap('unaccounted_unowned_directory');}continue; }
         files.push(file.name);bytes+=(await stat(join(path,file.name))).size;
       }
       // A folder is owned only if its run metadata identifies this exact generated run.
@@ -217,7 +218,7 @@ export class FlightRecorder {
       const {rmdir}=await import('node:fs/promises');await rmdir(run.path);
       total-=run.bytes;count--;
     }
-    this.globalHealth={globalRetainedBytes:total,globalRetainedRuns:count,globalCapExceeded:count>this.limits.retainedRuns || total>this.limits.globalDiskBytes,protectedActiveRuns:runs.filter(r=>r.active).length};
+    this.globalHealth={globalRetainedBytes:total,globalRetainedRuns:count,globalCapExceeded:count>this.limits.retainedRuns || total>this.limits.globalDiskBytes,globalAccountingComplete:accountingComplete,protectedActiveRuns:runs.filter(r=>r.active).length};
     if(this.globalHealth.globalCapExceeded)this.gap('global_retention_cap_blocked_by_active_or_unowned_data');
   }
   private async writeBatch(): Promise<void> {
@@ -230,9 +231,11 @@ export class FlightRecorder {
       for (const entry of batch) {
         const bytes = Buffer.byteLength(entry.line);
         if (this.fileBytes && (this.fileBytes + bytes > this.limits.fileBytes || this.now() - this.fileStarted >= this.limits.fileAgeMs)) { this.fileSequence++; this.fileBytes = 0; }
-        if (!this.fileBytes) { this.fileStarted = this.now(); this.files.push({ name: `events-${this.fileSequence.toString().padStart(5, '0')}.jsonl`, bytes: 0, records: 0 }); }
-        const file = this.files.at(-1)!;
+        const newFile = !this.fileBytes;
+        const file = newFile ? { name: `events-${this.fileSequence.toString().padStart(5, '0')}.jsonl`, bytes: 0, records: 0 } : this.files.at(-1)!;
         await this.append(join(this.runDirectory, file.name), entry.line);
+        // A failed first append must not create phantom descriptors for the same filename.
+        if (newFile) { this.fileStarted=this.now(); this.files.push(file); }
         this.fileBytes += bytes; file.bytes += bytes; file.records++; this.counters.writtenRecords++; written++;
         while (this.files.length > this.limits.retainedFiles || this.files.reduce((n, f) => n + f.bytes, 0) > this.limits.diskBytes) {
           const old = this.files.shift()!; await unlink(join(this.runDirectory, old.name)); this.counters.evictedRecords += old.records; this.gap('retention_evicted_records');

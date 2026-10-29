@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -167,4 +167,26 @@ test('retention protects oversized or malformed metadata without unbounded JSON 
   await writeFile(join(recorder.runDirectory,'run.json'),' '.repeat(65537));
   const next=new FlightRecorder({directory,worldId:'world',runId:'next',limits:{retainedRuns:1}});next.captureCheckpoint(new Simulation().checkpoint());await next.close();
   assert.equal((await stat(join(recorder.runDirectory,'run.json'))).size,65537);assert.equal(next.health().status,'INCOMPLETE');assert.equal(next.health().globalCapExceeded,true);
+});
+
+test('repeated first-append failures keep file tracking bounded and recovery retains successful evidence',async t=>{
+  const directory=await temp(t);let failures=12;
+  const recorder=new FlightRecorder({directory,worldId:'world',runId:'recover',append:async(path,data)=>{if(failures-->0)throw new Error('injected failure');await appendFile(path,data,'utf8');},limits:{flushIntervalMs:60000}});
+  recorder.captureCheckpoint(new Simulation().checkpoint());
+  for(let i=0;i<12;i++){
+    recorder.record({tick:0,category:'OPERATIONAL_REPLAY',eventType:'FAILED_ATTEMPT',component:'test',outcome:'observed'},true);await recorder.flush();
+    assert.equal(recorder.health().retainedFiles,0);assert.equal(recorder.health().retainedBytes,0);
+  }
+  recorder.record({tick:0,category:'OPERATIONAL_REPLAY',eventType:'RECOVERED_WRITE',component:'test',outcome:'observed'},true);await recorder.flush();await recorder.close();
+  const files=(await readdir(recorder.runDirectory)).filter(name=>name.endsWith('.jsonl'));
+  assert.equal(files.length,1);assert.equal(recorder.health().retainedFiles,1);assert.equal(recorder.health().writerFailures,12);assert.equal(recorder.health().evictedRecords,0);
+  const contents=await readFile(join(recorder.runDirectory,files[0]),'utf8');assert.match(contents,/RECOVERED_WRITE/);assert.ok(!contents.includes('FAILED_ATTEMPT'));
+});
+
+test('unowned root directory is preserved and makes global disk coverage explicitly uncertain',async t=>{
+  const directory=await temp(t),unowned=join(directory,'unowned data');await mkdir(unowned);await writeFile(join(unowned,'keep.txt'),'x'.repeat(10000));
+  const recorder=new FlightRecorder({directory,worldId:'world',runId:'accounting',limits:{globalDiskBytes:5000}});recorder.captureCheckpoint(new Simulation().checkpoint());await recorder.close();
+  assert.equal((await stat(join(unowned,'keep.txt'))).size,10000);assert.equal(recorder.health().status,'INCOMPLETE');assert.equal(recorder.health().globalAccountingComplete,false);
+  assert.ok(recorder.health().gaps.includes('global_disk_accounting_incomplete_unowned_directory_or_link'));
+  const metadata=JSON.parse(await readFile(join(recorder.runDirectory,'run.json'),'utf8'));assert.equal(metadata.health.globalAccountingComplete,false);assert.equal(metadata.health.status,'INCOMPLETE');
 });
