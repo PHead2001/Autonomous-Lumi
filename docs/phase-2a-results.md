@@ -2,7 +2,7 @@
 
 Virtual Eyes extends the existing fox-girl viewer and isolated laboratory with a shared physical scene, server-owned head/eye pose, deterministic turn/look/scan actions, an isolated on-demand Chromium renderer, and sight-limited spatial evidence. Operating instructions are in the [README](../README.md), [Virtual Eyes guide](virtual-eyes.md), and [renderer comparison](renderer-benchmarks.md).
 
-Phase 2a is complete: implementation, renderer comparison, browser checks, refreshed diagnostic export/replay and the proportionate normal checks below passed. Actionable review findings were corrected with focused regressions; independent targeted review and the final hosted Codex re-review found no remaining actionable findings. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
+Current verification passed **143/143 normal tests**, **7/7 actual renderer cases in one command**, lint and build/typecheck. The observed-direction correction passed independent architect review; hosted re-review of that correction is pending. The retained renderer benchmark and browser evidence remain applicable as described below. [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) remains open and ready, unmerged; the owner retains the merge decision.
 
 ## Run and try it
 
@@ -45,7 +45,7 @@ npm.cmd run vision:benchmark -- --out diagnostics/vision-benchmarks/my-run
 npm.cmd run vision:verify
 ```
 
-The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. The actual renderer verification passed its original **six cases**, including physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, and contained cleanup failure. After the camera-clearance correction, those checks were rerun and a **seventh actual case** separately passed: an eye inside an opaque occluder produces an explicit failed capture and a subsequent safe capture succeeds. These are seven verified cases across the recorded runs, not a claim that one command reported 7/7. The first actual frame was visually inspected.
+The accepted local benchmark artifacts are under ignored `diagnostics/vision-benchmarks/phase2a-final/`. After the observed-direction correction, **`npm run vision:verify` passed 7/7 in one command**, approximately **15.32 seconds**, recorded in `diagnostics/observed-aim-renderer.log`. This includes physical/appearance checks on both backends, delayed snapshot identity, renderer crash/timeout and subsequent retry, continued world/reflex progress with zero viewers, contained cleanup failure, and refusal of an eye inside an opaque occluder followed by a successful safe capture. This full run supersedes the earlier separate six-case and seventh-case checks. The first actual benchmark frame was visually inspected.
 
 ## Browser and continuity evidence
 
@@ -61,7 +61,7 @@ Historical Phase 1.5b and 1.5c diagnostic artifacts both replayed successfully w
 
 ## Diagnostic deliverable and final checks
 
-The actual final dashboard export is **`diagnostics/phase-2a-virtual-eyes.zip`** (14,625 bytes, 13 expected text/JSON entries), scoped to world `lumi`, branch `eyes-reviewed`, run `f6437afa-1c77-4a3e-959a-41836aae00bc`. It reports **COMPLETE** retained evidence for ticks **2238–2265**: 37 records, 3 ordered inputs and 11 deterministic events, with zero gaps, dropped/critical-dropped records, writer failures or evictions. The previous artifact is preserved separately as `diagnostics/phase-2a-pre-clearance.zip`.
+The retained dashboard acceptance export is **`diagnostics/phase-2a-virtual-eyes.zip`** (14,625 bytes, 13 expected text/JSON entries), scoped to world `lumi`, branch `eyes-reviewed`, run `f6437afa-1c77-4a3e-959a-41836aae00bc`. It reports **COMPLETE** retained evidence for ticks **2238–2265**: 37 records, 3 ordered inputs and 11 deterministic events, with zero gaps, dropped/critical-dropped records, writer failures or evictions. The previous artifact is preserved separately as `diagnostics/phase-2a-pre-clearance.zip`. This bundle was recorded under `lumi-eyes-v1`; it remains historical replay evidence rather than proof of the later observed-direction correction.
 
 The reproduction guidance, saved head/scene checkpoints and all 13 archive entries were inspected. Three 512-square PNG captures report the actual ANGLE/D3D11 / Chrome 156 / RTX 5070 Ti backend:
 
@@ -71,7 +71,7 @@ The reproduction guidance, saved head/scene checkpoints and all 13 archive entri
 | 2264 | Dark | 0 | `9df7f9e9f29c47591d050a8ab4aff403dc1dfd94e5bb1ae18de02ec78238b2ea` |
 | 2265 | Lit | 1 | `a7846647529c29427caacadb3c142c325714fd80dfa803373c3a3fce62f27dbe` |
 
-The final bundle contains no target-rejection event; the earlier target-rejection browser observation remains a separate valid check. Both saved checkpoints contain zero experiences, no `FOX_EXPERIENCE` record was produced, and the archive contains no raw image or base64 payload. Generated diagnostics and private frames remain ignored by Git.
+That historical bundle contains no target-rejection event; the earlier target-rejection browser observation remains a separate valid check. Both saved checkpoints contain zero experiences, no `FOX_EXPERIENCE` record was produced, and the archive contains no raw image or base64 payload. Generated diagnostics and private frames remain ignored by Git.
 
 The documented CLI replay passed at tick **2265**, with exact hashes:
 
@@ -90,12 +90,14 @@ npm run lint
 npm run build
 ```
 
-Normal checks and affected post-fix checks passed:
+The final observed-direction correction checks passed:
 
-- `npm test`: **130/130**, approximately **11.2 seconds**, recorded in `diagnostics/phase2a-tests-final.txt` after the explicit invalid-camera failure-metadata correction.
-- `npm run lint`: **PASS**.
-- `npm run build`: **PASS**, including TypeScript checking. Vite retains the existing nonblocking approximately 540 kB viewer-chunk advisory above 500 kB.
-- After the final dashboard deadline correction, **10/10 affected CLI/dashboard tests**, targeted ESLint and the full build passed. Those regressions include automatic completion after 95 seconds, a bounded 105-second deadline, and fresh budgets for later captures after an earlier deadline or terminal result. The 130-test and 10-test results are separate runs.
+- `npm test`: **143/143**, approximately **10.23 seconds**, recorded in `diagnostics/observed-aim-tests.log`.
+- `npm run lint`: **PASS**, recorded in `diagnostics/observed-aim-lint.log`.
+- `npm run build`: **PASS**, including TypeScript checking, recorded in `diagnostics/observed-aim-build.log`. Vite retains the existing nonblocking approximately 540 kB viewer-chunk advisory above 500 kB.
+- `npm run vision:verify`: **7/7 in one command**, approximately **15.32 seconds**. The full result is described above.
+
+The normal suite includes the earlier deadline regressions: automatic completion after 95 seconds, a bounded 105-second deadline, and fresh budgets for later captures after an earlier deadline or terminal result. It also includes the new captured-direction, active motor-anchor restore, migration and historical replay regressions.
 
 The renderer benchmark remains valid and was reused; the logging benchmark matrix from the previous milestone was not rerun.
 
@@ -103,7 +105,36 @@ Independent ordinary UI review accepted the dashboard. A real recorder concurren
 
 Hosted Codex review of [PR #6](https://github.com/PHead2001/Autonomous-Lumi/pull/6) initially raised two P2 findings: the CLI wait needed to cover admitted queue delay and cleanup, and camera/near-plane clearance needed to prevent a viewpoint clipping through opaque geometry. Both were corrected, retained focused regressions, and passed independent architect re-review. A subsequent review found that the dashboard still used a shorter deadline. The CLI and dashboard now import one shared **105-second** queue/cleanup/transport calculation; the dashboard associates its deadline with the capture ID and clears it on a terminal result, so the next capture cannot inherit an old expired budget.
 
-Navigation reserves approximately **0.498 world units** for the baseline head/eye/near-plane envelope and the normal door’s future slam sweep; actual captures validate their clipping volume against the physical scene. Saved schema-2 positions/history survive migration, with deterministic escape from a newly introduced future-only reserve instead of resetting or teleporting the character. Invalid capture geometry now records an explicit request/snapshot/failure/timing path without rendering, exposing a frame or encoding experience. The final admission correction passed independent architect re-review. Independent targeted UI review accepted the dashboard deadline correction. The final hosted Codex re-review reported **no findings and no unresolved findings**; the three superseded GitHub review threads were resolved after their fixes and that clean result were verified.
+Navigation reserves approximately **0.498 world units** for the baseline head/eye/near-plane envelope and the normal door’s future slam sweep; actual captures validate their clipping volume against the physical scene. Saved schema-2 positions/history survive migration, with deterministic escape from a newly introduced future-only reserve instead of resetting or teleporting the character. Invalid capture geometry now records an explicit request/snapshot/failure/timing path without rendering, exposing a frame or encoding experience. Those admission and dashboard deadline corrections passed independent re-review. That earlier hosted Codex round reported **no findings and no unresolved findings**; its three superseded GitHub review threads were resolved after their fixes and that clean result were verified.
+
+## Observed-direction review correction
+
+A later review found that observation-scoped aiming re-measured an object's true current bearing and checked true visibility again. Current `lumi-eyes-v2` actions instead use the captured 15° bearing/elevation and captured head/body orientation. They compensate only for Lumi's own orientation changes, including body turns before execution and throughout the bounded motor action. The checkpointed `head.observedAim` retains that coarse world-direction anchor through mid-turn restoration. A body turn that places the direction outside anatomical limits cancels the action and holds the current local head pose; it does not clamp or reacquire true geometry. A body translation or a target becoming hidden does not grant a newer or more precise target direction. A new capture can reveal that the shape is no longer visible. World/branch/run, retained handle, 300-tick age, scene-revision and anatomical limits remain enforced.
+
+Filtered shapes expose only `sampleVisibilityBand` (`low`, `medium` or `high`), using one-third/two-thirds thresholds. Exact 27-ray fractions stay in private diagnostics. This geometric sensor approximation produces no `FOX_EXPERIENCE`; future experience/memory must use the proper perceptual, attention and encoding path rather than copying geometric scene truth.
+
+The rules change keeps checkpoint schema 3 and runtime schema 2. Active upgrades preserve history, tick, pose, counters and queued ordering; original recovery data is archived as `pre-vision-rules-v1-…` and `STATE_RULES_MIGRATED` records the old and new rules. A legacy queued private-ID target is rejected explicitly at its original execution tick because no captured coarse bearing exists to reconstruct. Existing motor turns/scans continue from committed state. Historical `lumi-eyes-v1` replay retains its original semantics and hashes.
+
+Independent architect review accepted this correction with no actionable findings. Hosted re-review is pending. The renderer benchmark is unchanged and remains reusable.
+
+The actual corrected-rules diagnostic artifact is **`diagnostics/observed-aim-regression.zip`** (14,732 bytes). Its 13 entries were inspected: **COMPLETE** coverage for ticks **0–24**, 67 records, 2 ordered inputs and 8 deterministic events, with zero gaps, dropped records, writer failures or evictions. A real Chrome 156 / NVIDIA ANGLE/D3D11 capture supplies the observation. After a 10° head turn, the targeted action uses the captured **−15°** coarse bearing; normalized current action evidence contains no engine target ID. The sanitized ZIP contains no image payload and no experiences.
+
+The standard CLI replay passed with exact hashes:
+
+| Evidence | SHA-256 |
+|---|---|
+| Complete runtime/control state | `1d3ad2ea7f0d6a276703bf3cb0522c95f56ef6063c95689cde09c67e8f3f1e79` |
+| Simulation state | `0d52082f7a817523037864da71fd848db364ad94e73ba889323232507a266d86` |
+| Deterministic events | `79389f3f3948dbf6400c22a60116ac3496828e91c3895b118d20a4819e63c267` |
+
+```powershell
+$env:LUMI_AIM_DIAGNOSTIC_OUT = Join-Path (Get-Location) 'diagnostics/observed-aim-regression.zip'
+npx.cmd tsx --test --test-name-pattern '^captured coarse target commands' tests/vision-observed-aim.test.ts
+Remove-Item Env:LUMI_AIM_DIAGNOSTIC_OUT
+npm.cmd run replay -- --bundle diagnostics/observed-aim-regression.zip
+```
+
+The environment variable explicitly selects the real renderer for this bounded fixture; the ordinary test uses a stub. Logs are `diagnostics/observed-aim-{tests,lint,build,renderer,historical-replay,artifact}.log`. The retained `lumi-eyes-v1` acceptance ZIP was also replayed again and kept its original runtime hash `512cd093…b6742`.
 
 ## Material limits
 
