@@ -31,7 +31,7 @@ async function selectRun(directory: string, run?: string) {
 }
 async function main() {
   const [command, ...args] = process.argv.slice(2), values = options(args);
-  const allowed = command === 'replay' ? ['bundle'] : command === 'incident' ? ['out','directory'] : ['out','directory','run','from-tick','to-tick','incident'];
+  const allowed = command === 'replay' ? ['bundle'] : command === 'incident' ? ['out','directory'] : ['out','directory','world','branch','run','from-tick','to-tick','incident','category','component','severity','causal-id','event-type','search'];
   if (Object.keys(values).some(key => !allowed.includes(key))) throw new Error('Unknown command option');
   if (command === 'replay') { if (!values.bundle) throw new Error('Use replay --bundle <incident.zip>'); console.log(JSON.stringify(await replayBundle(values.bundle),null,2)); return; }
   if (!['export','incident'].includes(command)) throw new Error('Use export, incident, or replay');
@@ -53,8 +53,12 @@ async function main() {
       await sound; await delay(100); socket.close(); await once(socket,'close');
     } finally { await app.close(); }
     runDirectory = app.recorder.runDirectory;
-  } else runDirectory = await selectRun(directory,values.run);
-  const result = await exportIncident({ runDirectory, out:output, fromTick:tick(values['from-tick']),toTick:tick(values['to-tick']),incident:tick(values.incident) });
+  } else {
+    if(values.world!==undefined||values.branch!==undefined){if(!values.world||!values.branch||![values.world,values.branch].every(value=>/^[A-Za-z0-9_-]{1,100}$/.test(value)))throw new Error('Scoped export requires valid --world and --branch');runDirectory=await selectRun(join(directory,values.world,values.branch,'runs'),values.run);}
+    else runDirectory = await selectRun(directory,values.run);
+  }
+  const result = await exportIncident({ runDirectory, out:output, fromTick:tick(values['from-tick']),toTick:tick(values['to-tick']),incident:tick(values.incident),
+    ...(values.world&&values.branch?{expectedWorldId:values.world,expectedBranchId:values.branch,expectedRunId:values.run??runDirectory.split(/[\\/]/).at(-1)}:{}),category:values.category,component:values.component,severity:values.severity,causalId:values['causal-id'],eventType:values['event-type'],search:values.search });
   console.log(JSON.stringify({ out:result.out, status:result.manifest.evidence_status, run:result.manifest.run_id, hashes:result.manifest.hashes, assertions:result.assertions },null,2));
   if (result.manifest.evidence_status !== 'COMPLETE') process.exitCode=2;
 }

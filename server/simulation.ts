@@ -1,6 +1,7 @@
 import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../shared/protocol.js';
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
+import type { ActivityState, ControlAction, SubjectiveClock, WorldMode } from '../shared/lab-protocol.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
 export const DEFAULT_CONFIG = { hz: 30, speed: 0.75, pauseTicks: 36, cooldownTicks: 27, maxPendingInputs: 256 };
@@ -44,7 +45,7 @@ export function normalizeCommand(raw: string): NormalizedCommand {
   const v = c as Record<string, unknown>;
   return v.type === 'slam' && Object.keys(v).length === 1 ? { type: 'slam' } : { type: 'invalid', reason: 'unknown_command' };
 }
-export function validateCheckpoint(value: unknown): CheckpointV1 {
+export function validateCheckpointV1(value: unknown): CheckpointV1 {
   const c = object(value, ['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash'], 'root');
   if (c.schemaVersion !== 1 || c.rulesVersion !== RULES_VERSION) fail('incompatible schema/rules version');
   const config = object(c.config, Object.keys(DEFAULT_CONFIG), 'config');
@@ -68,18 +69,18 @@ export function validateCheckpoint(value: unknown): CheckpointV1 {
   }
   return structuredClone(value) as CheckpointV1;
 }
-export function hashCheckpoint(checkpoint: CheckpointV1): string { return hashCanonical(validateCheckpoint(checkpoint)); }
+export function hashCheckpoint(checkpoint: Checkpoint): string { return hashCanonical(validateCheckpoint(checkpoint)); }
 export function reflexStrength(sound: Pick<AcousticEvent, 'intensity' | 'suddenness'>): number {
   return sound.intensity >= 0.55 && sound.suddenness >= 0.65 ? Math.min(1, sound.intensity * sound.suddenness) : 0;
 }
 export class Simulation {
-  private data: CheckpointV1;
+  protected data: CheckpointV1;
   readonly random: SeededRandom;
   readonly worldId: string; readonly runId: string;
   constructor(options: { seed?: number; checkpoint?: unknown; worldId?: string; runId?: string } = {}) {
     this.worldId = options.worldId ?? 'offline-world'; this.runId = options.runId ?? 'offline-run';
     const seed = options.seed ?? 1;
-    this.data = options.checkpoint !== undefined ? validateCheckpoint(options.checkpoint) : {
+    this.data = options.checkpoint !== undefined ? validateCheckpointV1(options.checkpoint) : {
       schemaVersion: 1, rulesVersion: RULES_VERSION, config: { ...DEFAULT_CONFIG }, tick: 0,
       character: { x: -1.6, z: 1.8, heading: 0, moving: true, gait: 0 },
       reflex: { startTick: -3000, strength: 0 }, door: { lastSlamTick: -3000, slamCount: 0 },
@@ -89,7 +90,7 @@ export class Simulation {
     };
     this.random = new SeededRandom(this.data.seed, this.data.prng.state);
   }
-  private emit(events: DeterministicEvent[], type: string, component: string, outcome: string, data: DeterministicEvent['data'] = {}, inputSequence?: number, parentSequence?: number): DeterministicEvent {
+  protected emit(events: DeterministicEvent[], type: string, component: string, outcome: string, data: DeterministicEvent['data'] = {}, inputSequence?: number, parentSequence?: number): DeterministicEvent {
     const event: DeterministicEvent = { sequence: this.data.nextEventSequence++, tick: this.data.tick, type, component, outcome, data };
     if (inputSequence !== undefined) event.inputSequence = inputSequence;
     if (parentSequence !== undefined) event.parentSequence = parentSequence;
@@ -144,7 +145,7 @@ export class Simulation {
     }
     return events;
   }
-  checkpoint(): CheckpointV1 { return structuredClone({ ...this.data, prng: { algorithm: 'xorshift32-v1' as const, state: this.random.state } }); }
+  checkpoint(): Checkpoint { return structuredClone({ ...this.data, prng: { algorithm: 'xorshift32-v1' as const, state: this.random.state } }); }
   snapshot(): WorldState {
     const d = this.data;
     return { worldId: this.worldId, runId: this.runId, tick: d.tick, time: d.tick / d.config.hz,
@@ -152,4 +153,97 @@ export class Simulation {
       door: { lastSlam: d.door.lastSlamTick / d.config.hz, slamCount: d.door.slamCount } };
   }
   get state(): WorldState { return this.snapshot(); }
+}
+
+export interface SyntheticExperience {
+  id: number; tick: number; kind: 'cue' | 'clock'; provenance: 'TEST STUB';
+  observedSeconds: number | null; uncertaintySeconds: number | null;
+}
+export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rulesVersion'> {
+  schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
+  experiences: SyntheticExperience[]; nextExperienceId: number;
+}
+export type Checkpoint = CheckpointV1 | CheckpointV2;
+function legacyPart(c: CheckpointV2): CheckpointV1 {
+  const result = structuredClone(c) as unknown as Record<string, unknown>;
+  for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
+  result.schemaVersion = 1; result.rulesVersion = RULES_VERSION;
+  return validateCheckpointV1(result);
+}
+/** Explicit migration: V1 replay remains V1; a new lab run initializes named new systems. */
+export function upgradeCheckpoint(value: unknown): CheckpointV2 {
+  const cp = validateCheckpoint(value);
+  if (cp.schemaVersion === 2) return cp;
+  return { ...cp, schemaVersion: 2, rulesVersion: 'lumi-lab-v1',
+    subjective: { estimateSeconds: 0, uncertaintySeconds: cp.tick / cp.config.hz + 5, lastCalibrationTick: null, driftPpm: 1200, uncertaintyGrowthPerSecond: 0.02 },
+    activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
+}
+export function validateCheckpoint(value: unknown): Checkpoint {
+  if (!value || typeof value !== 'object' || (value as {schemaVersion?:unknown}).schemaVersion !== 2) return validateCheckpointV1(value);
+  const keys = ['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId'];
+  const raw = object(value, keys, 'lab root');
+  if (raw.rulesVersion !== 'lumi-lab-v1') fail('incompatible lab rules');
+  const cp = value as CheckpointV2; legacyPart(cp);
+  const clock = object(cp.subjective,['estimateSeconds','uncertaintySeconds','lastCalibrationTick','driftPpm','uncertaintyGrowthPerSecond'],'subjective clock');
+  if (!finite(clock.estimateSeconds,0,Number.MAX_SAFE_INTEGER) || !finite(clock.uncertaintySeconds,0,Number.MAX_SAFE_INTEGER) || !(clock.lastCalibrationTick === null || integer(clock.lastCalibrationTick,0,cp.tick)) || !finite(clock.driftPpm,-100000,100000) || !finite(clock.uncertaintyGrowthPerSecond,0,1)) fail('subjective clock');
+  const a = object(cp.activity,['status','cursor','totalTicks','appliedMilestones','completionCount','activityId'],'activity');
+  if (!['idle','running','paused','complete'].includes(a.status as string) || !integer(a.totalTicks,0,100000) || !integer(a.cursor,0,a.totalTicks as number) || !integer(a.completionCount,0,1) || !integer(a.activityId)) fail('activity state');
+  const expectedMilestones = Array.from({length:Math.floor((a.cursor as number)/10)},(_,i)=>(i+1)*10);
+  if (canonicalStringify(a.appliedMilestones) !== canonicalStringify(expectedMilestones) || (a.status === 'complete') !== (a.completionCount === 1) || (a.status === 'complete' && a.cursor !== a.totalTicks) || (a.status === 'idle' && (a.cursor !== 0 || a.totalTicks !== 0 || a.activityId !== 0))) fail('activity effects');
+  if (!integer(cp.nextExperienceId,1,257) || !Array.isArray(cp.experiences) || cp.experiences.length !== cp.nextExperienceId-1) fail('experience cursor');
+  for (let i=0;i<cp.experiences.length;i++) {
+    const e = object(cp.experiences[i],['id','tick','kind','provenance','observedSeconds','uncertaintySeconds'],'experience');
+    if (e.id!==i+1 || !integer(e.tick,0,cp.tick) || !['cue','clock'].includes(e.kind as string) || e.provenance!=='TEST STUB' || (e.kind === 'cue' ? e.observedSeconds!==null || e.uncertaintySeconds!==null : !finite(e.observedSeconds,0,1e12) || !finite(e.uncertaintySeconds,0,1e9))) fail('synthetic experience');
+  }
+  return structuredClone(cp);
+}
+/** New deterministic systems extend the existing fixed-step mechanics. */
+export class LabSimulation extends Simulation {
+  private subjective: SubjectiveClock; private activity: ActivityState; private experiences: SyntheticExperience[]; private nextExperienceId: number;
+  constructor(options: { checkpoint?: unknown; seed?: number; worldId?: string; runId?: string; mode: WorldMode }) {
+    const cp = upgradeCheckpoint(options.checkpoint ?? new Simulation({seed:options.seed}).checkpoint());
+    super({...options,checkpoint:legacyPart(cp)});
+    this.subjective=cp.subjective;this.activity=cp.activity;this.experiences=cp.experiences;this.nextExperienceId=cp.nextExperienceId;
+    this.mode=options.mode;
+    if(this.mode==='LIVE' && this.experiences.length) throw new Error('Experimental experience cannot enter LIVE');
+  }
+  readonly mode: WorldMode;
+  override step(): DeterministicEvent[] {
+    const events=super.step(), dt=1/this.data.config.hz;
+    this.subjective.estimateSeconds+=dt*(1+this.subjective.driftPpm/1e6);this.subjective.uncertaintySeconds+=dt*this.subjective.uncertaintyGrowthPerSecond;
+    const a=this.activity;
+    if(a.status==='running') {
+      a.cursor++;
+      if(a.cursor%10===0){a.appliedMilestones.push(a.cursor);this.emit(events,'ACTIVITY_EFFECT','activity','applied',{activityId:a.activityId,cursor:a.cursor});}
+      if(a.cursor===a.totalTicks){a.status='complete';a.completionCount=1;this.emit(events,'ACTIVITY_COMPLETE','activity','completed',{activityId:a.activityId,cursor:a.cursor,completionCount:1});}
+    }
+    return events;
+  }
+  applyAction(action:ControlAction):DeterministicEvent[] {
+    const events:DeterministicEvent[]=[];
+    if(action.type==='activity-start') {
+      if(this.activity.status==='running'||this.activity.status==='paused') throw new Error('Activity already exists; pause/resume it');
+      this.activity={status:'running',cursor:0,totalTicks:action.totalTicks,appliedMilestones:[],completionCount:0,activityId:this.activity.activityId+1};
+      this.emit(events,'ACTIVITY_STARTED','activity','running',{activityId:this.activity.activityId,totalTicks:action.totalTicks});
+    } else if(action.type==='activity-pause'||action.type==='activity-resume') {
+      const expected=action.type==='activity-pause'?'running':'paused';if(this.activity.status!==expected) throw new Error('Activity state does not permit action');
+      this.activity.status=action.type==='activity-pause'?'paused':'running';this.emit(events,'ACTIVITY_STATUS','activity',this.activity.status,{activityId:this.activity.activityId,cursor:this.activity.cursor});
+    } else if(action.type==='synthetic-cue'||action.type==='synthetic-clock') {
+      if(this.mode!=='EXPERIMENT') throw new Error('Synthetic observations are experiment-only');
+      if(action.sensed&&action.attended&&action.encoded&&this.experiences.length>=256) throw new Error('Synthetic experience capacity reached');
+      const factors={provenance:'TEST STUB',sensed:action.sensed,attended:action.attended,encoded:action.encoded,kind:action.type==='synthetic-clock'?'clock':'cue'};
+      const source=this.emit(events,'SYNTHETIC_CUE','test-harness','injected',factors);
+      this.emit(events,'SYNTHETIC_GATE','sensor',action.sensed&&action.attended&&action.encoded?'eligible':'not_encoded',factors,undefined,source.sequence);
+      if(action.sensed&&action.attended&&action.encoded) {
+        const experience:SyntheticExperience={id:this.nextExperienceId++,tick:this.data.tick,kind:action.type==='synthetic-clock'?'clock':'cue',provenance:'TEST STUB',observedSeconds:action.type==='synthetic-clock'?action.observedSeconds:null,uncertaintySeconds:action.type==='synthetic-clock'?action.uncertaintySeconds:null};
+        this.experiences.push(experience);this.emit(events,'EXPERIENCE_ENCODED','experience','encoded',{...factors,experienceId:experience.id},undefined,source.sequence);
+        if(action.type==='synthetic-clock') {
+          this.subjective.estimateSeconds=action.observedSeconds;this.subjective.uncertaintySeconds=action.uncertaintySeconds;this.subjective.lastCalibrationTick=this.data.tick;
+          this.emit(events,'CLOCK_CALIBRATED','clock','calibrated',{provenance:'TEST STUB',observedSeconds:action.observedSeconds,uncertaintySeconds:action.uncertaintySeconds},undefined,source.sequence);
+        }
+      }
+    }
+    return events;
+  }
+  override checkpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
 }

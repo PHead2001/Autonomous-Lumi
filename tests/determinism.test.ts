@@ -7,13 +7,17 @@ import { canonicalStringify, hashCanonical } from '../server/canonical.js';
 import { replay } from '../server/replay.js';
 import { FixedScheduler } from '../server/scheduler.js';
 
-test('seeded PRNG repeats and restored state continues; lint restricts simulation randomness only', async () => {
+test('seeded PRNG repeats and restored state continues; lint restricts authoritative module randomness recursively', async () => {
   const a = new SeededRandom(42), b = new SeededRandom(42);
   for (let i = 0; i < 100; i++) assert.equal(a.next(), b.next());
   const restored = new SeededRandom(a.seed, a.state); assert.equal(restored.next(), a.next());
   const lint = new ESLint();
-  const forbidden = await lint.lintText('export const sample = Math.random();', { filePath: 'server/simulation.ts' });
-  assert.ok(forbidden[0].messages.some(m => m.ruleId === 'no-restricted-properties'));
+  for (const filePath of ['server/simulation.ts', 'server/future/nested/authoritative.ts', 'shared/future/nested/state.ts']) {
+    const forbidden = await lint.lintText('export const sample = Math.random();', { filePath });
+    assert.ok(forbidden[0].messages.some(m => m.ruleId === 'no-restricted-properties'), `${filePath} must prohibit Math.random`);
+    const seeded = await lint.lintText('export const sample = (rng: { next(): number }) => rng.next();', { filePath });
+    assert.equal(seeded[0].errorCount, 0, `${filePath} accepts the injected PRNG`);
+  }
   const presentation = await lint.lintText('export const sample = Math.random();', { filePath: 'src/audio.ts' });
   assert.equal(presentation[0].errorCount, 0);
 });
