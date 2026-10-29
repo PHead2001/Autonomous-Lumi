@@ -76,8 +76,8 @@ export class BranchRuntime {
     if(this.mode==='LIVE'&&!envelope&&options.checkpoint&&typeof options.checkpoint==='object'&&[2,3].includes((options.checkpoint as {schemaVersion:number}).schemaVersion))throw new Error('LIVE restoration requires a LIVE runtime envelope; bare lab state has no trusted mode');
     if(envelope&&envelope.mode==='EXPERIMENT'&&this.mode==='LIVE')throw new Error('Cannot promote experimental runtime into LIVE');
     if(!options.offline&&this.mode==='EXPERIMENT'&&envelope&&envelope.control.speed>EXPERIMENT_PLAYBACK.maxSpeed)throw new Error(`Saved experiment playback ${envelope.control.speed}× exceeds the active ${EXPERIMENT_PLAYBACK.maxSpeed}× limit. Replay this artifact offline, or explicitly create a new experiment at a supported speed.`);
-    const SimulationClass=options.offline&&envelope?.simulation.schemaVersion===2?LabSimulation:VisionSimulation;
-    this.simulation=new SimulationClass({checkpoint:envelope?.simulation??options.checkpoint,seed:options.seed,worldId:options.worldId,runId:this.target.runId,mode:options.mode});
+    const simulationOptions={checkpoint:envelope?.simulation??options.checkpoint,seed:options.seed,worldId:options.worldId,runId:this.target.runId,mode:options.mode};
+    this.simulation=options.offline&&envelope?.simulation.schemaVersion===2?new LabSimulation(simulationOptions):new VisionSimulation({...simulationOptions,historical:options.offline});
     this.controlState=envelope?structuredClone(envelope.control):{paused:false,speed:this.mode==='LIVE'?1:EXPERIMENT_PLAYBACK.defaultSpeed,fastForwardRemaining:0,nextOperationSequence:1,loggingMode:'default',compressClosed:false};
     if(this.mode==='LIVE'){this.controlState.paused=false;this.controlState.speed=1;this.controlState.fastForwardRemaining=0;}
     this.scheduler=new FixedScheduler(()=>this.advanceOne('scheduled'),e=>this.schedulerDiagnostic(e),options.clock,envelope?.scheduler.config??{maxStepsPerPump:this.mode==='EXPERIMENT'?48:8,maxBacklogSteps:this.mode==='EXPERIMENT'?96:16});
@@ -86,6 +86,7 @@ export class BranchRuntime {
     this.recorder=options.offline?null:new FlightRecorder({directory:options.directory,worldId:options.worldId,branchId:options.branchId,worldMode:options.mode,runId:this.target.runId,hz:this.simulation.checkpoint().config.hz,loggingMode:this.controlState.loggingMode,compressClosed:this.controlState.compressClosed});
     this.runs.push(this.target.runId);this.capture();
     if(!options.offline&&options.checkpoint&&envelope?.simulation.schemaVersion!==3)this.recorder?.record({tick:this.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'STATE_SCHEMA_MIGRATED',component:'recovery',outcome:'history_and_tick_preserved',data:{fromSchema:envelope?.simulation.schemaVersion??1,toSchema:3,checkpointTick:this.simulation.state.tick,historyId:options.historyId??'unknown'}});
+    if(!options.offline&&envelope?.simulation.schemaVersion===3&&envelope.simulation.rulesVersion!==this.simulation.checkpoint().rulesVersion)this.recorder?.record({tick:this.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'STATE_RULES_MIGRATED',component:'recovery',outcome:'history_tick_pose_and_queue_preserved',data:{fromRules:envelope.simulation.rulesVersion,toRules:this.simulation.checkpoint().rulesVersion,checkpointTick:this.simulation.state.tick,historyId:options.historyId??'unknown'}});
     if(this.controlState.fastForwardRemaining&&!options.offline&&this.activated)this.scheduleFastForward();
   }
   private observe(events:DeterministicEvent[]){if(!this.activated)return;if(this.options.offline)this.events.push(...events);for(const e of events)this.recorder?.recordEvent(e);this.options.onEvents?.(events,this);}

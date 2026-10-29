@@ -27,9 +27,10 @@ export interface CaptureMetadata extends ActiveTarget {
   status: CaptureStatus; requestedAt: string; completedAt: string | null; durationMs: number | null;
   frameHash: string | null; backend: RendererIdentity | null; error: string | null;
 }
+export type SampleVisibilityBand = 'low' | 'medium' | 'high';
 export interface EligibleShape {
   handle: string; identity: 'unknown'; bearingDegrees: number; elevationDegrees: number;
-  distanceBand: string; sampleVisibilityFraction: number; qualityFlags: string[]; uncertainty: 'geometric_samples_only';
+  distanceBand: string; sampleVisibilityBand: SampleVisibilityBand; qualityFlags: string[]; uncertainty: 'geometric_samples_only';
 }
 /** Deliberately excludes engine identities, exact world positions, and hidden objects. */
 export interface VisualObservation extends ActiveTarget {

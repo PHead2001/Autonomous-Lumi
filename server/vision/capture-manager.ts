@@ -5,7 +5,7 @@ import type { ActiveTarget } from '../../shared/lab-protocol.js';
 import type { WorldState } from '../../shared/protocol.js';
 import { eyePose } from '../../shared/eye-pose.js';
 import { PHYSICAL_SCENE_VERSION, RENDER_REVISION } from '../../shared/physical-scene.js';
-import { HEAD_LIMITS, validateHeadAction, type HeadAction } from '../../shared/vision-protocol.js';
+import { HEAD_LIMITS, observedHeadTarget, validateHeadAction, type CapturedBearingEvidence, type HeadAction } from '../../shared/vision-protocol.js';
 import type { CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
 import { CAPTURE_LIMITS } from '../../shared/capture-protocol.js';
 import { groundSnapshot, filterVisibleGrounding } from './grounding.js';
@@ -138,12 +138,12 @@ export class CaptureManager {
     const reject = (reason: string): never => { runtime.recorder?.record({ tick: now.tick, category: 'PRIVATE_SENSOR', eventType: 'VISION_TARGET_REJECTED', component: 'virtual_eyes', severity: 'warn', outcome: 'rejected', data: { reason } }); throw new Error(reason); };
     if (!this.current(runtime.target) || !entry || scopeKey(entry.metadata) !== scopeKey(runtime.target) || entry.metadata.status !== 'success' || !entry.bytes) return reject('Observation is missing or belongs to another run');
     if (!now.scene || a.sceneRevision !== now.scene.revision || entry.metadata.dynamicRevision !== now.scene.revision || now.tick < entry.metadata.tick || now.tick - entry.metadata.tick > 300) return reject('Observation is expired or its scene revision changed');
-    const id = entry.handles.get(a.handle); if (!id) return reject('Unknown observation handle');
-    const current = groundSnapshot(now, entry.metadata.width, entry.metadata.height).objects.find(object => object.id === id);
-    if (!current?.eligible) return reject('Observed target is no longer eligible');
-    const yaw = (now.head?.yaw ?? 0) + current.bearingRadians, pitch = (now.head?.pitch ?? 0) + current.elevationRadians;
+    const shape = entry.observation?.shapes.find(shape=>shape.handle===a.handle);
+    if (!entry.handles.has(a.handle)||!shape) return reject('Unknown observation handle');
+    const evidence:CapturedBearingEvidence={kind:'captured_filtered_bearing_v1',observationId:entry.metadata.observationId,frameHash:entry.metadata.frameHash!,capturedTick:entry.metadata.tick,handle:a.handle,capturedBodyHeading:entry.metadata.camera.bodyHeading,capturedHeadYaw:entry.metadata.camera.headYaw,capturedHeadPitch:entry.metadata.camera.headPitch,bearingDegrees:shape.bearingDegrees,elevationDegrees:shape.elevationDegrees};
+    const {yaw,pitch}=observedHeadTarget(evidence,now.character.heading);
     if (yaw < HEAD_LIMITS.minYaw || yaw > HEAD_LIMITS.maxYaw || pitch < HEAD_LIMITS.minPitch || pitch > HEAD_LIMITS.maxPitch) return reject('Observed bearing exceeds head limits');
-    const action = validateHeadAction({ type: 'look_at', yaw, pitch, sceneRevision: now.scene.revision, evidence: { observationId: entry.metadata.observationId, frameHash: entry.metadata.frameHash, capturedTick: entry.metadata.tick, handle: a.handle, engineTargetId: id, captureWidth: entry.metadata.width, captureHeight: entry.metadata.height } });
+    const action = validateHeadAction({ type: 'look_at', yaw, pitch, sceneRevision: now.scene.revision, evidence });
     this.record(entry, 'VISION_TARGET_VALIDATED', 'normalized_observed_bearing', { validationTick: now.tick }); return action;
   }
   /** Called synchronously after registry swap and before its old recorder closes. */

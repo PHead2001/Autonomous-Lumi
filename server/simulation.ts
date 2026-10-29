@@ -2,7 +2,7 @@ import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../s
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
 import type { ActivityState, ControlAction, SubjectiveClock, WorldMode } from '../shared/lab-protocol.js';
-import { defaultHeadState, HEAD_LIMITS, validateHeadAction, validateHeadState, type HeadAction, type HeadState } from '../shared/vision-protocol.js';
+import { defaultHeadState, HEAD_LIMITS, isCapturedBearingEvidence, observedHeadTarget, observedWorldDirection, relativeObservedAim, validateHeadAction, validateHeadState, type HeadAction, type HeadState } from '../shared/vision-protocol.js';
 import { defaultPhysicalSceneState, validatePhysicalSceneState, validateSceneConfiguration, canOccupyCharacter, canRestoreCharacter, canMoveCharacter, type PhysicalSceneState } from '../shared/physical-scene.js';
 import { isTargetEligible } from './vision/grounding.js';
 
@@ -176,7 +176,8 @@ export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rule
   schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
   experiences: SyntheticExperience[]; nextExperienceId: number;
 }
-export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVersion'> {schemaVersion:3;rulesVersion:'lumi-eyes-v1';head:HeadState;scene:PhysicalSceneState}
+export const CURRENT_VISION_RULES='lumi-eyes-v2' as const;
+export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVersion'> {schemaVersion:3;rulesVersion:'lumi-eyes-v1'|typeof CURRENT_VISION_RULES;head:HeadState;scene:PhysicalSceneState}
 export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
@@ -275,24 +276,34 @@ function visionLabPart(cp:CheckpointV3):CheckpointV2 {
 }
 export function validateVisionCheckpoint(value:unknown):CheckpointV3 {
   const keys=['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId','head','scene'];
-  const raw=object(value,keys,'vision root');if(raw.schemaVersion!==3||raw.rulesVersion!=='lumi-eyes-v1')fail('incompatible vision rules');
+  const raw=object(value,keys,'vision root');if(raw.schemaVersion!==3||!['lumi-eyes-v1',CURRENT_VISION_RULES].includes(raw.rulesVersion as string))fail('incompatible vision rules');
   const cp=value as CheckpointV3;if(!Array.isArray(cp.pendingInputs))fail('vision input queue');
-  for(const input of cp.pendingInputs)validateCommand(input.command,true);
-  visionLabPart(cp);validateHeadState(cp.head);validatePhysicalSceneState(cp.scene);
+  for(const input of cp.pendingInputs){validateCommand(input.command,true);if(cp.rulesVersion==='lumi-eyes-v1'&&input.command.type==='look_at'&&input.command.evidence&&isCapturedBearingEvidence(input.command.evidence))fail('captured bearing evidence requires current vision rules');}
+  visionLabPart(cp);validateHeadState(cp.head,cp.rulesVersion==='lumi-eyes-v1');validatePhysicalSceneState(cp.scene);
+  if(cp.head.observedAim&&cp.head.targetYaw!==relativeObservedAim(cp.head.observedAim,cp.character.heading).yaw)fail('observed aim and body orientation disagree');
   if(!canRestoreCharacter(cp.scene,cp.character.x,cp.character.z))fail('character overlaps physical collider');
   return structuredClone(cp);
 }
 /** Deliberate active-world upgrade; offline V1/V2 replay never calls this. */
 export function upgradeVisionCheckpoint(value:unknown):CheckpointV3 {
-  const source=validateCheckpoint(value);if(source.schemaVersion===3)return source;
+  const source=validateCheckpoint(value);if(source.schemaVersion===3)return {...source,rulesVersion:CURRENT_VISION_RULES,head:source.rulesVersion===CURRENT_VISION_RULES?source.head:{...source.head,observedAim:null}};
   const cp=upgradeCheckpoint(source);
-  return {...cp,schemaVersion:3,rulesVersion:'lumi-eyes-v1',head:defaultHeadState(),scene:defaultPhysicalSceneState()};
+  return {...cp,schemaVersion:3,rulesVersion:CURRENT_VISION_RULES,head:defaultHeadState(),scene:defaultPhysicalSceneState()};
 }
 export class VisionSimulation extends LabSimulation {
-  private head:HeadState;private scene:PhysicalSceneState;
-  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode}) {
-    const cp=upgradeVisionCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
-    super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;
+  private head:HeadState;private scene:PhysicalSceneState;private readonly visionRules:CheckpointV3['rulesVersion'];
+  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode;historical?:boolean}) {
+    const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
+    const cp=options.historical&&source.schemaVersion===3?source:upgradeVisionCheckpoint(source);
+    super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
+  }
+  override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
+    const normalized=validateCommand(command,true);
+    if(normalized.type==='look_at'&&normalized.evidence) {
+      if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
+      if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
+    }
+    return super.enqueue(normalized);
   }
   protected override supportsVisionInputs():boolean{return true;}
   protected override onDoorChanged():void{this.scene.revision++;}
@@ -309,10 +320,18 @@ export class VisionSimulation extends LabSimulation {
     if(command.sceneRevision!==this.scene.revision)return reject('scene_revision_changed');
     if(command.type==='look_at'&&command.evidence) {
       if(command.evidence.capturedTick>this.data.tick||this.data.tick-command.evidence.capturedTick>300)return reject('observation_expired');
-      if(!isTargetEligible(this.snapshot(),command.evidence.engineTargetId,command.evidence.captureWidth,command.evidence.captureHeight))return reject('target_no_longer_visible');
+      if(this.visionRules==='lumi-eyes-v1') {
+        if(isCapturedBearingEvidence(command.evidence))return reject('incompatible_observation_evidence');
+        if(!isTargetEligible(this.snapshot(),command.evidence.engineTargetId,command.evidence.captureWidth,command.evidence.captureHeight))return reject('target_no_longer_visible');
+      } else {
+        if(!isCapturedBearingEvidence(command.evidence))return reject('legacy_observation_evidence');
+        const target=observedHeadTarget(command.evidence,this.data.character.heading);
+        if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch)return reject('observed_bearing_exceeds_head_limits');
+      }
     }
     const h=this.head;
     if(h.status!=='idle')this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId:h.activeActionId!,command:command.type},input.sequence);
+    if(this.visionRules!== 'lumi-eyes-v1')h.observedAim=null;
     const actionId=h.nextActionId++;
     if(command.type==='cancel_head'){h.status='idle';h.targetYaw=h.yaw;h.targetPitch=h.pitch;h.scan=null;h.activeActionId=null;this.emit(events,'HEAD_CANCELLED','head','idle',{actionId},input.sequence);return true;}
     h.activeActionId=actionId;
@@ -322,21 +341,33 @@ export class VisionSimulation extends LabSimulation {
     }else{h.status='turning';h.scan=null;
       // Relative turns use the pose at this ordered execution tick; saturating at
       // anatomical limits is deterministic and never snaps the current pose.
-      h.targetYaw=command.type==='turn_head'?Math.max(HEAD_LIMITS.minYaw,Math.min(HEAD_LIMITS.maxYaw,h.yaw+command.yawDelta)):command.yaw;
-      h.targetPitch=command.type==='turn_head'?Math.max(HEAD_LIMITS.minPitch,Math.min(HEAD_LIMITS.maxPitch,h.pitch+command.pitchDelta)):command.pitch;
+      const observed=command.type==='look_at'&&command.evidence&&isCapturedBearingEvidence(command.evidence)?observedHeadTarget(command.evidence,this.data.character.heading):null;
+      if(command.type==='look_at'&&command.evidence&&isCapturedBearingEvidence(command.evidence))h.observedAim=observedWorldDirection(command.evidence);
+      h.targetYaw=command.type==='turn_head'?Math.max(HEAD_LIMITS.minYaw,Math.min(HEAD_LIMITS.maxYaw,h.yaw+command.yawDelta)):observed?.yaw??command.yaw;
+      h.targetPitch=command.type==='turn_head'?Math.max(HEAD_LIMITS.minPitch,Math.min(HEAD_LIMITS.maxPitch,h.pitch+command.pitchDelta)):observed?.pitch??command.pitch;
     }
     this.emit(events,'HEAD_ACTION_STARTED','head',h.status,{actionId,command:command.type,targetYaw:h.targetYaw,targetPitch:h.targetPitch,sceneRevision:this.scene.revision,...(command.type==='look_at'&&command.evidence?{observationId:command.evidence.observationId,frameHash:command.evidence.frameHash,capturedTick:command.evidence.capturedTick}: {})},input.sequence);
     return true;
   }
   override step():DeterministicEvent[] {
     const events=super.step(),h=this.head;if(h.status==='idle')return events;
+    if(h.observedAim) {
+      // Base movement can turn the body on this same tick. Rebase the perceived
+      // ray after that movement, without consulting a target or world geometry.
+      const target=relativeObservedAim(h.observedAim,this.data.character.heading);
+      if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch) {
+        const actionId=h.activeActionId!;h.status='idle';h.targetYaw=h.yaw;h.targetPitch=h.pitch;h.scan=null;h.activeActionId=null;h.observedAim=null;
+        this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId,reason:'observed_direction_out_of_head_range'});return events;
+      }
+      h.targetYaw=target.yaw;h.targetPitch=target.pitch;
+    }
     const maximum=HEAD_LIMITS.radiansPerSecond/this.data.config.hz,dx=h.targetYaw-h.yaw,dy=h.targetPitch-h.pitch,distance=Math.hypot(dx,dy);
     if(distance<=maximum){h.yaw=h.targetYaw;h.pitch=h.targetPitch;
       if(h.status==='scanning'&&h.scan&&h.scan.cursor+1<h.scan.points.length){h.scan.cursor++;const p=h.scan.points[h.scan.cursor];h.targetYaw=p.yaw;h.targetPitch=p.pitch;this.emit(events,'HEAD_SCAN_POINT','head','next',{actionId:h.activeActionId!,cursor:h.scan.cursor,targetYaw:h.targetYaw,targetPitch:h.targetPitch});}
-      else{const actionId=h.activeActionId!;h.status='idle';h.scan=null;h.activeActionId=null;this.emit(events,'HEAD_ACTION_COMPLETE','head','idle',{actionId,yaw:h.yaw,pitch:h.pitch});}
+      else{const actionId=h.activeActionId!;h.status='idle';h.scan=null;h.activeActionId=null;if(this.visionRules!== 'lumi-eyes-v1')h.observedAim=null;this.emit(events,'HEAD_ACTION_COMPLETE','head','idle',{actionId,yaw:h.yaw,pitch:h.pitch});}
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return events;
   }
-  override checkpoint():CheckpointV3{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:'lumi-eyes-v1',head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }

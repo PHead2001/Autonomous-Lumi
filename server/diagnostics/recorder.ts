@@ -66,7 +66,7 @@ const dataKeys = new Set([
   'provenance', 'attended', 'encoded', 'observationId', 'cue', 'valueSeconds', 'estimateSeconds', 'uncertaintySeconds', 'calibrated', 'rate', 'bias',
   'activityId', 'cursor', 'total', 'progress', 'completed', 'completionCount', 'paused', 'speed', 'ticks', 'remainingTicks', 'controlSequence', 'action', 'checkpointHash',
   'sensed','experienceId','observedSeconds','totalTicks','control','kind','historyId','generation','fallback','checkpointAgeMs','enabled',
-  'fromSchema','toSchema','actionId','yaw','pitch','targetYaw','targetPitch','sceneRevision','illumination','fixture','fixtureColor','doorOpenRadians','frameHash','capturedTick',
+  'fromSchema','toSchema','fromRules','toRules','actionId','yaw','pitch','targetYaw','targetPitch','sceneRevision','illumination','fixture','fixtureColor','doorOpenRadians','frameHash','capturedTick',
   'captureId','stateVersion','dynamicRevision','renderRevision','captureReason','width','height','bodyHeading','headYaw','headPitch','eyeX','eyeY','eyeZ','horizontalFovDegrees','backend','webglRenderer','visibleCount','validationTick','durationMs','completionUtc',
   'format','chromium','webglVendor','webglVersion',
 ]);

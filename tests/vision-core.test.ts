@@ -17,6 +17,7 @@ import { readRun } from '../server/diagnostics/recorder.js';
 const turn=(yawDelta=.9,pitchDelta=.3,sceneRevision=0)=>({type:'turn_head' as const,yawDelta,pitchDelta,sceneRevision});
 const step=(s:Simulation,n:number)=>{for(let i=0;i<n;i++)s.step();};
 const fixture=()=>{const cp=new VisionSimulation({mode:'EXPERIMENT'}).checkpoint();cp.character={x:0,z:-2,heading:0,moving:false,gait:0};cp.pauseUntilTick=10000;cp.scene.fixture='visibility';return new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp});};
+const historicalVisionFixture=()=>{const cp=fixture().checkpoint();cp.rulesVersion='lumi-eyes-v1';delete cp.head.observedAim;return new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp,historical:true});};
 const historical=(tick=200):RuntimeCheckpoint=>{const s=new LabSimulation({mode:'LIVE',seed:527});step(s,tick);const current=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',offline:true}).checkpoint();return {...current,schemaVersion:1,simulation:s.checkpoint() as CheckpointV2};};
 async function temp(t:{after(fn:()=>Promise<void>):void}){const directory=await mkdtemp(join(tmpdir(),'lumi-eyes-core-'));t.after(()=>rm(directory,{recursive:true,force:true}));return directory;}
 
@@ -48,14 +49,14 @@ test('mid-turn, pending head input and mid-scan checkpoints continue with identi
   const replayed=replay(pending,[],pending.tick+178);assert.equal(replayed.stateHash,hashCheckpoint(s.checkpoint()));
 });
 
-test('private target evidence is rechecked on apply; hidden targets, changed scene and expired evidence reject',()=>{
-  const s=fixture();assert.equal(groundSnapshot(s.snapshot()).objects.find(o=>o.id==='fixture-ahead')?.eligible,true);
+test('historical eyes-v1 private target evidence retains exact visibility rechecks in offline replay',()=>{
+  const s=historicalVisionFixture();assert.equal(groundSnapshot(s.snapshot()).objects.find(o=>o.id==='fixture-ahead')?.eligible,true);
   const evidence={observationId:'obs-test',handle:'target-test',frameHash:'a'.repeat(64),capturedTick:0,captureWidth:512,captureHeight:512,engineTargetId:'fixture-ahead'};
   const target={type:'look_at' as const,yaw:-.3,pitch:0,sceneRevision:0,evidence};s.enqueue(target);assert.ok(s.step().some(e=>e.type==='HEAD_ACTION_STARTED'));
-  const hidden=fixture();hidden.enqueue({...target,evidence:{...evidence,engineTargetId:'fixture-behind-wall'}});assert.ok(hidden.step().some(e=>e.data.reason==='target_no_longer_visible'));
-  const changed=fixture();changed.enqueue({type:'configure_scene',illumination:.01,fixture:'visibility',fixtureColor:'#ed6050',doorOpenRadians:null});changed.enqueue(target);assert.ok(changed.step().some(e=>e.data.reason==='scene_revision_changed'));
-  const door=fixture();door.enqueue({type:'slam'});door.enqueue(target);assert.ok(door.step().some(e=>e.data.reason==='scene_revision_changed'));
-  const old=fixture(),cp=old.checkpoint();cp.tick=400;cp.subjective.lastCalibrationTick=null;const expired=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp});expired.enqueue(target);assert.ok(expired.step().some(e=>e.data.reason==='observation_expired'));
+  const hidden=historicalVisionFixture();hidden.enqueue({...target,evidence:{...evidence,engineTargetId:'fixture-behind-wall'}});assert.ok(hidden.step().some(e=>e.data.reason==='target_no_longer_visible'));
+  const changed=historicalVisionFixture();changed.enqueue({type:'configure_scene',illumination:.01,fixture:'visibility',fixtureColor:'#ed6050',doorOpenRadians:null});changed.enqueue(target);assert.ok(changed.step().some(e=>e.data.reason==='scene_revision_changed'));
+  const door=historicalVisionFixture();door.enqueue({type:'slam'});door.enqueue(target);assert.ok(door.step().some(e=>e.data.reason==='scene_revision_changed'));
+  const old=historicalVisionFixture(),cp=old.checkpoint();cp.tick=400;cp.subjective.lastCalibrationTick=null;const expired=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp,historical:true});expired.enqueue(target);assert.ok(expired.step().some(e=>e.data.reason==='observation_expired'));
   assert.throws(()=>validateHeadAction({...target,evidence:{...evidence,hiddenCoordinates:[1,2,3]}}));
 });
 
@@ -67,14 +68,14 @@ test('V3 validation refuses partial/mismatched scan/camera/schema state and lega
   const r=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',offline:true});assert.throws(()=>validateRuntimeCheckpoint({...r.checkpoint(),schemaVersion:1}));
 });
 
-test('target execution preserves the captured resolution and replays a shape too small at default resolution',()=>{
-  const cp=fixture().checkpoint();cp.character.x=.1;cp.character.z=.8;
-  const s=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp}),high=groundSnapshot(s.snapshot(),1024,1024).objects.find(o=>o.id==='fixture-small')!,baseline=groundSnapshot(s.snapshot(),512,512).objects.find(o=>o.id==='fixture-small')!;
+test('historical eyes-v1 target execution preserves captured resolution in offline replay',()=>{
+  const cp=historicalVisionFixture().checkpoint();cp.character.x=.1;cp.character.z=.8;
+  const s=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp,historical:true}),high=groundSnapshot(s.snapshot(),1024,1024).objects.find(o=>o.id==='fixture-small')!,baseline=groundSnapshot(s.snapshot(),512,512).objects.find(o=>o.id==='fixture-small')!;
   assert.equal(high.eligible,true);assert.equal(baseline.eligible,false);assert.ok(high.projectedPixels>=8&&baseline.projectedPixels<8);
   const evidence={observationId:'obs-1024',handle:'small-shape',frameHash:'b'.repeat(64),capturedTick:cp.tick,captureWidth:1024,captureHeight:1024,engineTargetId:'fixture-small'};
   const input=s.enqueue({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence}),events=s.step();assert.ok(events.some(e=>e.type==='HEAD_ACTION_STARTED'));assert.ok(!events.some(e=>e.data.reason==='target_no_longer_visible'));
   const reproduced=replay(cp,[input.input],cp.tick+1);assert.equal(reproduced.stateHash,hashCheckpoint(s.checkpoint()));assert.equal(reproduced.eventHash,s.checkpoint().eventHash);
-  const low=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp});low.enqueue({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence:{...evidence,captureWidth:512,captureHeight:512}});assert.ok(low.step().some(e=>e.data.reason==='target_no_longer_visible'));
+  const low=new VisionSimulation({mode:'EXPERIMENT',checkpoint:cp,historical:true});low.enqueue({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence:{...evidence,captureWidth:512,captureHeight:512}});assert.ok(low.step().some(e=>e.data.reason==='target_no_longer_visible'));
   for(const captureWidth of [127,1025,NaN,512.5])assert.throws(()=>validateHeadAction({type:'look_at',yaw:0,pitch:0,sceneRevision:0,evidence:{...evidence,captureWidth}}));
 });
 

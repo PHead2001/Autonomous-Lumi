@@ -1,4 +1,5 @@
 import type { WorldState } from '../../shared/protocol.js';
+import type { SampleVisibilityBand } from '../../shared/capture-protocol.js';
 import { assertCameraClearance, eyePose, type EyePose } from '../../shared/eye-pose.js';
 import { physicalSceneSnapshot, type PhysicalBox, type Vector3Tuple } from '../../shared/physical-scene.js';
 
@@ -15,7 +16,7 @@ export interface GroundingResult {
 }
 export interface VisibleGrounding {
   handle: string; identity: 'unknown'; bearingDegrees: number; elevationDegrees: number;
-  distanceBand: 'near' | 'room' | 'far'; sampleVisibilityFraction: number;
+  distanceBand: 'near' | 'room' | 'far'; sampleVisibilityBand: SampleVisibilityBand;
   qualityFlags: string[]; uncertainty: 'geometric_samples_only';
 }
 const dot = (a: Vector3Tuple, b: Vector3Tuple) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -82,7 +83,7 @@ export function groundSnapshot(state: WorldState, width?: number, height?: numbe
 const heightOrDefault = (camera: EyePose) => camera.height;
 /** The sole filtered spatial payload: no private IDs, names, types, positions or fully hidden entries. */
 export function filterVisibleGrounding(result: GroundingResult, handleFor: (privateId: string) => string): VisibleGrounding[] {
-  return result.objects.filter(o => o.eligible).map(o => ({ handle: handleFor(o.id), identity: 'unknown', bearingDegrees: Math.round(o.bearingRadians * 180 / Math.PI / 15) * 15, elevationDegrees: Math.round(o.elevationRadians * 180 / Math.PI / 15) * 15, distanceBand: o.distance < 2 ? 'near' : o.distance < 6 ? 'room' : 'far', sampleVisibilityFraction: o.sampleVisibilityFraction, qualityFlags: [...o.qualityFlags], uncertainty: 'geometric_samples_only' }));
+  return result.objects.filter(o => o.eligible).map(o => ({ handle: handleFor(o.id), identity: 'unknown', bearingDegrees: Math.round(o.bearingRadians * 180 / Math.PI / 15) * 15, elevationDegrees: Math.round(o.elevationRadians * 180 / Math.PI / 15) * 15, distanceBand: o.distance < 2 ? 'near' : o.distance < 6 ? 'room' : 'far', sampleVisibilityBand: o.sampleVisibilityFraction <= 1/3 ? 'low' : o.sampleVisibilityFraction <= 2/3 ? 'medium' : 'high', qualityFlags: [...o.qualityFlags], uncertainty: 'geometric_samples_only' }));
 }
 export function isTargetEligible(state: WorldState, privateId: string, width?:number, height?:number): boolean {
   try { return groundSnapshot(state,width,height).objects.some(o => o.id === privateId && o.eligible); }

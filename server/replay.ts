@@ -3,7 +3,7 @@ import { Simulation, LabSimulation, VisionSimulation, hashCheckpoint, validateCh
 
 /** Inputs enter at their recorded receipt tick, including no-ops and rejections. */
 export function replay(checkpoint: unknown, inputs: OrderedInput[], endTick: number) {
-  const start = validateCheckpoint(checkpoint), simulation = start.schemaVersion===3?new VisionSimulation({checkpoint:start,mode:'EXPERIMENT'}):start.schemaVersion === 2 ? new LabSimulation({ checkpoint:start,mode:'EXPERIMENT' }) : new Simulation({ checkpoint: start });
+  const start = validateCheckpoint(checkpoint), simulation = start.schemaVersion===3?new VisionSimulation({checkpoint:start,mode:'EXPERIMENT',historical:true}):start.schemaVersion === 2 ? new LabSimulation({ checkpoint:start,mode:'EXPERIMENT' }) : new Simulation({ checkpoint: start });
   if (!Number.isSafeInteger(endTick) || endTick < start.tick || endTick - start.tick > 10_000_000) throw new Error('Invalid replay end tick');
   let cursor = 0, sequence = start.nextInputSequence, lastTick = start.tick;
   for (const input of inputs) {

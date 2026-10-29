@@ -28,6 +28,9 @@ test('filtered grounding only includes eligible unknown shapes and opaque handle
   assert.ok(filtered.length > 0); assert.ok(filtered.every(o => o.identity === 'unknown' && o.uncertainty === 'geometric_samples_only'));
   for (const forbidden of ['fixture-', 'painted-window', 'door-leaf', 'position', 'distance":', 'engineTargetId', 'fully_occluded']) assert.ok(!text.includes(forbidden), forbidden);
   assert.ok(filtered.every(o => Number.isInteger(o.bearingDegrees / 15) && ['near', 'room', 'far'].includes(o.distanceBand)));
+  assert.ok(filtered.every(o => ['low','medium','high'].includes(o.sampleVisibilityBand)));
+  assert.ok(!text.includes('sampleVisibilityFraction'));
+  assert.ok(privateResult.objects.some(o => o.sampleVisibilityFraction > 0 && o.sampleVisibilityFraction < 1));
 });
 
 test('darkness and resolution reduce eligible evidence without inventing recognition', () => {
