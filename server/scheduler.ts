@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 export interface HostClock { monotonicMs(): number; utcMs(): number }
 export interface SchedulerConfig { hz: number; maxStepsPerPump: number; maxBacklogSteps: number; suspendThresholdMs: number }
 export interface SchedulerDiagnostic { type: 'HOST_SUSPEND' | 'HOST_RESUME' | 'CATCHUP_SKIPPED' | 'CLOCK_ADJUSTMENT'; data: Record<string, number | string | boolean> }
+export interface SchedulerState { config: SchedulerConfig; backlogMs: number }
 export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = { hz: 30, maxStepsPerPump: 8, maxBacklogSteps: 16, suspendThresholdMs: 5000 };
 export const systemClock: HostClock = { monotonicMs: () => performance.now(), utcMs: () => Date.now() };
 /** Host scheduling is observational; skipped host time never advances authoritative ticks. */
@@ -15,7 +16,8 @@ export class FixedScheduler {
     this.mono = clock.monotonicMs(); this.utc = clock.utcMs();
   }
   private report(event: SchedulerDiagnostic) { try { this.diagnostic(event); } catch { /* An observer cannot control stepping. */ } }
-  pump(): number {
+  pump(speed = 1, enabled = true): number {
+    if (!Number.isFinite(speed) || speed < 1 || speed > 60) throw new Error('Invalid scheduler speed');
     const mono = this.clock.monotonicMs(), utc = this.clock.utcMs(), elapsed = mono - this.mono, wallElapsed = utc - this.utc;
     this.mono = mono; this.utc = utc;
     if (![mono,utc,elapsed,wallElapsed].every(Number.isFinite)) throw new Error('Invalid host clock');
@@ -25,7 +27,8 @@ export class FixedScheduler {
       this.accumulator = 0; this.report({ type: 'HOST_SUSPEND', data }); this.report({ type: 'HOST_RESUME', data }); return 0;
     }
     if (elapsed < 0 || Math.abs(elapsed - wallElapsed) >= 1000) this.report({ type: 'CLOCK_ADJUSTMENT', data: { monotonicGapMs: elapsed, wallGapMs: wallElapsed } });
-    this.accumulator += Math.max(0, elapsed);
+    if (!enabled) { this.accumulator = 0; return 0; }
+    this.accumulator += Math.max(0, elapsed) * speed;
     const cap = this.config.maxBacklogSteps * stepMs;
     if (this.accumulator > cap) {
       const skippedMs = this.accumulator - cap; this.accumulator = cap;
@@ -37,4 +40,9 @@ export class FixedScheduler {
     return count;
   }
   get backlogMs(): number { return Math.max(0, this.accumulator); }
+  checkpoint(): SchedulerState { return {config:{...this.config},backlogMs:this.backlogMs}; }
+  rebase(backlogMs = 0): void {
+    if (!Number.isFinite(backlogMs) || backlogMs < 0 || backlogMs > this.config.maxBacklogSteps * 1000 / this.config.hz) throw new Error('Invalid scheduler backlog');
+    this.accumulator=backlogMs;this.mono=this.clock.monotonicMs();this.utc=this.clock.utcMs();
+  }
 }

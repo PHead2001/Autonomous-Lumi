@@ -37,3 +37,7 @@ next-env.d.ts
 /dist/
 /diagnostics/
 /.vite/
+
+# Local reference guides (owner supplied; never publish)
+/Codex_Engineering_and_Prompting_Playbook_v2.6.md
+/GPT 6 Prompting Guide (2).docx

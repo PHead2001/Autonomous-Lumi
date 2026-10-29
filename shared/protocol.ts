@@ -1,7 +1,7 @@
 export const ROOM = { width: 9, depth: 7, walkX: 3.2, walkZ: 2.3 } as const;
 export interface AcousticEvent { id: number; time: number; intensity: number; suddenness: number; x: number; z: number }
 export interface WorldState {
-  worldId: string; runId: string; time: number; tick: number;
+  worldId: string; runId: string; branchId?: string; mode?: 'LIVE' | 'EXPERIMENT'; time: number; tick: number;
   character: { x: number; z: number; heading: number; moving: boolean; gait: number };
   reflex: { start: number; strength: number; duration: number };
   door: { lastSlam: number; slamCount: number };

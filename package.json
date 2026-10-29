@@ -17,7 +17,8 @@
     "lint": "eslint .",
     "diagnostics:export": "tsx server/diagnostics/cli.ts export",
     "diagnostics:incident": "tsx server/diagnostics/cli.ts incident",
-    "replay": "tsx server/diagnostics/cli.ts replay"
+    "replay": "tsx server/diagnostics/cli.ts replay",
+    "diagnostics:benchmark": "tsx server/diagnostics/benchmark.ts"
   },
   "dependencies": {
     "fflate": "^0.8.3",

@@ -1,86 +1,82 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { extname, resolve, sep } from 'node:path';
+import { readFile, mkdir, stat } from 'node:fs/promises';
+import { extname, resolve, sep, join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { Simulation, normalizeCommand, type DeterministicEvent } from './simulation.js';
-import { FixedScheduler, type HostClock, type SchedulerConfig } from './scheduler.js';
-import { FlightRecorder } from './diagnostics/recorder.js';
+import { normalizeCommand, type DeterministicEvent } from './simulation.js';
+import { BranchRegistry } from './branch-registry.js';
+import { validId, type BranchRuntime } from './branch-runtime.js';
+import type { HostClock, SchedulerConfig } from './scheduler.js';
+import { queryTimeline, type TimelineFilters } from './diagnostics/query.js';
+import { exportIncident } from './diagnostics/bundle.js';
 import type { AcousticEvent, ServerMessage } from '../shared/protocol.js';
-
-export interface WorldServerOptions { seed?: number; checkpoint?: unknown; diagnosticsDirectory?: string; clock?: HostClock; schedulerConfig?: Partial<SchedulerConfig>; autoSchedule?: boolean }
-export function createWorldServer(options: WorldServerOptions = {}) {
-  const worldId = randomUUID(), runId = randomUUID();
-  const simulation = new Simulation({ seed: options.seed, checkpoint: options.checkpoint, worldId, runId });
-  const hz = simulation.checkpoint().config.hz;
-  const recorder = new FlightRecorder({ directory: options.diagnosticsDirectory, worldId, runId, hz, now: options.clock ? () => options.clock!.utcMs() : undefined });
-  recorder.captureCheckpoint(simulation.checkpoint());
-  const root = resolve('dist');
-  const server = createServer(async (req, res) => {
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ worldId, runId, time: simulation.state.time, tick: simulation.state.tick, viewers: sockets.clients.size, scheduler: scheduler.config, logging: recorder.health() })); return;
+import type { ActiveTarget, Target } from '../shared/lab-protocol.js';
+export interface WorldServerOptions {seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[]}
+const loopback=(name:string)=>['127.0.0.1','localhost','[::1]'].includes(name);
+function localHost(host:string|undefined){try{if(!host)return false;const u=new URL('http://'+host);return loopback(u.hostname)&&!u.username&&!u.password&&u.pathname==='/';}catch{return false;}}
+async function body(req:IncomingMessage):Promise<Record<string,unknown>>{if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']??''))throw new Error('JSON content type required');let size=0;const chunks:Buffer[]=[];for await(const chunk of req){const b=Buffer.from(chunk);size+=b.length;if(size>8192)throw new Error('Request exceeds 8 KiB');chunks.push(b);}const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('JSON object required');return value;}
+function target(value:Record<string,unknown>):Target {if(!validId(value.worldId)||!validId(value.branchId))throw new Error('Explicit world and branch required');return {worldId:value.worldId,branchId:value.branchId};}
+function active(value:Record<string,unknown>):ActiveTarget {const t=target(value);if(!validId(value.runId))throw new Error('Explicit run required');return {...t,runId:value.runId};}
+function filters(value:Record<string,unknown>):TimelineFilters {const f:Record<string,unknown>={};for(const k of ['category','component','severity','causalId','search','eventType'])if(value[k]!==undefined&&value[k]!=='')f[k]=value[k];for(const k of ['fromTick','toTick','limit'])if(value[k]!==undefined&&value[k]!=='')f[k]=Number(value[k]);return f as TimelineFilters;}
+export function createWorldServer(options:WorldServerOptions={}) {
+  const sockets=new WebSocketServer({noServer:true,maxPayload:8192});
+  const subscriptions=new Map<WebSocket,{target:Target;legacy:boolean}>();
+  const send=(socket:WebSocket,message:ServerMessage)=>{if(socket.readyState!==WebSocket.OPEN||socket.bufferedAmount>=64000)return false;try{socket.send(JSON.stringify(message),()=>{});return true;}catch{return false;}};
+  const same=(a:Target,b:Target)=>a.worldId===b.worldId&&a.branchId===b.branchId;
+  const observe=(events:DeterministicEvent[],runtime:BranchRuntime)=>{
+    for(const e of events){if(e.type!=='ACOUSTIC_EVENT')continue;let queued=0,count=0;for(const [socket,sub]of subscriptions)if(same(sub.target,runtime.target)){count++;if(send(socket,{type:'sound',event:e.data as unknown as AcousticEvent,state:runtime.viewerState()}))queued++;}
+      const reflex=events.find(candidate=>candidate.type==='REFLEX_STATE'&&candidate.inputSequence===e.inputSequence);
+      runtime.recorder?.record({tick:runtime.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'VIEWER_NOTIFICATION',component:'transport',outcome:queued?'queued':'no_viewers_or_backpressure',parentSequence:reflex?.sequence??e.sequence,inputSequence:e.inputSequence,data:{queuedViewers:queued,connectedViewers:count,displayed:'unavailable',audioPlayed:'unavailable'}});
     }
-    try {
-      const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
-      const file = resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
-      if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
-      const body = await readFile(file);
-      const types: Record<string,string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
-      res.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream' }); res.end(body);
-    } catch { res.writeHead(404).end('Viewer not built. Run npm run build, or use npm run dev.'); }
+  };
+  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe});
+  if(options.schedulerConfig&&Object.keys(options.schedulerConfig).length)throw new Error('Scheduler configuration is restored through complete runtime checkpoints');
+  const root=resolve('dist');const downloads=new Map<string,{target:ActiveTarget;file:string}>();
+  const allowedOrigins=new Set(['http://127.0.0.1:5173','http://localhost:5173',...(options.viewerOrigins??[])]);
+  function permitted(req:IncomingMessage){if(!localHost(req.headers.host)||req.headers['sec-fetch-site']==='cross-site')return false;const origin=req.headers.origin;if(origin===undefined)return true;if(origin==='null')return false;try{const u=new URL(origin);return u.protocol==='http:'&&loopback(u.hostname)&&(origin===`http://${req.headers.host}`||allowedOrigins.has(origin));}catch{return false;}}
+  function scopedSummary(runtime:BranchRuntime){return {...runtime.summary(),state:runtime.viewerState()};}
+  const server=createServer(async(req,res)=>{
+    const json=(status:number,value:unknown)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
+    if(!localHost(req.headers.host)){json(403,{error:'Loopback Host required'});return;}
+    try{
+      const url=new URL(req.url??'/','http://localhost'), pathname=url.pathname,query=Object.fromEntries(url.searchParams);
+      if(pathname==='/health'){const live=registry.live;json(200,{worldId:live.target.worldId,runId:live.target.runId,time:live.simulation.state.time,tick:live.simulation.state.tick,viewers:subscriptions.size,scheduler:live.scheduler.config,logging:live.recorder?.health()});return;}
+      if(pathname==='/api/branches'&&req.method==='GET'){json(200,{branches:[...registry.branches.values()].map(scopedSummary)});return;}
+      if(pathname==='/api/branch'&&req.method==='GET'){json(200,scopedSummary(registry.get(target(query))));return;}
+      if(pathname==='/api/timeline'&&req.method==='GET'){const scope=active(query),runtime=registry.get(scope),directory=registry.runDirectory(scope);if(runtime.target.runId===scope.runId)await runtime.recorder?.flush();json(200,await queryTimeline({runDirectory:directory,...scope,...filters(query)}));return;}
+      if(pathname==='/api/download'&&req.method==='GET'){const scope=active(query);registry.runDirectory(scope);if(!validId(query.exportId))throw new Error('Invalid export ID');const file=downloads.get(query.exportId);if(!file||!same(file.target,scope)||file.target.runId!==scope.runId)throw new Error('Export does not belong to selected run');if((await stat(file.file)).size>8*1024*1024)throw new Error('Export exceeds download bound');res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${query.exportId}.zip"`,'Cache-Control':'no-store'});res.end(await readFile(file.file));return;}
+      if(pathname.startsWith('/api/')&&req.method==='POST'){
+        if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}const input=await body(req),scope=active(input),runtime=registry.active(scope);
+        if(pathname==='/api/checkpoint'){json(200,{checkpoint:await registry.checkpoint(scope)});return;}
+        if(pathname==='/api/fork'){json(200,scopedSummary(await registry.fork(scope,input.checkpointId,input.newBranchId)));return;}
+        if(pathname==='/api/restore'){const restored=await registry.restore(scope,input.checkpointId);broadcast();json(200,scopedSummary(restored));return;}
+        if(pathname==='/api/control'){runtime.applyControl(input.action);broadcast();json(200,scopedSummary(runtime));return;}
+        if(pathname==='/api/export'){
+          const selectedRunId=input.selectedRunId??scope.runId;if(!validId(selectedRunId))throw new Error('Invalid export run');const selected={...scope,runId:selectedRunId},runDirectory=registry.runDirectory(selected);if(selectedRunId===runtime.target.runId){runtime.capture();await runtime.recorder?.flush();}
+          if(downloads.size>=32)throw new Error('Local export limit reached (32)');const exportId='incident-'+randomUUID(),directory=join(registry.directory,scope.worldId,scope.branchId,'exports');await mkdir(directory,{recursive:true});const out=join(directory,exportId+'.zip');
+          const result=await exportIncident({runDirectory,out,expectedWorldId:scope.worldId,expectedBranchId:scope.branchId,expectedRunId:selectedRunId,...filters(input)});downloads.set(exportId,{target:selected,file:out});const params=new URLSearchParams({...selected,exportId});json(200,{downloadUrl:'/api/download?'+params,manifest:result.manifest,assertions:result.assertions});return;
+        }
+        json(404,{error:'Unknown developer operation'});return;
+      }
+      if(pathname.startsWith('/api/')){json(405,{error:'Unsupported developer request'});return;}
+      const file=resolve(root,'.'+(pathname==='/'?'/index.html':decodeURIComponent(pathname)));if(!file.startsWith(root+sep)){json(403,{error:'Invalid path'});return;}const types:Record<string,string>={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'};const data=await readFile(file);res.writeHead(200,{'Content-Type':types[extname(file)]??'application/octet-stream'});res.end(data);
+    }catch(error){json(400,{error:error instanceof Error?error.message:'Request failed'});}
   });
-  const sockets = new WebSocketServer({ server, path: '/world', maxPayload: 1024 });
-  const send = (socket: WebSocket, message: ServerMessage): boolean => {
-    if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount >= 64_000) return false;
-    try { socket.send(JSON.stringify(message), () => {}); return true; } catch { return false; }
-  };
-  function operational(eventType: string, outcome: string, data: Record<string, number|string|boolean> = {}, parentSequence?: number, inputSequence?: number) {
-    recorder.record({ tick: simulation.state.tick, category: 'OPERATIONAL_REPLAY', eventType, component: 'transport', outcome, data, ...(parentSequence === undefined ? {} : { parentSequence }), ...(inputSequence === undefined ? {} : { inputSequence }) });
-  }
-  const observe = (events: DeterministicEvent[]) => {
-    // step() completed authoritative changes before any transport side effects.
-    for (const event of events) recorder.recordEvent(event);
-    for (const event of events) {
-      if (event.type !== 'ACOUSTIC_EVENT') continue;
-      let queued = 0;
-      for (const socket of sockets.clients) if (send(socket, { type: 'sound', event: event.data as unknown as AcousticEvent, state: simulation.snapshot() })) queued++;
-      const reflex = events.find(candidate => candidate.type === 'REFLEX_STATE' && candidate.inputSequence === event.inputSequence);
-      operational('VIEWER_NOTIFICATION', queued ? 'queued' : 'no_viewers_or_backpressure', { queuedViewers: queued, connectedViewers: sockets.clients.size, displayed: 'unavailable', audioPlayed: 'unavailable' }, reflex?.sequence ?? event.sequence, event.inputSequence);
-    }
-  };
-  sockets.on('connection', socket => {
-    send(socket, { type: 'state', state: simulation.snapshot() }); operational('VIEWER_CONNECTED', 'state_queued', { viewers: sockets.clients.size });
-    socket.on('error', () => {});
-    socket.on('close', () => operational('VIEWER_DISCONNECTED', 'closed', { viewers: sockets.clients.size }));
-    socket.on('message', data => {
-      const accepted = simulation.enqueue(normalizeCommand(data.toString()));
-      recorder.recordInput(accepted.input); observe(accepted.events);
+  server.on('upgrade',(req,socket,head)=>{
+    try{if(!permitted(req))throw new Error('Denied origin');const url=new URL(req.url??'/','http://localhost');if(url.pathname!=='/world')throw new Error('Invalid socket path');const legacy=!url.search;const selected=legacy?registry.live.target:target(Object.fromEntries(url.searchParams));registry.get(selected);sockets.handleUpgrade(req,socket,head,ws=>{subscriptions.set(ws,{target:selected,legacy});sockets.emit('connection',ws,req);});}catch{socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');socket.destroy();}
+  });
+  sockets.on('connection',(socket:WebSocket)=>{const sub=subscriptions.get(socket)!;const runtime=registry.get(sub.target);send(socket,{type:'state',state:runtime.viewerState()});runtime.recorder?.record({tick:runtime.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'VIEWER_CONNECTED',component:'transport',outcome:'state_queued',data:{viewers:subscriptions.size}});
+    socket.on('error',()=>{});socket.on('close',()=>{subscriptions.delete(socket);registry.get(sub.target).recorder?.record({tick:registry.get(sub.target).simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'VIEWER_DISCONNECTED',component:'transport',outcome:'closed',data:{viewers:subscriptions.size}});});
+    socket.on('message',raw=>{const branch=registry.get(sub.target);let command:unknown;try{command=JSON.parse(raw.toString());}catch{command=null;}
+      if(command&&typeof command==='object'&&!Array.isArray(command)&&'worldId'in command){try{const scoped=active(command as Record<string,unknown>);if(!same(scoped,sub.target)||registry.active(scoped)!==branch)throw new Error('Wrong subscription');const c=command as Record<string,unknown>;branch.enqueue(normalizeCommand(JSON.stringify({type:c.type})));}catch{branch.recorder?.record({tick:branch.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'INPUT_TARGET_REJECTED',component:'transport',severity:'warn',outcome:'rejected',data:{reason:'stale_or_wrong_target'}});}return;}
+      if(sub.legacy&&branch.mode==='LIVE')branch.enqueue(normalizeCommand(raw.toString()));else branch.recorder?.record({tick:branch.simulation.state.tick,category:'OPERATIONAL_REPLAY',eventType:'INPUT_TARGET_REJECTED',component:'transport',severity:'warn',outcome:'rejected',data:{reason:'explicit_target_required'}});
     });
   });
-  let lastCheckpointTick = simulation.state.tick;
-  const scheduler = new FixedScheduler(() => {
-    observe(simulation.step());
-    for (const socket of sockets.clients) send(socket, { type: 'state', state: simulation.snapshot() });
-    if (simulation.state.tick - lastCheckpointTick >= hz * 30) {
-      recorder.captureCheckpoint(simulation.checkpoint()); lastCheckpointTick = simulation.state.tick;
-    }
-  }, event => recorder.record({ tick: simulation.state.tick, category: 'OPERATIONAL_REPLAY', eventType: event.type, component: 'scheduler', severity: 'warn', outcome: event.type === 'HOST_RESUME' ? 'resumed_without_catchup' : 'observed', data: event.data }), options.clock, { ...options.schedulerConfig, hz });
-  const timer = options.autoSchedule === false ? undefined : setInterval(() => scheduler.pump(), 1000 / hz);
-  let closing: Promise<void> | undefined;
-  return {
-    server, simulation, sockets, scheduler, recorder,
-    listen: (port = 3001) => new Promise<number>((resolvePort,reject) => {
-      server.once('error', reject); server.listen(port, '127.0.0.1', () => {
-        server.removeListener('error', reject); const address = server.address(); resolvePort(typeof address === 'object' && address ? address.port : port);
-      });
-    }),
-    close: () => closing ??= new Promise<void>((resolveClose,reject) => {
-      clearInterval(timer); for (const client of sockets.clients) client.terminate();
-      sockets.close(() => server.close(error => {
-        recorder.captureCheckpoint(simulation.checkpoint());
-        void recorder.close().then(() => error ? reject(error) : resolveClose(), reject);
-      }));
-    }),
+  function broadcast(){for(const [socket,sub]of subscriptions){const runtime=registry.get(sub.target);send(socket,{type:'state',state:runtime.viewerState()});}}
+  let pumps=0;const timer=options.autoSchedule===false?undefined:setInterval(()=>{for(const runtime of registry.branches.values())runtime.pump();broadcast();if(++pumps%900===0)for(const runtime of registry.branches.values())runtime.capture();},1000/30);
+  let closing:Promise<void>|undefined;const ready=registry.checkpoint(registry.live.target);
+  return {server,registry,sockets,get simulation(){return registry.live.simulation;},get scheduler(){return registry.live.scheduler;},get recorder(){return registry.live.recorder!;},
+    listen:(port=3001)=>new Promise<number>((resolvePort,reject)=>{void ready.then(()=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.removeListener('error',reject);const address=server.address();resolvePort(typeof address==='object'&&address?address.port:port);});},reject);}),
+    close:()=>closing??=new Promise<void>((resolveClose,reject)=>{clearInterval(timer);for(const client of sockets.clients)client.terminate();sockets.close(()=>server.close(error=>{void registry.close().then(()=>error?reject(error):resolveClose(),reject);}));}),
   };
 }

@@ -1,9 +1,15 @@
 import { appendFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { Gunzip } from 'fflate';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { dirname, join, resolve, sep } from 'node:path';
-import type { CheckpointV1, DeterministicEvent, OrderedInput } from '../simulation.js';
+import type { Checkpoint, DeterministicEvent, OrderedInput } from '../simulation.js';
+import {validateRuntimeCheckpoint,validateRuntimeOperation,type RuntimeCheckpoint,type RuntimeOperation} from '../branch-runtime.js';
+type SimulationCheckpoint = Checkpoint;
 
 export type Category = 'WORLD_TRUTH' | 'FOX_EXPERIENCE' | 'PRIVATE_SENSOR' | 'OPERATIONAL_REPLAY';
 export type Severity = 'debug' | 'info' | 'warn' | 'error';
+export type LoggingMode = 'off' | 'default' | 'verbose';
 export type Primitive = string | number | boolean | null;
 export interface RecordRequest {
   tick: number; category: Category; eventType: string; component: string; outcome: string;
@@ -11,12 +17,14 @@ export interface RecordRequest {
   data?: Record<string, Primitive>;
 }
 export interface DiagnosticRecord {
-  schema_version: 1; utc: string; world_tick: number; world_elapsed_seconds: number; mode: 'LOCAL_DEV';
+  schema_version: 1 | 2; utc: string; world_tick: number; world_elapsed_seconds: number; mode: 'LOCAL_DEV' | 'LIVE' | 'EXPERIMENT';
+  branch_id?: string;
   world_id: string; run_id: string; sequence: number; event_id: string; event_type: string;
   category: Category; severity: Severity; component: string; state_version: number; outcome: string;
   deterministic_event_sequence?: number; input_sequence?: number; causal_event_id?: string;
   data: Record<string, Primitive>;
   ordered_input?: OrderedInput;
+  runtime_operation?: RuntimeOperation;
 }
 export interface RecorderLimits {
   queueRecords: number; queueBytes: number; reserveCriticalRecords: number; recordBytes: number;
@@ -35,12 +43,16 @@ export interface RecorderHealth {
   evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null;
   gaps: string[];
   globalRetainedBytes: number; globalRetainedRuns: number; globalCapExceeded: boolean; globalAccountingComplete: boolean; protectedActiveRuns: number;
+  loggingMode: LoggingMode; disabledRecords: number;
+  compressClosed: boolean;
 }
 interface RecorderOptions {
-  directory?: string; worldId: string; runId: string; hz?: number; now?: () => number; minSeverity?: Severity;
+  directory?: string; worldId: string; runId: string; branchId?: string; worldMode?: 'LIVE' | 'EXPERIMENT'; loggingMode?: LoggingMode; compressClosed?: boolean;
+  hz?: number; now?: () => number; minSeverity?: Severity;
   limits?: Partial<RecorderLimits>; append?: (path: string, data: string) => Promise<void>;
 }
 const ranks: Record<Severity, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+const compress = promisify(gzip);
 const safeId = (value: string) => /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const dataKeys = new Set([
   'sequence', 'receivedTick', 'applyTick', 'admission', 'reason', 'type', 'command', 'id', 'time', 'intensity', 'suddenness', 'x', 'z', 'slamCount', 'startTick', 'durationSeconds',
@@ -49,6 +61,9 @@ const dataKeys = new Set([
   'monotonicGapMs', 'wallGapMs', 'wallDowntimeMs', 'skippedTicks', 'skippedCatchupTicks', 'discardedBacklogMs', 'skippedMs', 'backlogMs', 'gapMs', 'stepMs',
   'detectedBy', 'classification', 'stateHash', 'eventHash', 'checkpointTick', 'available', 'evidence', 'queued',
   'queuedViewers', 'connectedViewers', 'displayed', 'audioPlayed', 'viewers',
+  'provenance', 'attended', 'encoded', 'observationId', 'cue', 'valueSeconds', 'estimateSeconds', 'uncertaintySeconds', 'calibrated', 'rate', 'bias',
+  'activityId', 'cursor', 'total', 'progress', 'completed', 'completionCount', 'paused', 'speed', 'ticks', 'remainingTicks', 'controlSequence', 'action', 'checkpointHash',
+  'sensed','experienceId','observedSeconds','totalTicks','control','kind',
 ]);
 const safeLabel = (value: string) => value.replace(/[^A-Za-z0-9_. :/-]/g, '_').slice(0, 160);
 export function sanitizeData(data: Record<string, Primitive> = {}): Record<string, Primitive> {
@@ -68,9 +83,12 @@ export class FlightRecorder {
   readonly limits: RecorderLimits;
   private readonly now: () => number;
   private readonly append: (path: string, data: string) => Promise<void>;
-  private readonly identity: { worldId: string; runId: string };
+  private readonly identity: { worldId: string; runId: string; branchId?: string; worldMode?: 'LIVE'|'EXPERIMENT' };
   private readonly minimum: Severity;
   private readonly hz: number;
+  private loggingMode: LoggingMode;
+  private disabledRecords = 0;
+  private compressClosed: boolean;
   private queue: { line: string; critical: boolean }[] = [];
   private bytes = 0;
   private inFlightRecords = 0;
@@ -80,8 +98,10 @@ export class FlightRecorder {
   private fileBytes = 0;
   private fileStarted = 0;
   private files: { name: string; bytes: number; records: number }[] = [];
-  private initial: CheckpointV1 | null = null;
-  private latest: CheckpointV1 | null = null;
+  private initial: SimulationCheckpoint | null = null;
+  private latest: SimulationCheckpoint | null = null;
+  private initialRuntime:RuntimeCheckpoint|null=null;
+  private latestRuntime:RuntimeCheckpoint|null=null;
   private dirtyCheckpoint = false;
   private startRecorderSequence = 0;
   private checkpointRecorderSequence = 0;
@@ -96,12 +116,15 @@ export class FlightRecorder {
   private activeMarkerWritten = false;
   private globalHealth = { globalRetainedBytes: 0, globalRetainedRuns: 0, globalCapExceeded: false, globalAccountingComplete: true, protectedActiveRuns: 0 };
   constructor(options: RecorderOptions) {
-    if (!safeId(options.worldId) || !safeId(options.runId)) throw new Error('Invalid diagnostic identity');
+    if (!safeId(options.worldId) || !safeId(options.runId) || (options.branchId!==undefined&&!safeId(options.branchId))) throw new Error('Invalid diagnostic identity');
+    if ((options.branchId===undefined)!==(options.worldMode===undefined))throw new Error('Branch identity and mode must be supplied together');
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
     for (const value of Object.values(this.limits)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid recorder limit');
     if (this.limits.reserveCriticalRecords >= this.limits.queueRecords || this.limits.recordBytes > this.limits.queueBytes || this.limits.recordBytes > this.limits.fileBytes || this.limits.fileBytes > this.limits.diskBytes) throw new Error('Inconsistent recorder limits');
-    this.identity = { worldId: options.worldId, runId: options.runId };
-    this.runDirectory = join(options.directory ?? 'diagnostics/runs', options.runId);
+    this.identity = { worldId: options.worldId, runId: options.runId,...(options.branchId===undefined?{}:{branchId:options.branchId,worldMode:options.worldMode}) };
+    this.runDirectory = options.branchId===undefined?join(options.directory ?? 'diagnostics/runs', options.runId):join(options.directory??'diagnostics/runs',options.worldId,options.branchId,'runs',options.runId);
+    this.loggingMode=options.loggingMode??'default';this.compressClosed=options.compressClosed??false;
+    if(this.loggingMode==='off')this.gap('logging_disabled');
     this.now = options.now ?? Date.now;
     this.append = options.append ?? ((path, data) => appendFile(path, data, 'utf8'));
     this.minimum = options.minSeverity ?? 'info';
@@ -111,16 +134,22 @@ export class FlightRecorder {
     this.timer.unref();
   }
   private gap(message: string): void { if (!this.gaps.includes(message) && this.gaps.length < 32) this.gaps.push(message); }
+  setLoggingMode(mode:LoggingMode,compressClosed=this.compressClosed):void{if(!['off','default','verbose'].includes(mode)||typeof compressClosed!=='boolean')throw new Error('Invalid logging mode');this.loggingMode=mode;this.compressClosed=compressClosed;if(mode==='off')this.gap('logging_disabled');}
+  private enabled():boolean{if(this.closed)return false;if(this.loggingMode==='off'){this.disabledRecords++;this.gap('logging_disabled');return false;}return true;}
   record(request: RecordRequest, critical = false): void {
-    if (this.closed) return;
-    if (!critical && ranks[request.severity ?? 'info'] < ranks[this.minimum]) { this.counters.filteredRecords++; return; }
+    this.recordTrusted(request,critical,false);
+  }
+  private recordTrusted(request:RecordRequest,critical:boolean,experienceEligible:boolean):void {
+    if(!this.enabled())return;
+    if (!critical && ranks[request.severity ?? 'info'] < ranks[this.loggingMode==='verbose'?'debug':this.minimum]) { this.counters.filteredRecords++; return; }
     try {
       const tick = request.tick;
       const record: DiagnosticRecord = {
-        schema_version: 1, utc: new Date(this.now()).toISOString(), world_tick: tick,
-        world_elapsed_seconds: tick / this.hz, mode: 'LOCAL_DEV', world_id: this.identity.worldId, run_id: this.identity.runId,
+        schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: tick,
+        world_elapsed_seconds: tick / this.hz, mode: this.identity.worldMode??'LOCAL_DEV', world_id: this.identity.worldId, run_id: this.identity.runId,
+        ...(this.identity.branchId?{branch_id:this.identity.branchId}:{}),
         sequence: ++this.sequence, event_id: `record:${this.sequence}`, event_type: safeLabel(request.eventType),
-        category: request.category, severity: request.severity ?? 'info', component: safeLabel(request.component),
+        category: request.category==='FOX_EXPERIENCE'&&!experienceEligible?'PRIVATE_SENSOR':request.category, severity: request.severity ?? 'info', component: safeLabel(request.component),
         state_version: tick, outcome: safeLabel(request.outcome), data: sanitizeData(request.data),
         ...(request.eventSequence === undefined ? {} : { deterministic_event_sequence: request.eventSequence }),
         ...(request.inputSequence === undefined ? {} : { input_sequence: request.inputSequence }),
@@ -139,12 +168,13 @@ export class FlightRecorder {
     this.queue.push({ line, critical }); this.bytes += bytes;
   }
   recordInput(input: OrderedInput): void {
+    if(!this.enabled())return;
     try {
     const command = input.command.type === 'slam' ? { type: 'slam' as const } : { type: 'invalid' as const, reason: input.command.reason };
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
-      schema_version: 1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
-      mode: 'LOCAL_DEV', world_id: this.identity.worldId, run_id: this.identity.runId, sequence: ++this.sequence, event_id: `record:${this.sequence}`,
+      schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
+      mode: this.identity.worldMode??'LOCAL_DEV', world_id: this.identity.worldId, run_id: this.identity.runId,...(this.identity.branchId?{branch_id:this.identity.branchId}:{}), sequence: ++this.sequence, event_id: `record:${this.sequence}`,
       event_type: 'ORDERED_INPUT', category: 'OPERATIONAL_REPLAY', severity: 'info', component: 'transport', state_version: input.receivedTick,
       outcome: input.admission, input_sequence: input.sequence, data: {}, ordered_input: safe,
     };
@@ -152,11 +182,28 @@ export class FlightRecorder {
     } catch { this.counters.droppedRecords++; this.counters.criticalDroppedRecords++; this.gap('input_serialization_failed'); }
   }
   recordEvent(event: DeterministicEvent): void {
-    this.record({ tick: event.tick, category: event.type === 'REFLEX_DECISION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
+    const experienceEligible=this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
+    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_') ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
       eventType: event.type, component: event.component, outcome: event.outcome, eventSequence: event.sequence,
-      inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true);
+      inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true,experienceEligible);
   }
-  captureCheckpoint(checkpoint: CheckpointV1): void {
+  recordVerboseTick(tick:number,data:Record<string,Primitive>={}):void{
+    if(this.loggingMode!=='verbose')return;
+    this.record({tick,category:'OPERATIONAL_REPLAY',eventType:'TICK_TRACE',component:'recorder',severity:'debug',outcome:'sampled',data});
+  }
+  recordRuntimeOperation(operation:RuntimeOperation):void{
+    if(!this.enabled())return;
+    try {
+      const op=validateRuntimeOperation(operation);
+      this.enqueueRecord({schema_version:2,utc:new Date(this.now()).toISOString(),world_tick:op.tick,world_elapsed_seconds:op.tick/this.hz,mode:this.identity.worldMode??'LOCAL_DEV',
+        world_id:this.identity.worldId,run_id:this.identity.runId,branch_id:this.identity.branchId,sequence:++this.sequence,event_id:`record:${this.sequence}`,event_type:'RUNTIME_OPERATION',category:'OPERATIONAL_REPLAY',severity:'info',component:'runtime',state_version:op.tick,outcome:op.kind,data:{},runtime_operation:op},true);
+    }catch{this.counters.droppedRecords++;this.counters.criticalDroppedRecords++;this.gap('runtime_operation_serialization_failed');}
+  }
+  captureRuntimeCheckpoint(checkpoint:RuntimeCheckpoint):void{
+    try{const cp=validateRuntimeCheckpoint(checkpoint);if(cp.mode!==this.identity.worldMode)throw new Error('Runtime checkpoint mode mismatch');this.latestRuntime=cp;this.initialRuntime??=structuredClone(cp);this.captureCheckpoint(cp.simulation);}
+    catch{this.gap('runtime_checkpoint_capture_failed');}
+  }
+  captureCheckpoint(checkpoint: SimulationCheckpoint): void {
     try {
       this.latest = structuredClone(checkpoint); this.checkpointRecorderSequence=this.sequence;
       if(!this.initial){this.initial=structuredClone(checkpoint);this.startRecorderSequence=this.sequence;}
@@ -167,7 +214,7 @@ export class FlightRecorder {
   health(): RecorderHealth {
     return { status: this.gaps.length ? 'INCOMPLETE' : 'HEALTHY', queuedRecords: this.queue.length, queuedBytes: this.bytes,
       inFlightRecords: this.inFlightRecords, inFlightBytes: this.inFlightBytes, ...this.counters,
-      retainedFiles: this.files.length, retainedBytes: this.files.reduce((n, f) => n + f.bytes, 0), lastError: this.lastError, gaps: [...this.gaps], ...this.globalHealth };
+      retainedFiles: this.files.length, retainedBytes: this.files.reduce((n, f) => n + f.bytes, 0), lastError: this.lastError, gaps: [...this.gaps], ...this.globalHealth,loggingMode:this.loggingMode,disabledRecords:this.disabledRecords,compressClosed:this.compressClosed };
   }
   flush(): Promise<void> {
     if (this.writing) return this.pending;
@@ -181,7 +228,7 @@ export class FlightRecorder {
   }
   private async enforceGlobalRetention(): Promise<void> {
     const root = resolve(dirname(this.runDirectory));
-    const generated = /^(events-\d{5}\.jsonl|checkpoint-(start|end)\.json|run\.json|_active\.json)(\.tmp)?$/;
+    const generated = /^(events-\d{5}\.jsonl(\.gz)?|checkpoint-(start|end)\.json|runtime-(start|end)\.json|run\.json|_active\.json)(\.tmp)?$/;
     const runs: { path: string; bytes: number; modified: number; removable: boolean; active: boolean; files: string[] }[] = [];
     let unownedBytes = 0, accountingComplete = true;
     const boundedRetentionJSON=async(path:string)=>{if((await stat(path)).size>64*1024)throw new Error('Oversized retention metadata');return JSON.parse(await readFile(path,'utf8'));};
@@ -230,7 +277,7 @@ export class FlightRecorder {
       if(!this.activeMarkerWritten){await this.atomic('_active.json',{pid:process.pid,runId:this.identity.runId});this.activeMarkerWritten=true;}
       for (const entry of batch) {
         const bytes = Buffer.byteLength(entry.line);
-        if (this.fileBytes && (this.fileBytes + bytes > this.limits.fileBytes || this.now() - this.fileStarted >= this.limits.fileAgeMs)) { this.fileSequence++; this.fileBytes = 0; }
+        if (this.fileBytes && (this.fileBytes + bytes > this.limits.fileBytes || this.now() - this.fileStarted >= this.limits.fileAgeMs)) { if(this.compressClosed)await this.compressFile(this.files.at(-1)!);this.fileSequence++; this.fileBytes = 0; }
         const newFile = !this.fileBytes;
         const file = newFile ? { name: `events-${this.fileSequence.toString().padStart(5, '0')}.jsonl`, bytes: 0, records: 0 } : this.files.at(-1)!;
         await this.append(join(this.runDirectory, file.name), entry.line);
@@ -245,6 +292,7 @@ export class FlightRecorder {
       if (this.dirtyCheckpoint && this.initial && this.latest) {
         const latest = this.latest;
         await this.atomic('checkpoint-start.json', this.initial); await this.atomic('checkpoint-end.json', latest);
+        if(this.initialRuntime&&this.latestRuntime){await this.atomic('runtime-start.json',this.initialRuntime);await this.atomic('runtime-end.json',this.latestRuntime);}
         if (latest === this.latest) this.dirtyCheckpoint = false;
       }
       this.inFlightRecords = 0; this.inFlightBytes = 0;
@@ -263,22 +311,43 @@ export class FlightRecorder {
   }
   async close(): Promise<void> {
     if (this.closed) return; clearInterval(this.timer); await this.flush(); if (this.queue.length || this.dirtyCheckpoint) await this.flush(); this.closed = true;
-    try {await unlink(join(this.runDirectory,'_active.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
+    try {if(this.compressClosed&&this.files.at(-1)&&!this.files.at(-1)!.name.endsWith('.gz')){await this.compressFile(this.files.at(-1)!);await this.flush();}await unlink(join(this.runDirectory,'_active.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
+  }
+  private async compressFile(file:{name:string;bytes:number;records:number}):Promise<void>{
+    if(file.name.endsWith('.gz'))return;
+    const original=join(this.runDirectory,file.name);if((await stat(original)).size>this.limits.fileBytes)throw new Error('Closed log exceeds compression bound');
+    const bytes=await compress(await readFile(original));const compressed=original+'.gz';await writeFile(compressed+'.tmp',bytes);await rename(compressed+'.tmp',compressed);await unlink(original);
+    file.name+='.gz';file.bytes=bytes.length;
   }
 }
 
-export async function readRun(directory: string): Promise<{ metadata: Record<string, unknown>; start: unknown; end: unknown; records: DiagnosticRecord[]; readGaps: string[] }> {
-  const names = (await readdir(directory)).filter(name => /^events-\d{5}\.jsonl$/.test(name)).sort();
+export async function readRun(directory: string): Promise<{ metadata: Record<string, unknown>; start: unknown; end: unknown; records: DiagnosticRecord[]; readGaps: string[];runtimeStart?:unknown;runtimeEnd?:unknown }> {
+  const allNames=await readdir(directory);const names = allNames.filter(name => /^events-\d{5}\.jsonl(\.gz)?$/.test(name)).sort();
   let bytes = 0; const records: DiagnosticRecord[] = [],readGaps:string[]=[];
   for (const name of names) {
     bytes += (await stat(join(directory, name))).size;
     if (bytes > 8 * 1024 * 1024 || names.length > 32) throw new Error('Run exceeds bounded export input limits');
-    const text = await readFile(join(directory, name), 'utf8');
+    const stored=await readFile(join(directory,name));const decoded=name.endsWith('.gz')?boundedGunzip(stored,8*1024*1024-bytes):stored;
+    if(name.endsWith('.gz'))bytes+=decoded.length;
+    if(bytes>8*1024*1024)throw new Error('Decompressed run exceeds export limit');
+    const text = decoded.toString();
     for (const line of text.split('\n').filter(Boolean)) {
       if (records.length >= 20_000) throw new Error('Run exceeds record limit');
       try {records.push(JSON.parse(line) as DiagnosticRecord);}catch{if(!readGaps.length)readGaps.push('corrupt_or_partial_jsonl_record');}
     }
   }
   const boundedJSON=async(name:string)=>{const path=join(directory,name);bytes+=(await stat(path)).size;if(bytes>8*1024*1024||(await stat(path)).size>2*1024*1024)throw new Error('Run metadata/checkpoint exceeds export limit');return JSON.parse(await readFile(path,'utf8'));};
-  return { metadata: await boundedJSON('run.json'), start: await boundedJSON('checkpoint-start.json'), end: await boundedJSON('checkpoint-end.json'), records,readGaps };
+  const result={ metadata: await boundedJSON('run.json'), start: await boundedJSON('checkpoint-start.json'), end: await boundedJSON('checkpoint-end.json'), records,readGaps };
+  if(allNames.includes('runtime-start.json')||allNames.includes('runtime-end.json')){
+    if(!allNames.includes('runtime-start.json')||!allNames.includes('runtime-end.json')){readGaps.push('runtime_checkpoint_pair_missing');return result;}
+    return {...result,runtimeStart:await boundedJSON('runtime-start.json'),runtimeEnd:await boundedJSON('runtime-end.json')};
+  }
+  return result;
+}
+
+export function boundedGunzip(bytes:Uint8Array,limit:number):Buffer{
+  const chunks:Uint8Array[]=[];let length=0;
+  const decoder=new Gunzip((chunk)=>{length+=chunk.length;if(length>limit)throw new Error('Compressed log exceeds decompression bound');chunks.push(chunk);});
+  for(let offset=0;offset<bytes.length;offset+=16384)decoder.push(bytes.subarray(offset,offset+16384),offset+16384>=bytes.length);
+  return Buffer.concat(chunks,length);
 }
