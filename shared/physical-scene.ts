@@ -3,7 +3,7 @@ import { CHARACTER_CLEARANCE_RADIUS } from './avatar-rig.js';
 
 /** Physical room coordinates: Y up, +Z forward. Cutaways are a renderer choice. */
 export const PHYSICAL_SCENE_VERSION = 'lumi-room-v1';
-export const RENDER_REVISION = 'three-room-v1';
+export const RENDER_REVISION = 'three-room-pixel-evidence-v2';
 export const PHYSICAL_ROOM = { width: 9, depth: 7, walkX: 3.2, walkZ: 2.3 } as const;
 const DOOR_SWING_AMPLITUDE = 0.5;
 const DOOR_HINGE: Vector3Tuple = [2.05, 0, -3.53];

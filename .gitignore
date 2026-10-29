@@ -27,6 +27,11 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+.env.*
+!.env.example
+
+# Optional in-workspace cognition budget override (default is outside the checkout).
+/.cognition-budget/
 
 # vercel
 .vercel

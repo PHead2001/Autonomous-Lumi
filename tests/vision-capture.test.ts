@@ -1,3 +1,4 @@
+import { pixelFixtureFrame } from './helpers/pixel-frame.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BranchRuntime } from '../server/branch-runtime.js';
@@ -28,7 +29,7 @@ function runtime(branchId = 'experiment') {
 class DelayedRenderer implements FrameRenderer {
   received: WorldState[] = []; private finish: ((value: RenderedFrame) => void) | undefined;
   render(snapshot: WorldState) { this.received.push(snapshot); return new Promise<RenderedFrame>(done => { this.finish = done; }); }
-  release() { this.finish?.(frame); }
+  release() { this.finish?.(pixelFixtureFrame(this.received.at(-1)!)); }
   async close() { this.release(); }
 }
 test('immutable delayed capture retains original tick and bytes; foreign run cannot read frame or use handle', async () => {
@@ -45,6 +46,12 @@ test('immutable delayed capture retains original tick and bytes; foreign run can
     const json = JSON.stringify(view.observation); assert.ok(!json.includes('fixture-')); assert.ok(!json.includes('engineTargetId'));
     assert.throws(() => manager.resolveHeadAction(b, { type: 'look_at', observationId: request.captureId, handle: view.observation!.shapes[0].handle, sceneRevision: 0 }), /another run/);
     const copied = manager.frame(a.target, request.captureId); copied[0] = 0; assert.equal(manager.frame(a.target, request.captureId)[0], 137);
+    const selected=manager.observation(a.target,request.captureId);
+    assert.equal(selected.metadata.captureId,request.captureId);assert.equal(selected.sensorSource,'mock_renderer');
+    selected.png[0]=0;selected.observation.shapes.length=0;
+    assert.equal(manager.observation(a.target,request.captureId).png[0],137);
+    assert.ok(manager.observation(a.target,request.captureId).observation.shapes.length);
+    assert.throws(()=>manager.observation(b.target,request.captureId),/unavailable/);
   } finally { await manager.close(); await a.close(); await b.close(); }
 });
 test('old-run result is discarded, never exposing observation or frame', async () => {

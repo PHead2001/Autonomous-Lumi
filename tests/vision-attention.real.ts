@@ -34,7 +34,7 @@ test('actual RGB probes detect visible material change at identical pose and ign
 test('zero-viewer received sound produces reflex, bounded attention action and automatic actual frame through ordered feedback',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lumi-attention-actual-'));
   const source=new BranchRuntime({worldId:'actual-attention',branchId:'probe',mode:'EXPERIMENT',offline:true}),checkpoint=source.checkpoint();
-  if(checkpoint.simulation.schemaVersion!==4)throw new Error('Current sensory schema');
+  if(checkpoint.simulation.schemaVersion!==5)throw new Error('Current cognition schema');
   const c=checkpoint.simulation,visual=createVisibilityFixture();
   c.character=visual.character;c.scene=visual.scene!;c.head=visual.head!;c.pauseUntilTick=100000;
   const runtime=new BranchRuntime({worldId:'actual-attention',branchId:'probe',mode:'EXPERIMENT',checkpoint,directory});
@@ -45,14 +45,14 @@ test('zero-viewer received sound produces reflex, bounded attention action and a
     const events=[];
     for(let i=0;i<90;i++){
       events.push(...runtime.simulation.step());
-      const cp=runtime.simulation.checkpoint();if(cp.schemaVersion===4&&cp.attention.pending)break;
+      const cp=runtime.simulation.checkpoint();if(cp.schemaVersion===5&&cp.attention.pending)break;
     }
     assert.ok(events.some(e=>e.type==='SOUND_RECEIVED'));assert.ok(events.some(e=>e.type==='REFLEX_DECISION'&&e.outcome==='triggered'));assert.ok(events.some(e=>e.type==='ATTENTION_ACTION'));
     host.pump([runtime]);const requested=manager.view(runtime.target).latest;assert.ok(requested?.automatic);
     timer=setInterval(()=>runtime.pump(),1000/30);
     const completed=await manager.wait(runtime.target,requested.captureId);assert.equal(completed.status,'success');
     await new Promise<void>(done=>setImmediate(done));runtime.simulation.step();
-    const final=runtime.simulation.checkpoint();if(final.schemaVersion!==4)throw new Error('Current schema');
+    const final=runtime.simulation.checkpoint();if(final.schemaVersion!==5)throw new Error('Current cognition schema');
     assert.equal(final.attention.lastCapture?.outcome,'success');assert.equal(final.attention.lastCapture?.freshness,'applicable');assert.equal(final.attention.lastCapture?.capturedTick,requested.tick);
     assert.ok(final.attention.baseline?.signature.length===48);assert.equal(final.experiences.length,0);assert.ok(manager.frame(runtime.target,requested.captureId).length>100);
     console.log('Automatic actual frame',JSON.stringify({captureTick:requested.tick,receiptTick:final.attention.lastCapture.receivedTick,frameHash:completed.frameHash,reasons:final.attention.lastCapture.reasons}));

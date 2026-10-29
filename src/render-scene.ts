@@ -14,11 +14,13 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
   sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7 }); sun.shadow.normalBias = 0.03; scene.add(sun);
   const environment = new THREE.Group(); scene.add(environment);
   const meshes = new Map<string, THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>>();
+  let candidateIds: string[] = [];
   const avatar = createAvatar({ firstPerson: options.firstPerson }); scene.add(avatar.root);
   function applySnapshot(state: WorldState, presentationTime = state.time, placeAvatar = true) {
     if (options.firstPerson) assertCameraClearance(state, options.width, options.height);
     const time = options.firstPerson ? state.time : presentationTime;
     const physical = physicalSceneSnapshot(state, time), seen = new Set<string>();
+    candidateIds = physical.boxes.filter(box => box.observable).map(box => box.id);
     for (const b of physical.boxes) {
       seen.add(b.id);
       let mesh = meshes.get(b.id);
@@ -42,7 +44,55 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
   }
   applySnapshot(initial);
   let disposed = false;
-  return { scene, camera, avatar, applySnapshot, dispose() {
+  return { scene, camera, avatar, applySnapshot,
+    /** Synchronous second pass over exactly the matrices used for RGB. Every mesh writes depth,
+     * including unlabelled environment details and the first-person avatar. */
+    renderPrivateMask(renderer: THREE.WebGLRenderer, width: number, height: number) {
+      const physicalIds = ['', ...candidateIds];
+      if (physicalIds.length > 0xffffff) throw new Error('Mask identity capacity exceeded');
+      const meshIds = new Map<THREE.Object3D, number>();
+      candidateIds.forEach((id, index) => { const mesh = meshes.get(id); if (mesh) meshIds.set(mesh, index + 1); });
+      const target = new THREE.WebGLRenderTarget(width, height, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true, stencilBuffer: false, samples: 0, generateMipmaps: false });
+      target.texture.colorSpace = THREE.NoColorSpace;
+      const materials = new Map<number, THREE.ShaderMaterial>();
+      const originals = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+      const old = { target: renderer.getRenderTarget(), background: scene.background, override: scene.overrideMaterial, toneMapping: renderer.toneMapping, outputColorSpace: renderer.outputColorSpace, autoClear: renderer.autoClear, shadows: renderer.shadowMap.enabled, clearColor: renderer.getClearColor(new THREE.Color()).clone(), clearAlpha: renderer.getClearAlpha(), viewport: renderer.getViewport(new THREE.Vector4()), scissor: renderer.getScissor(new THREE.Vector4()), scissorTest: renderer.getScissorTest() };
+      try {
+        scene.traverse(object => {
+          if (!(object instanceof THREE.Mesh)) return;
+          originals.set(object, object.material);
+          const id = meshIds.get(object) ?? 0;
+          let material = materials.get(id);
+          if (!material) {
+            material = new THREE.ShaderMaterial({
+              uniforms: { encodedId: { value: new THREE.Vector3((id & 255) / 255, ((id >>> 8) & 255) / 255, ((id >>> 16) & 255) / 255) } },
+              vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+              fragmentShader: 'uniform vec3 encodedId; void main() { gl_FragColor = vec4(encodedId, 1.0); }',
+              blending: THREE.NoBlending, depthTest: true, depthWrite: true, transparent: false, toneMapped: false, fog: false, dithering: false,
+            });
+            materials.set(id, material);
+          }
+          object.material = material;
+        });
+        scene.background = null; scene.overrideMaterial = null;
+        renderer.toneMapping = THREE.NoToneMapping; renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+        renderer.shadowMap.enabled = false; renderer.autoClear = true;
+        renderer.setRenderTarget(target); renderer.setViewport(0, 0, width, height); renderer.setScissorTest(false); renderer.setClearColor(0, 1);
+        renderer.render(scene, camera);
+        const pixels = new Uint8Array(width * height * 4);
+        renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+        // WebGL readback is bottom-up; PNG and the RGB capture are top-down.
+        const topDown = new Uint8ClampedArray(pixels.length), stride = width * 4;
+        for (let row = 0; row < height; row++) topDown.set(pixels.subarray(row * stride, (row + 1) * stride), (height - row - 1) * stride);
+        return { pixels: topDown, physicalIds };
+      } finally {
+        for (const [mesh, material] of originals) mesh.material = material;
+        scene.background = old.background; scene.overrideMaterial = old.override;
+        renderer.toneMapping = old.toneMapping; renderer.outputColorSpace = old.outputColorSpace; renderer.shadowMap.enabled = old.shadows; renderer.autoClear = old.autoClear;
+        renderer.setRenderTarget(old.target); renderer.setViewport(old.viewport); renderer.setScissor(old.scissor); renderer.setScissorTest(old.scissorTest); renderer.setClearColor(old.clearColor, old.clearAlpha);
+        target.dispose(); for (const material of materials.values()) material.dispose();
+      }
+    }, dispose() {
     if (disposed) return; disposed = true;
     for (const mesh of meshes.values()) { mesh.geometry.dispose(); mesh.material.dispose(); } meshes.clear();
     avatar.dispose();

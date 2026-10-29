@@ -1,3 +1,4 @@
+import { currentCognitionProfile, COGNITION_SCHEMA_REVISION, cognitionValidationError, validateCognitionProposalReferences } from '../shared/cognition-protocol.js';
 import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../shared/protocol.js';
 import { hashCanonical, canonicalStringify } from './canonical.js';
 import { SeededRandom } from './prng.js';
@@ -8,13 +9,15 @@ import { isTargetEligible } from './vision/grounding.js';
 import { defaultAttentionState, deriveHearingEstimates, validateAttentionState, validateSensoryCommand, imageSignatureDifference, type AttentionState, type AutomaticCaptureReason, type CaptureIntent, type SensorFeedbackCommand, type SensorPose, type SensoryCommand } from '../shared/attention-protocol.js';
 import { eyePose } from '../shared/eye-pose.js';
 import { propagateSound } from './hearing.js';
+import { fitsCognitionStorage } from './checkpoint-capacity.js';
+import { COGNITION_RULES, COGNITION_LIMITS, validateCognitionCommand, validateCognitionIdentity, type CognitionCommand, type CognitionState, type CognitionIdentity, type CognitionRequestCommand, type CognitionResultCommand, type RealExperience, type CognitionActionOutcome, type CognitionObservationRequestCommand } from '../shared/cognition-protocol.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
 export const DEFAULT_CONFIG = { hz: 30, speed: 0.75, pauseTicks: 36, cooldownTicks: 27, maxPendingInputs: 256 };
 export type SimulationConfig = typeof DEFAULT_CONFIG;
 export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_command';
 export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
-export type NormalizedCommand = { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand;
+export type NormalizedCommand = { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -38,11 +41,12 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown, vision=false, sensory=false): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
   if (c.type === 'slam' && Object.keys(c).length === 1) return { type: 'slam' };
   if (c.type === 'invalid' && Object.keys(c).length === 2 && ['malformed_json', 'invalid_shape', 'unknown_command'].includes(c.reason as string)) return { type: 'invalid', reason: c.reason as InvalidReason };
+  if(cognition&&(c.type==='cognition_request'||c.type==='cognition_result'||c.type==='cognition_observation_request'))return validateCognitionCommand(value);
   if(sensory&&(c.type==='emit_sound'||c.type==='sensor_feedback'))return validateSensoryCommand(value);
   if(vision&&c.type==='configure_scene') {const raw=structuredClone(c);delete raw.type;const config=validateSceneConfiguration(raw);return {type:'configure_scene',...config};}
   if(vision)return validateHeadAction(value);
@@ -89,6 +93,8 @@ export class Simulation {
   readonly worldId: string; readonly runId: string;
   protected supportsVisionInputs():boolean{return false;}
   protected supportsSensoryInputs():boolean{return false;}
+  protected supportsCognitionInputs():boolean{return false;}
+  protected additionalInputCapacityReason(input:OrderedInput):string|null{void input;return null;}
   protected applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean{void input;void events;return false;}
   protected onDoorChanged():void{}
   protected createDoorSound():AcousticEvent {const d=this.data;return {id:d.nextSoundId++,time:d.tick/d.config.hz,intensity:1,suddenness:1,x:3.1,z:-3.4};}
@@ -113,10 +119,12 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs()), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
+    const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
+    if(capacityReason!==null)input.admission='queue_full';
     const received = this.emit(events, 'INPUT_RECEIVED', 'input', 'received', { command: normalized.type }, input.sequence);
-    this.emit(events, 'INPUT_ADMITTED', 'input', input.admission, {}, input.sequence, received.sequence);
+    this.emit(events, 'INPUT_ADMITTED', 'input', input.admission, capacityReason===null?{}:{reason:capacityReason}, input.sequence, received.sequence);
     if (input.admission === 'queued') this.data.pendingInputs.push(structuredClone(input));
     return { input: structuredClone(input), events };
   }
@@ -179,6 +187,7 @@ export interface SyntheticExperience {
   id: number; tick: number; kind: 'cue' | 'clock'; provenance: 'TEST STUB';
   observedSeconds: number | null; uncertaintySeconds: number | null;
 }
+export type Experience = SyntheticExperience | RealExperience;
 export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rulesVersion'> {
   schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
   experiences: SyntheticExperience[]; nextExperienceId: number;
@@ -187,7 +196,8 @@ export const CURRENT_VISION_RULES='lumi-eyes-v2' as const;
 export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVersion'> {schemaVersion:3;rulesVersion:'lumi-eyes-v1'|typeof CURRENT_VISION_RULES;head:HeadState;scene:PhysicalSceneState}
 export const CURRENT_ATTENTION_RULES='lumi-attention-v2' as const;
 export interface CheckpointV4 extends Omit<CheckpointV3,'schemaVersion'|'rulesVersion'> {schemaVersion:4;rulesVersion:'lumi-attention-v1'|typeof CURRENT_ATTENTION_RULES;attention:AttentionState;genericSoundCount:number}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4;
+export interface CheckpointV5 extends Omit<CheckpointV4,'schemaVersion'|'rulesVersion'> {schemaVersion:5;rulesVersion:typeof COGNITION_RULES;cognition:CognitionState;realExperiences:RealExperience[]}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -197,13 +207,14 @@ function legacyPart(c: CheckpointV2): CheckpointV1 {
 /** Explicit migration: V1 replay remains V1; a new lab run initializes named new systems. */
 export function upgradeCheckpoint(value: unknown): CheckpointV2 {
   const cp = validateCheckpoint(value);
-  if(cp.schemaVersion===3||cp.schemaVersion===4)throw new Error('Vision state cannot be downgraded into historical lab semantics');
+  if(cp.schemaVersion===3||cp.schemaVersion===4||cp.schemaVersion===5)throw new Error('Vision state cannot be downgraded into historical lab semantics');
   if (cp.schemaVersion === 2) return cp;
   return { ...cp, schemaVersion: 2, rulesVersion: 'lumi-lab-v1',
     subjective: { estimateSeconds: 0, uncertaintySeconds: cp.tick / cp.config.hz + 5, lastCalibrationTick: null, driftPpm: 1200, uncertaintyGrowthPerSecond: 0.02 },
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===5)return validateCognitionCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===4)return validateSensoryCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===3)return validateVisionCheckpoint(value);
   if (!value || typeof value !== 'object' || (value as {schemaVersion?:unknown}).schemaVersion !== 2) return validateCheckpointV1(value);
@@ -274,7 +285,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -297,7 +308,7 @@ export function validateVisionCheckpoint(value:unknown):CheckpointV3 {
 }
 /** Deliberate active-world upgrade; offline V1/V2 replay never calls this. */
 export function upgradeVisionCheckpoint(value:unknown):CheckpointV3 {
-  const source=validateCheckpoint(value);if(source.schemaVersion===4)throw new Error('Attention state cannot be downgraded into historical vision semantics');if(source.schemaVersion===3)return {...source,rulesVersion:CURRENT_VISION_RULES,head:source.rulesVersion===CURRENT_VISION_RULES?source.head:{...source.head,observedAim:null}};
+  const source=validateCheckpoint(value);if(source.schemaVersion>=4)throw new Error('Attention state cannot be downgraded into historical vision semantics');if(source.schemaVersion===3)return {...source,rulesVersion:CURRENT_VISION_RULES,head:source.rulesVersion===CURRENT_VISION_RULES?source.head:{...source.head,observedAim:null}};
   const cp=upgradeCheckpoint(source);
   return {...cp,schemaVersion:3,rulesVersion:CURRENT_VISION_RULES,head:defaultHeadState(),scene:defaultPhysicalSceneState()};
 }
@@ -309,7 +320,7 @@ export class VisionSimulation extends LabSimulation {
     super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
   }
   override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
-    const normalized=validateCommand(command,true,this.supportsSensoryInputs());
+    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs());
     if(normalized.type==='look_at'&&normalized.evidence) {
       if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
       if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
@@ -320,7 +331,7 @@ export class VisionSimulation extends LabSimulation {
   protected override onDoorChanged():void{this.scene.revision++;}
   protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback')return false;
+    const command=input.command;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
     if(command.type==='configure_scene') {
       if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
@@ -379,7 +390,7 @@ export class VisionSimulation extends LabSimulation {
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return events;
   }
-  override checkpoint():CheckpointV3|CheckpointV4{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -490,7 +501,7 @@ export class SensorySimulation extends VisionSimulation {
     return events;
   }
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command,a=this.attention;
+    const command=input.command;
     if(command.type==='emit_sound') {
       if(this.mode!=='EXPERIMENT'){this.emit(events,'INPUT_VALIDATED','hearing','rejected',{reason:'sound_fixture_experiment_only'},input.sequence);return true;}
       const accepted=this.emit(events,'INPUT_VALIDATED','hearing','accepted',{provenance:'TEST STUB'},input.sequence);
@@ -499,10 +510,16 @@ export class SensorySimulation extends VisionSimulation {
       this.hear(sound,events,input.sequence,emission.sequence);return true;
     }
     if(command.type==='sensor_feedback'){this.applySensorFeedback(command,events,input.sequence);return true;}
+    return this.applyHeadInput(input,events,'developer');
+  }
+  /** Both sources use the same local head validation. Only a developer command
+   * acquires developer priority over subsequent local sensory attention. */
+  protected applyHeadInput(input:OrderedInput,events:DeterministicEvent[],source:'developer'|'cognition'):boolean {
+    const command=input.command,a=this.attention;
     // Accepted head commands, including cancel, consume an action ID. Arbitrate
     // only after that acceptance boundary and before the next ordered input.
     const nextActionId=this.head.nextActionId,handled=super.applyExtendedInput(input,events);
-    if(['turn_head','look_at','scan_area','cancel_head'].includes(command.type)&&this.head.nextActionId!==nextActionId) {
+    if(source==='developer'&&['turn_head','look_at','scan_area','cancel_head'].includes(command.type)&&this.head.nextActionId!==nextActionId) {
       a.developerUntilTick=this.data.tick+a.config.developerPriorityTicks;
       if(a.automaticActionId!==null)this.emit(events,'ATTENTION_ACTION','attention','interrupted',{actionId:a.automaticActionId,observationId:a.automaticObservationId!,reason:'developer_override'},input.sequence);
       a.automaticActionId=null;a.automaticObservationId=null;
@@ -514,7 +531,7 @@ export class SensorySimulation extends VisionSimulation {
     if(matching.length<2){if(!matching.length||matching[0].trigger.tick!==tick)intent.triggers.push(next);}
     else if(tick>=matching[1].trigger.tick)intent.triggers[matching[1].index]=next;
   }
-  private requestCapture(reason:AutomaticCaptureReason,events:DeterministicEvent[],parentSequence:number|null=null,triggerTick=this.data.tick):void {
+  protected requestCapture(reason:AutomaticCaptureReason,events:DeterministicEvent[],parentSequence:number|null=null,triggerTick=this.data.tick):void {
     const a=this.attention,tick=this.data.tick,c=a.config;
     if(a.pending?.status==='pending'){this.noteCaptureTrigger(a.pending,reason,triggerTick,parentSequence);if(!a.pending.reasons.includes(reason)){a.pending.reasons.push(reason);this.emit(events,'CAPTURE_INTENTION','attention','coalesced',{intentId:a.pending.id,reasons:a.pending.reasons.join(' '),reason},undefined,parentSequence??undefined);}return;}
     // A submitted image is immutable history. Later causes require a later image;
@@ -598,6 +615,144 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
+}
+function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
+ const raw=structuredClone(cp) as unknown as Record<string,unknown>;delete raw.cognition;delete raw.realExperiences;raw.schemaVersion=4;raw.rulesVersion=CURRENT_ATTENTION_RULES;
+ raw.pendingInputs=cp.pendingInputs.map(input=>({...input,command:input.command.type==='cognition_request'||input.command.type==='cognition_result'||input.command.type==='cognition_observation_request'?{type:'invalid',reason:'unknown_command'}:input.command}));
+ return validateSensoryCheckpoint(raw);
+}
+const sameIdentity=(a:CognitionIdentity,b:CognitionIdentity)=>canonicalStringify(a)===canonicalStringify(b);
+export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
+ const cp=value as CheckpointV5;
+ object(cp,[...Object.keys(new SensorySimulation({mode:'EXPERIMENT'}).checkpoint()),'cognition','realExperiences'],'cognition root');
+ if(cp.schemaVersion!==5||cp.rulesVersion!==COGNITION_RULES)fail('cognition schema/rules');cognitionSensoryPart(cp);
+ for(const input of cp.pendingInputs)validateCommand(input.command,true,true,true);
+ const c=cp.cognition;object(c,['identity','requests','nextRequestTick','actionCooldownUntilTick','responses','firstRequestTick','lastResponseTick','observationRequestedTick','captureUpgrade'],'cognition state');validateCognitionIdentity(c.identity);
+ if(!integer(c.nextRequestTick)||!integer(c.actionCooldownUntilTick)||!integer(c.responses)||!(c.firstRequestTick===null||integer(c.firstRequestTick,0,cp.tick))||!(c.lastResponseTick===null||integer(c.lastResponseTick,0,cp.tick))||!(c.observationRequestedTick===null||integer(c.observationRequestedTick,0,cp.tick))||!Array.isArray(c.requests)||c.requests.length>COGNITION_LIMITS.requests||!Array.isArray(cp.realExperiences)||cp.realExperiences.length>COGNITION_LIMITS.experiences)fail('cognition bounds');
+ if(c.captureUpgrade!==null){const u=c.captureUpgrade;object(u,['requestId','captureId','requestedTick','status'],'capture upgrade');if(typeof u.requestId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(u.requestId)||typeof u.captureId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(u.captureId)||!integer(u.requestedTick,0,cp.tick)||!['pending','requested','expired'].includes(u.status))fail('capture upgrade');}
+ const ids=new Set<string>();for(const r of c.requests){object(r,['request','requestedTick','status','resultTick','result','action','encoding'],'cognition request');validateCognitionCommand(r.request);if(r.request.type!=='cognition_request'||ids.has(r.request.requestId)||!integer(r.requestedTick,0,cp.tick)||!['pending','completed'].includes(r.status)||!(r.resultTick===null||integer(r.resultTick,r.requestedTick,cp.tick))||(r.status==='pending')!==(r.result===null)||(r.result===null)!==(r.resultTick===null))fail('cognition request status');ids.add(r.request.requestId);if(r.result){validateCognitionCommand(r.result);if(r.result.requestId!==r.request.requestId||!sameIdentity(r.result.identity,r.request.selection.identity))fail('cognition result association');}if(r.action)validateActionOutcome(r.action,cp.tick);if(r.encoding){object(r.encoding,['status','reason','experienceId'],'encoding outcome');if(!['admitted','rejected','failed'].includes(r.encoding.status)||typeof r.encoding.reason!=='string'||r.encoding.reason.length>100||!(r.encoding.experienceId===null||integer(r.encoding.experienceId,1,cp.realExperiences.length)))fail('encoding outcome');}}
+ if(c.requests.filter(r=>r.status==='pending').length>COGNITION_LIMITS.pending)fail('pending cognition capacity');
+ const encodingIds=new Set<string>();for(const [index,e] of cp.realExperiences.entries()){
+  object(e,['id','tick','kind','provenance','encodingId','identity','requestId','captureId','observationId','frameHash','source','capturedTick','attentionTick','interpretationTick','encodedTick','interpretation','uncertainty','evidenceHandles','actionOutcome'],'real experience');validateCognitionIdentity(e.identity);
+  const r=c.requests.find(r=>r.request.requestId===e.requestId),s=r?.request.selection,p=r?.result?.proposal;
+  if(e.id!==index+1||e.kind!=='perception'||e.provenance!=='ATTENDED_RENDERER_INTERPRETATION'||e.source!=='actual_renderer'||!s||s.source!=='actual_renderer'||r?.request.purpose!=='interpretation'||!p||r?.encoding?.status!=='admitted'||r.encoding.experienceId!==e.id||e.encodingId!==`${s.identity.historyId}_${r.request.requestId}`||encodingIds.has(e.encodingId)||!sameIdentity(e.identity,s.identity)||e.captureId!==s.captureId||e.observationId!==s.observationId||e.frameHash!==s.frameHash||e.capturedTick!==s.capturedTick||e.attentionTick!==s.attentionTick||e.interpretationTick!==r.resultTick||e.encodedTick!==e.tick||!integer(e.encodedTick,e.interpretationTick,cp.tick)||e.interpretation!==p.interpretation||e.uncertainty!==p.uncertainty||canonicalStringify(e.evidenceHandles)!==canonicalStringify(p.evidenceHandles)||canonicalStringify(e.actionOutcome)!==canonicalStringify(r.action?.status==='executed'?r.action:null))fail('real experience provenance');encodingIds.add(e.encodingId);
+ }
+ return structuredClone(cp);
+}
+function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
+/** External callbacks supply only complete ordered commands; this class owns all consequences. */
+export class CognitionSimulation extends SensorySimulation {
+ private cognition:CognitionState;private realExperiences:RealExperience[];
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean}){
+  const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
+  const cp=source.schemaVersion===5?source:null;
+  super({...options,checkpoint:cp?cognitionSensoryPart(cp):source,historical:false});
+  const identity:CognitionIdentity={worldId:options.worldId??'offline-world',runId:options.runId??'offline-run',branchId:options.branchId??'offline-branch',historyId:options.historyId??cp?.cognition.identity.historyId??'offline-history',mode:options.mode};validateCognitionIdentity(identity);
+  this.cognition=cp?structuredClone(cp.cognition):{identity,requests:[],nextRequestTick:0,actionCooldownUntilTick:0,responses:0,firstRequestTick:null,lastResponseTick:null,observationRequestedTick:null,captureUpgrade:null};
+  this.realExperiences=structuredClone(cp?.realExperiences??[]);
+  if(cp){this.data.pendingInputs=structuredClone(cp.pendingInputs);if(!options.historical)this.cognition.identity=identity;}
+  if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||e.identity.historyId!==this.cognition.identity.historyId)||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
+ }
+ protected override supportsCognitionInputs():boolean{return true;}
+ protected override additionalInputCapacityReason(input:OrderedInput):string|null {
+  return fitsCognitionStorage({...this.checkpoint(),pendingInputs:[...this.data.pendingInputs,input]})?null:'checkpoint_capacity';
+ }
+ override applyAction(action:ControlAction):DeterministicEvent[]{
+  if((action.type==='activity-start'||action.type==='synthetic-cue'||action.type==='synthetic-clock')&&!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents additional activity or synthetic experience');
+  return super.applyAction(action);
+ }
+ cognitionState():CognitionState{return structuredClone(this.cognition);}
+ admittedExperiences():RealExperience[]{return structuredClone(this.realExperiences);}
+ experienceRecords():Experience[]{return structuredClone([...super.checkpoint().experiences,...this.realExperiences]);}
+ private applyObservationRequest(command:CognitionObservationRequestCommand,events:DeterministicEvent[],sequence:number){
+  const c=this.cognition,a=this.attentionState(),b=a.baseline,last=a.lastCapture;
+  const reason=!sameIdentity(command.identity,c.identity)?'foreign_identity':c.captureUpgrade?.captureId===command.captureId?'duplicate_upgrade':!b||!last||b.captureId!==command.captureId||b.frameHash!==command.frameHash||last.intentId!==command.intentId||last.captureId!==command.captureId||last.outcome!=='success'||last.freshness!=='applicable'||!last.reasons.includes('visible_change')?'unselected_visual_change':this.data.tick-b.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks?'stale_selection':null;
+  if(reason){this.emit(events,'COGNITION_OBSERVATION','cognition','rejected',{requestId:command.requestId,captureId:command.captureId,reason},sequence);return;}
+  c.captureUpgrade={requestId:command.requestId,captureId:command.captureId,requestedTick:this.data.tick,status:'pending'};c.observationRequestedTick=this.data.tick;
+  this.emit(events,'COGNITION_OBSERVATION','cognition','upgrade_pending',{requestId:command.requestId,captureId:command.captureId,frameHash:command.frameHash,intentId:command.intentId,reason:'selected_visual_change_requires_richer_image'},sequence);
+ }
+ private applyRequest(command:CognitionRequestCommand,events:DeterministicEvent[],sequence:number){
+  const c=this.cognition,s=command.selection,a=this.attentionState(),b=a.baseline,last=a.lastCapture,tick=this.data.tick;
+  let reason:string|null=null;
+  if(!sameIdentity(s.identity,c.identity))reason='foreign_identity';else if(c.requests.some(r=>r.request.requestId===command.requestId))reason='duplicate_request';else if(c.requests.length>=COGNITION_LIMITS.requests)reason='request_history_capacity';else if(c.requests.filter(r=>r.status==='pending').length>=COGNITION_LIMITS.pending)reason='pending_capacity';else if(tick<c.nextRequestTick)reason='request_cooldown';
+  else if(!b||!last||last.outcome!=='success'||last.freshness!=='applicable'||last.captureId!==s.captureId||last.intentId!==s.intentId||b.captureId!==s.captureId||b.frameHash!==s.frameHash||b.capturedTick!==s.capturedTick||last.receivedTick!==s.attentionTick||canonicalStringify(b.pose)!==canonicalStringify(s.pose))reason='unselected_sensor_evidence';
+  else if(!last.reasons.some(r=>['salient_sound','head_milestone','visible_change','activity_outcome'].includes(r))&&!(c.observationRequestedTick!==null&&s.capturedTick>=c.observationRequestedTick))reason='observation_not_attended';
+  else if(s.attentionTick>tick||tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)reason='stale_selection';else if(s.source!=='actual_renderer'&&this.mode==='LIVE')reason='test_source_not_live';
+  else if(currentCognitionProfile(command)&&s.context.shapes.some(shape=>shape.uncertainty!=='geometry_candidates_pixel_checked'))reason='unqualified_shape_context';
+  else if(s.context.activity.status!==this.activity.status||s.context.experiences.some(e=>!this.realExperiences.some(old=>old.identity.historyId===s.identity.historyId&&old.interpretation===e.interpretation&&old.uncertainty===e.uncertainty&&(!currentCognitionProfile(command)||c.requests.some(r=>r.request.requestId===old.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))))))reason='unadmitted_context';
+  else if(s.context.sound!==null){const received=a.lastReceived;if(!received)reason='unreceived_sound';else{const {tick:ignoreTick,bodyHeading:ignoreBody,headYaw:ignoreHead,...sound}=received;void ignoreTick;void ignoreBody;void ignoreHead;if(received.tick>s.capturedTick||a.lastDecision?.observationId!==received.observationId||a.lastDecision.outcome==='ignored'||canonicalStringify({...sound,relation:received.tick===s.capturedTick?'same_capture':'before_image',ageBand:s.capturedTick-received.tick<=90?'recent':'earlier'})!==canonicalStringify(s.context.sound))reason='unreceived_sound';}}
+  if(reason){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason},sequence);return;}
+  const candidate={request:structuredClone(command),requestedTick:tick,status:'pending' as const,resultTick:null,result:null,action:null,encoding:null};
+  if(!fitsCognitionStorage({...this.checkpoint(),cognition:{...c,requests:[...c.requests,candidate]}})){this.emit(events,'COGNITION_REQUEST','cognition','rejected',{requestId:command.requestId,reason:'checkpoint_capacity'},sequence);return;}
+  c.requests.push(candidate);c.nextRequestTick=tick+COGNITION_LIMITS.requestIntervalTicks;if(command.purpose==='interpretation')c.firstRequestTick??=tick;c.observationRequestedTick=null;
+  this.emit(events,'COGNITION_ATTENTION','attention','selected',{requestId:command.requestId,observationId:s.observationId,captureId:s.captureId,frameHash:s.frameHash,capturedTick:s.capturedTick,attentionTick:s.attentionTick,intentId:s.intentId,source:s.source,attended:true,encoded:false},sequence);
+  this.emit(events,'COGNITION_REQUEST','cognition','pending',{requestId:command.requestId,provider:command.provider,model:command.model,observationId:s.observationId,frameHash:s.frameHash,promptRevision:command.promptRevision,schemaRevision:command.schemaRevision},sequence);
+ }
+ private executeProposal(command:CognitionResultCommand,request:CognitionRequestCommand,events:DeterministicEvent[],sequence:number):CognitionActionOutcome {
+  const tick=this.data.tick,c=this.cognition,s=request.selection,p=command.proposal!,a=p.action;
+  const reject=(reason:string):CognitionActionOutcome=>({status:'rejected',reason,actionId:null,tick});
+  if(tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)return reject('stale_action');
+  if(c.requests.some(r=>r.requestedTick>(c.requests.find(r=>r.request.requestId===request.requestId)?.requestedTick??tick)))return reject('superseded_action');
+  if(tick<c.actionCooldownUntilTick)return reject('action_cooldown');
+  const attention=this.attentionState();if(tick<attention.developerUntilTick||tick<attention.commitmentUntilTick)return reject('attention_committed');
+  if(a.type==='continue')return {status:'executed',reason:'continued',actionId:null,tick};
+  if(a.type==='request_observation'){this.requestCapture('uncertainty_probe',events);const capture=this.attentionState();if(!capture.pending&&!capture.deferred)return reject('capture_policy_limited');c.observationRequestedTick=tick;c.actionCooldownUntilTick=tick+COGNITION_LIMITS.actionCooldownTicks;return {status:'executed',reason:'capture_requested',actionId:null,tick};}
+  if(this.head.status!=='idle')return reject('motor_committed');
+  let bearing:number,elevation:number;
+  if(a.type==='inspect') {const shape=s.context.shapes.find(shape=>shape.handle===a.handle);if(!shape||!p.evidenceHandles.includes(a.handle))return reject('ineligible_shape');const delta=poseDifference(s.pose,sensorPose(this.snapshot()));if(delta.distance>.75)return reject('inspect_pose_changed');bearing=shape.bearingDegrees;elevation=shape.elevationDegrees;}
+  else {bearing=a.bearingDegrees;elevation=a.elevationDegrees;}
+  const aim={worldYaw:Math.atan2(Math.sin(s.pose.bodyHeading+s.pose.headYaw+bearing*Math.PI/180),Math.cos(s.pose.bodyHeading+s.pose.headYaw+bearing*Math.PI/180)),pitch:s.pose.headPitch+elevation*Math.PI/180};
+  const target=relativeObservedAim(aim,this.data.character.heading);if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch)return reject('observed_bearing_exceeds_head_limits');
+  const actionId=this.head.nextActionId;
+  this.applyHeadInput({sequence,receivedTick:tick,applyTick:tick,admission:'queued',command:{type:'look_at',yaw:target.yaw,pitch:target.pitch,sceneRevision:this.scene.revision}},events,'cognition');
+  if(this.head.nextActionId===actionId)return reject('local_head_validation');this.head.observedAim=aim;c.actionCooldownUntilTick=tick+COGNITION_LIMITS.actionCooldownTicks;
+  if(a.type==='inspect'){c.observationRequestedTick=tick;/* head completion requests a fresh normal capture */}
+  return {status:'executed',reason:a.type==='inspect'?'inspection_orient_started':'look_started',actionId,tick};
+ }
+ private applyResult(command:CognitionResultCommand,events:DeterministicEvent[],sequence:number){
+  const c=this.cognition,r=c.requests.find(r=>r.request.requestId===command.requestId),tick=this.data.tick;
+  if(!r||!sameIdentity(command.identity,r.request.selection.identity)||command.outcome!=='interrupted'&&!sameIdentity(command.identity,c.identity)){this.emit(events,'COGNITION_RESULT','cognition','rejected',{requestId:command.requestId,reason:'foreign_or_unknown_request'},sequence);return;}
+  if(r.status!=='pending'){this.emit(events,'COGNITION_RESULT','cognition','duplicate',{requestId:command.requestId,reason:'already_completed'},sequence);return;}
+  r.status='completed';r.result=structuredClone(command);r.resultTick=tick;if(r.request.purpose==='interpretation'&&command.outcome==='success'){c.responses++;c.lastResponseTick=tick;}
+  this.emit(events,'COGNITION_RESULT','cognition',command.outcome,{requestId:command.requestId,latencyMs:command.metrics.latencyMs,attempts:command.metrics.attempts,costUsd:command.metrics.costUsd??'unknown',costBasis:command.metrics.costBasis,...(command.validationError?{reason:command.validationError}:{}),inputTokens:command.metrics.inputTokens??'unknown',outputTokens:command.metrics.outputTokens??'unknown'},sequence);
+  const s=r.request.selection,p=command.proposal;
+  if(command.outcome!=='success'||!p){r.encoding={status:'rejected',reason:command.validationError??command.outcome,experienceId:null};this.emit(events,'EXPERIENCE_ENCODING','experience','rejected',{requestId:command.requestId,reason:command.validationError??command.outcome,encoded:false},sequence);return;}
+  try{validateCognitionProposalReferences(p,s.context);}catch(error){
+   // Keep historical event/state hashes for old normalized commands. New wire
+   // generations persist the same bounded category used by the adapter.
+   const reason=r.request.schemaRevision===COGNITION_SCHEMA_REVISION?cognitionValidationError(error):'fabricated_evidence';
+   r.action={status:'rejected',reason,actionId:null,tick};r.encoding={status:'rejected',reason,experienceId:null};this.emit(events,'COGNITION_VALIDATION','cognition','rejected',{requestId:command.requestId,reason},sequence);return;
+  }
+  this.emit(events,'COGNITION_INTERPRETATION','cognition','normalized',{requestId:command.requestId,observationId:p.observationId,frameHash:p.frameHash,interpretation:p.interpretation,uncertainty:p.uncertainty,action:p.action.type},sequence);
+  this.emit(events,'COGNITION_ACTION_PROPOSED','cognition','advisory',{requestId:command.requestId,action:p.action.type},sequence);
+  r.action=this.executeProposal(command,r.request,events,sequence);
+  this.emit(events,'COGNITION_VALIDATION','cognition',r.action.status==='executed'?'accepted':'rejected',{requestId:command.requestId,action:p.action.type,reason:r.action.reason,validationTick:tick},sequence);
+  this.emit(events,'COGNITION_ACTION','cognition',r.action.status,{requestId:command.requestId,action:p.action.type,reason:r.action.reason,actionId:r.action.actionId??'none',validationTick:tick},sequence);
+  if(r.request.purpose==='decisions_evaluation'){r.encoding={status:'rejected',reason:'decision_not_experience',experienceId:null};}
+  else if(s.source!=='actual_renderer'){r.encoding={status:'rejected',reason:'test_source',experienceId:null};}
+  else if(this.realExperiences.length>=COGNITION_LIMITS.experiences){r.encoding={status:'failed',reason:'experience_capacity',experienceId:null};}
+  else {
+   const e:RealExperience={id:this.realExperiences.length+1,tick,kind:'perception',provenance:'ATTENDED_RENDERER_INTERPRETATION',encodingId:`${s.identity.historyId}_${command.requestId}`,identity:structuredClone(s.identity),requestId:command.requestId,captureId:s.captureId,observationId:s.observationId,frameHash:s.frameHash,source:'actual_renderer',capturedTick:s.capturedTick,attentionTick:s.attentionTick,interpretationTick:tick,encodedTick:tick,interpretation:p.interpretation,uncertainty:p.uncertainty,evidenceHandles:structuredClone(p.evidenceHandles),actionOutcome:r.action.status==='executed'?structuredClone(r.action):null};
+   const encoded={status:'admitted' as const,reason:'trusted_attended_interpretation',experienceId:e.id};
+   const projected=this.checkpoint();projected.realExperiences.push(e);projected.cognition.requests.find(request=>request.request.requestId===command.requestId)!.encoding=encoded;
+   if(!fitsCognitionStorage(projected))r.encoding={status:'failed',reason:'checkpoint_capacity',experienceId:null};else{this.realExperiences.push(e);r.encoding=encoded;}
+  }
+  this.emit(events,r.encoding.status==='admitted'?'EXPERIENCE_ENCODED':'EXPERIENCE_ENCODING','experience',r.encoding.status,{requestId:command.requestId,experienceId:r.encoding.experienceId??'none',provenance:'ATTENDED_RENDERER_INTERPRETATION',source:s.source,reason:r.encoding.reason,sensed:true,attended:true,encoded:r.encoding.status==='admitted',capturedTick:s.capturedTick,attentionTick:s.attentionTick,interpretationTick:tick,encodedTick:tick,observationId:s.observationId,frameHash:s.frameHash},sequence);
+ }
+ protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean{if(input.command.type==='cognition_observation_request'){this.applyObservationRequest(input.command,events,input.sequence);return true;}if(input.command.type==='cognition_request'){this.applyRequest(input.command,events,input.sequence);return true;}if(input.command.type==='cognition_result'){this.applyResult(input.command,events,input.sequence);return true;}return super.applyExtendedInput(input,events);}
+ override step():DeterministicEvent[]{
+  const events=super.step(),c=this.cognition,u=c.captureUpgrade,tick=this.data.tick;
+  if(u&&c.observationRequestedTick!==null&&u.status!=='expired'){
+   const a=this.attentionState();
+   if(tick-u.requestedTick>COGNITION_LIMITS.resultMaxAgeTicks){u.status='expired';c.observationRequestedTick=null;this.emit(events,'COGNITION_OBSERVATION','cognition','expired',{requestId:u.requestId,captureId:u.captureId,reason:'capture_upgrade_expired'});}
+   else {
+    if(u.status==='requested'&&!a.pending&&!a.deferred&&a.lastCapture&&a.lastCapture.receivedTick>=u.requestedTick&&a.lastCapture.outcome!=='success')u.status='pending';
+    if(u.status==='pending'&&!a.pending&&!a.deferred&&tick>=a.captureCooldownUntilTick&&tick>=a.retryAfterTick){this.requestCapture('visible_change',events);const next=this.attentionState();if(next.pending||next.deferred){u.status='requested';this.emit(events,'COGNITION_OBSERVATION','cognition','capture_requested',{requestId:u.requestId,captureId:u.captureId,reason:'bounded_richer_observation'});}}
+   }
+  }
+  return events;
+ }
+ override checkpoint():CheckpointV5{return {...super.checkpoint(),schemaVersion:5,rulesVersion:COGNITION_RULES,cognition:structuredClone(this.cognition),realExperiences:structuredClone(this.realExperiences)};}
 }

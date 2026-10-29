@@ -9,6 +9,9 @@ import { build } from 'esbuild';
 import type { WorldState } from '../../shared/protocol.js';
 import { CAPTURE_LIMITS, type RendererBackend, type RendererIdentity } from '../../shared/capture-protocol.js';
 import { cleanupWindowsBrowser, waitForOwnedExit } from './cleanup.js';
+import { assertMaskDimensions, PRIVATE_MASK_REVISION, type PrivateRenderMask } from '../../shared/private-render-mask.js';
+import { physicalSceneSnapshot } from '../../shared/physical-scene.js';
+export type { PrivateRenderMask } from '../../shared/private-render-mask.js';
 export { waitForCleanupCommand } from './cleanup.js';
 
 export const BACKEND_FLAGS: Record<RendererBackend, string[]> = {
@@ -27,7 +30,7 @@ export function configuredBackend(): RendererBackend {
   const requested = process.env.LUMI_RENDER_BACKEND;
   return (requested ?? (process.platform === 'win32' ? 'angle-d3d11' : 'swiftshader')) as RendererBackend;
 }
-export interface RenderedFrame { bytes: Uint8Array; backend: RendererIdentity; resources?: { geometries: number; textures: number } }
+export interface RenderedFrame { bytes: Uint8Array; backend: RendererIdentity; privateMask?: PrivateRenderMask; resources?: { geometries: number; textures: number } }
 export interface FrameRenderer { render(snapshot: WorldState, width: number, height: number): Promise<RenderedFrame>; close(): Promise<void>; readonly cleanupError?: string | null }
 export class RendererFailure extends Error { constructor(readonly status: 'unavailable' | 'timeout' | 'failed', message: string) { super(message); } }
 let javascript: Promise<Uint8Array> | undefined;
@@ -88,8 +91,11 @@ export class ChromiumRenderer implements FrameRenderer {
   }
   private armIdle() { clearTimeout(this.idleTimer); this.idleTimer = setTimeout(() => { void this.close().catch(() => { this.cleanupError = 'Idle renderer resource cleanup failed'; }); }, this.idleMs); this.idleTimer.unref(); }
   async render(snapshot: WorldState, width: number, height: number): Promise<RenderedFrame> {
+    assertMaskDimensions(width, height);
     if (this.busy) throw new RendererFailure('failed', 'Renderer is already busy');
     if (!(this.configuration in BACKEND_FLAGS)) throw new RendererFailure('unavailable', 'Unknown renderer backend');
+    // Own the admission snapshot across asynchronous browser startup and transport.
+    snapshot = structuredClone(snapshot);
     this.busy = true; clearTimeout(this.idleTimer);
     let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -104,7 +110,10 @@ export class ChromiumRenderer implements FrameRenderer {
           if (this.configuration === 'angle-d3d11' && /swiftshader|llvmpipe|software/i.test(identity.webglRenderer)) throw new RendererFailure('unavailable', 'Hardware path resolved to software');
           if (this.configuration === 'swiftshader' && !/swiftshader/i.test(identity.webglRenderer)) throw new RendererFailure('unavailable', 'Explicit SwiftShader backend was not selected');
           if (!result.png.startsWith('data:image/png;base64,') || result.png.length > 8 * 1024 * 1024) throw new RendererFailure('failed', 'Invalid renderer frame');
-          this.armIdle(); return { bytes: Buffer.from(result.png.slice('data:image/png;base64,'.length), 'base64'), backend: identity, resources: result.resources };
+          const mask = result.privateMask;
+          const expectedIds = ['', ...physicalSceneSnapshot(snapshot).boxes.filter(box => box.observable).map(box => box.id)];
+          if (!mask || mask.revision !== PRIVATE_MASK_REVISION || mask.width !== width || mask.height !== height || !mask.png.startsWith('data:image/png;base64,') || mask.png.length > 8 * 1024 * 1024 || JSON.stringify(mask.physicalIds) !== JSON.stringify(expectedIds)) throw new RendererFailure('failed', 'Invalid private renderer mask');
+          this.armIdle(); return { bytes: Buffer.from(result.png.slice('data:image/png;base64,'.length), 'base64'), privateMask: { bytes: Buffer.from(mask.png.slice('data:image/png;base64,'.length), 'base64'), physicalIds: mask.physicalIds, revision: mask.revision, width, height }, backend: identity, resources: result.resources };
         })(),
         new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new RendererFailure('timeout', 'Renderer request timed out')), this.timeoutMs); }),
       ]);

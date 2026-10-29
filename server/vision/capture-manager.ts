@@ -9,11 +9,12 @@ import { HEAD_LIMITS, observedHeadTarget, validateHeadAction, type CapturedBeari
 import type { AutomaticCaptureAssociation, CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
 import { CAPTURE_LIMITS, MANUAL_CAPTURE_REASONS } from '../../shared/capture-protocol.js';
 import { AUTOMATIC_CAPTURE_REASONS } from '../../shared/attention-protocol.js';
-import { groundSnapshot, filterVisibleGrounding } from './grounding.js';
+import { groundSnapshot } from './grounding.js';
+import { qualifyPixelGrounding, filterPixelQualifiedGrounding, type PixelGroundingResult } from './pixel-qualification.js';
 import { ChromiumRenderer, RendererFailure, type FrameRenderer } from './renderer.js';
 
 type Grounding = ReturnType<typeof groundSnapshot>;
-interface Entry { metadata: CaptureMetadata; snapshot: WorldState; grounding: Grounding | null; handles: Map<string, string>; runtime: BranchRuntime; observation?: VisualObservation; bytes?: Uint8Array; completion: Promise<void>; complete(): void; retired: boolean; requestedMono: number }
+interface Entry { metadata: CaptureMetadata; snapshot: WorldState; grounding: Grounding | PixelGroundingResult | null; handles: Map<string, string>; runtime: BranchRuntime; observation?: VisualObservation; bytes?: Uint8Array; completion: Promise<void>; complete(): void; retired: boolean; requestedMono: number }
 const scopeKey = (target: ActiveTarget) => `${target.worldId}/${target.branchId}/${target.runId}`;
 const exact = (value: unknown, keys: string[]) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === keys.sort().join(',');
 export function validateCaptureOptions(raw: unknown): Required<CaptureOptions> {
@@ -64,7 +65,7 @@ export class CaptureManager {
     const entry: Entry = { metadata, snapshot, grounding: null, handles: new Map(), runtime, completion, complete, retired: false, requestedMono: performance.now() };
     this.entries.set(id, entry); this.latest.set(scopeKey(runtime.target), id);
     this.record(entry, 'CAPTURE_REQUEST', 'received'); this.record(entry, 'CAPTURE_SNAPSHOT', 'immutable_snapshot');
-    try { entry.grounding = groundSnapshot(snapshot, options.width, options.height); }
+    try { entry.grounding = groundSnapshot(snapshot, options.width, options.height, {ignoreLegacyIlluminationGate:true,pixelEvidenceCandidates:true}); }
     catch {
       metadata.status = 'failed'; metadata.error = 'Camera or physical scene is invalid for a visual observation';
       metadata.completedAt = new Date().toISOString(); metadata.durationMs = performance.now() - entry.requestedMono;
@@ -91,8 +92,9 @@ export class CaptureManager {
       if (entry.retired) return;
       if (this.closed || !this.current(entry.metadata)) { entry.metadata.status = 'stale'; entry.metadata.error = 'Capture belongs to a retired run'; this.record(entry, 'CAPTURE_STALE_DISCARD', 'stale'); }
       else {
-        const m = entry.metadata; m.status = 'success'; m.frameHash = createHash('sha256').update(result.bytes).digest('hex'); m.backend = structuredClone(result.backend); entry.bytes = result.bytes.slice();
-        const shapes = filterVisibleGrounding(entry.grounding, id => { const handle = randomUUID(); entry.handles.set(handle, id); return handle; });
+        const m = entry.metadata; m.status = 'success'; m.frameHash = createHash('sha256').update(result.bytes).digest('hex'); m.backend = structuredClone(result.backend); entry.bytes = Uint8Array.from(result.bytes);
+        const qualified=qualifyPixelGrounding(entry.grounding,result.bytes,result.privateMask,m.width,m.height);entry.grounding=qualified;
+        const shapes = filterPixelQualifiedGrounding(qualified, id => { const handle = randomUUID(); entry.handles.set(handle, id); return handle; });
         entry.observation = { ...entry.runtime.target, observationId: m.observationId, tick: m.tick, stateVersion: m.stateVersion, sceneRevision: m.sceneRevision, dynamicRevision: m.dynamicRevision, frameHash: m.frameHash, camera: structuredClone(m.camera), shapes, interpretation: 'uninterpreted sensor evidence', experienceEncoded: false };
         this.successes.set(scopeKey(m), m.captureId);
         this.record(entry, 'CAPTURE_COMPLETE', 'success', { frameHash: m.frameHash, format: m.format, backend: m.backend.configuration, chromium: m.backend.chromium, webglVendor: m.backend.webglVendor, webglRenderer: m.backend.webglRenderer, webglVersion: m.backend.version, visibleCount: shapes.length });
@@ -126,6 +128,14 @@ export class CaptureManager {
     const entry = this.entries.get(captureId);
     if (!entry || scopeKey(entry.metadata) !== scopeKey(target) || entry.metadata.status !== 'success' || !entry.bytes) throw new Error('Frame is unavailable for the selected run');
     return entry.bytes.slice();
+  }
+  /** ID-bound filtered evidence for cognition. Never substitutes the latest frame.
+   * The caller owns the copied pixels before it enters any provider queue. */
+  observation(target: ActiveTarget, captureId: string): { metadata: CaptureMetadata; observation: VisualObservation; png: Uint8Array; sensorSource: 'actual_renderer'|'mock_renderer' } {
+    if (!this.current(target)) throw new Error('Vision target is retired');
+    const entry = this.entries.get(captureId);
+    if (!entry || scopeKey(entry.metadata) !== scopeKey(target) || entry.retired || entry.metadata.status !== 'success' || !entry.bytes || !entry.observation) throw new Error('Selected observation is unavailable or evicted');
+    return {metadata:structuredClone(entry.metadata),observation:structuredClone(entry.observation),png:entry.bytes.slice(),sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'mock_renderer'};
   }
   /** Completion-aware local API for scripts/tests; dashboard uses bounded status refreshes. */
   async wait(target: ActiveTarget, captureId: string): Promise<CaptureMetadata> {

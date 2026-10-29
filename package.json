@@ -22,7 +22,8 @@
     "vision:capture": "tsx server/vision/cli.ts",
     "vision:benchmark": "tsx server/vision/benchmark.ts",
     "vision:verify": "tsx --test tests/vision-renderer.real.ts",
-    "vision:attention": "tsx --test tests/vision-attention.real.ts"
+    "vision:attention": "tsx --test tests/vision-attention.real.ts",
+    "cognition:verify": "tsx server/cognition/verify.ts"
   },
   "dependencies": {
     "esbuild": "^0.28.2",

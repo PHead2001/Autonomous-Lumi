@@ -17,7 +17,7 @@ export interface GroundingResult {
 export interface VisibleGrounding {
   handle: string; identity: 'unknown'; bearingDegrees: number; elevationDegrees: number;
   distanceBand: 'near' | 'room' | 'far'; sampleVisibilityBand: SampleVisibilityBand;
-  qualityFlags: string[]; uncertainty: 'geometric_samples_only';
+  qualityFlags: string[]; uncertainty: 'geometric_samples_only' | 'geometry_candidates_pixel_checked';
 }
 const dot = (a: Vector3Tuple, b: Vector3Tuple) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const subtract = (a: Vector3Tuple, b: Vector3Tuple): Vector3Tuple => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -54,7 +54,7 @@ function inFrustum(point: Vector3Tuple, camera: EyePose): boolean {
   return Math.abs(dot(v, right)) <= depth * Math.tan(camera.horizontalFovDegrees * Math.PI / 360) && Math.abs(dot(v, camera.up)) <= depth * Math.tan(camera.verticalFovDegrees * Math.PI / 360);
 }
 /** Private measurement from exactly the snapshot used by the image renderer. No attention or semantics. */
-export function groundSnapshot(state: WorldState, width?: number, height?: number): GroundingResult {
+export function groundSnapshot(state: WorldState, width?: number, height?: number, options: { ignoreLegacyIlluminationGate?: boolean; pixelEvidenceCandidates?: boolean } = {}): GroundingResult {
   assertCameraClearance(state, width, height);
   const scene = physicalSceneSnapshot(state), camera = eyePose(state, width, height);
   const objects = scene.boxes.filter(b => b.observable).map((box): GroundingObject => {
@@ -70,11 +70,11 @@ export function groundSnapshot(state: WorldState, width?: number, height?: numbe
     const qualityFlags: string[] = [];
     // This is a deliberately conservative illumination proxy tied to actual rendered light intensity.
     // It makes no semantic recognition claim and is not a calibrated retinal model or luminance meter.
-    if (scene.illumination < 0.08) qualityFlags.push('low_light');
+    if (!options.ignoreLegacyIlluminationGate && scene.illumination < 0.08) qualityFlags.push('low_light');
     if (projectedPixels < 8) qualityFlags.push('small_projected_size');
     if (view.length < points.length) qualityFlags.push('frustum_clipped');
     if (visibleSamples && visibleSamples < view.length) qualityFlags.push('partial_sample_visibility');
-    const status: VisibilityStatus = !view.length ? 'outside_frustum' : !visibleSamples ? 'fully_occluded' : qualityFlags.includes('low_light') || qualityFlags.includes('small_projected_size') ? 'poor_observability' : visibleSamples < view.length ? 'partially_occluded' : 'visible';
+    const status: VisibilityStatus = !view.length ? 'outside_frustum' : !visibleSamples ? 'fully_occluded' : !options.pixelEvidenceCandidates && (qualityFlags.includes('low_light') || qualityFlags.includes('small_projected_size')) ? 'poor_observability' : visibleSamples < view.length ? 'partially_occluded' : 'visible';
     return { id: box.id, status, eligible: status === 'visible' || status === 'partially_occluded', totalSamples: points.length, inFrustumSamples: view.length, visibleSamples, sampleVisibilityFraction: visibleSamples / points.length, projectedPixels, qualityFlags,
       bearingRadians: wrap(Math.atan2(delta[0], delta[2]) - camera.bodyHeading - camera.headYaw), elevationRadians: Math.atan2(delta[1], Math.hypot(delta[0], delta[2])) - camera.headPitch, distance };
   });
