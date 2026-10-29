@@ -19,7 +19,7 @@ export interface AutomaticCaptureHostView {
 }
 function captureState(runtime: BranchRuntime) {
   const cp = runtime.simulation.checkpoint();
-  return cp.schemaVersion === 4 ? cp : null;
+  return cp.schemaVersion === 4 || cp.schemaVersion === 5 ? cp : null;
 }
 function pose(runtime: BranchRuntime): SensorPose {
   const p = eyePose(runtime.viewerState(), AUTO_CAPTURE_HOST_LIMITS.width, AUTO_CAPTURE_HOST_LIMITS.height);
@@ -38,7 +38,7 @@ export class AutomaticCaptureCoordinator {
   private lastMode: 'LIVE'|'EXPERIMENT'|null = null;
   private lastExperiment = '';
   private closed = false;
-  constructor(private readonly manager: CaptureManager, private readonly current: (scope:ActiveTarget)=>boolean, private readonly monotonicMs:()=>number = ()=>performance.now()) {}
+  constructor(private readonly manager: CaptureManager, private readonly current: (scope:ActiveTarget)=>boolean, private readonly monotonicMs:()=>number = ()=>performance.now(), private readonly selectedForCognition:(runtime:BranchRuntime,intent:CaptureIntent)=>boolean=()=>false) {}
   private submit(runtime:BranchRuntime,command:SensorFeedbackCommand):boolean {
     if (this.closed || !this.current(runtime.target)) return false;
     try {
@@ -98,7 +98,8 @@ export class AutomaticCaptureCoordinator {
     if (runtime.mode==='EXPERIMENT') this.lastExperiment=scope;
     let requested:CaptureMetadata;
     try {
-      requested=this.manager.request(runtime,{reason:intent.reasons[0],width:AUTO_CAPTURE_HOST_LIMITS.width,height:AUTO_CAPTURE_HOST_LIMITS.height},{intentId:intent.id,reasons:intent.reasons,parentSequence:intent.parentSequence});
+      const dimension=this.selectedForCognition(runtime,intent)?512:AUTO_CAPTURE_HOST_LIMITS.width;
+      requested=this.manager.request(runtime,{reason:intent.reasons[0],width:dimension,height:dimension},{intentId:intent.id,reasons:intent.reasons,parentSequence:intent.parentSequence});
     } catch {
       state.lastOutcome='queue_full';this.reject(runtime,intent,'queue_full');return;
     }

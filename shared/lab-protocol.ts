@@ -25,5 +25,5 @@ export interface BranchSummary extends ActiveTarget {
   mode: WorldMode; tick: number; time: number; paused: boolean; speed: number; fastForwardRemaining: number;
   subjective: SubjectiveClock; activity: ActivityState; stateHash: string; eventHash: string; runtimeHash: string;
   checkpoint: { id: string; tick: number }; checkpoints: { id: string; tick: number }[]; runs: string[];
-  logging: unknown; worldSecondsPerModelResponse: null;
+  logging: unknown; worldSecondsPerModelResponse: number|null; cognition?:import('./cognition-protocol.js').CognitionState;realExperiences?:import('./cognition-protocol.js').RealExperience[];
 }

@@ -45,6 +45,12 @@ test('immutable delayed capture retains original tick and bytes; foreign run can
     const json = JSON.stringify(view.observation); assert.ok(!json.includes('fixture-')); assert.ok(!json.includes('engineTargetId'));
     assert.throws(() => manager.resolveHeadAction(b, { type: 'look_at', observationId: request.captureId, handle: view.observation!.shapes[0].handle, sceneRevision: 0 }), /another run/);
     const copied = manager.frame(a.target, request.captureId); copied[0] = 0; assert.equal(manager.frame(a.target, request.captureId)[0], 137);
+    const selected=manager.observation(a.target,request.captureId);
+    assert.equal(selected.metadata.captureId,request.captureId);assert.equal(selected.sensorSource,'mock_renderer');
+    selected.png[0]=0;selected.observation.shapes.length=0;
+    assert.equal(manager.observation(a.target,request.captureId).png[0],137);
+    assert.ok(manager.observation(a.target,request.captureId).observation.shapes.length);
+    assert.throws(()=>manager.observation(b.target,request.captureId),/unavailable/);
   } finally { await manager.close(); await a.close(); await b.close(); }
 });
 test('old-run result is discarded, never exposing observation or frame', async () => {

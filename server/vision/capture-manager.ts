@@ -127,6 +127,14 @@ export class CaptureManager {
     if (!entry || scopeKey(entry.metadata) !== scopeKey(target) || entry.metadata.status !== 'success' || !entry.bytes) throw new Error('Frame is unavailable for the selected run');
     return entry.bytes.slice();
   }
+  /** ID-bound filtered evidence for cognition. Never substitutes the latest frame.
+   * The caller owns the copied pixels before it enters any provider queue. */
+  observation(target: ActiveTarget, captureId: string): { metadata: CaptureMetadata; observation: VisualObservation; png: Uint8Array; sensorSource: 'actual_renderer'|'mock_renderer' } {
+    if (!this.current(target)) throw new Error('Vision target is retired');
+    const entry = this.entries.get(captureId);
+    if (!entry || scopeKey(entry.metadata) !== scopeKey(target) || entry.retired || entry.metadata.status !== 'success' || !entry.bytes || !entry.observation) throw new Error('Selected observation is unavailable or evicted');
+    return {metadata:structuredClone(entry.metadata),observation:structuredClone(entry.observation),png:entry.bytes.slice(),sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'mock_renderer'};
+  }
   /** Completion-aware local API for scripts/tests; dashboard uses bounded status refreshes. */
   async wait(target: ActiveTarget, captureId: string): Promise<CaptureMetadata> {
     const entry = this.entries.get(captureId); if (!entry || scopeKey(entry.metadata) !== scopeKey(target)) throw new Error('Capture is unavailable for the selected run');

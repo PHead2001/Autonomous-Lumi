@@ -3,6 +3,7 @@ import { readBoundedJson } from './checkpoint-storage.js';
 import { RecoveryStore } from './recovery-store.js';
 import { acquireLocalLease } from './local-lease.js';
 import { validateNamedCheckpoint } from './branch-registry.js';
+import { loadCognitionConfig } from './cognition/config.js';
 let world:ReturnType<typeof createWorldServer>|undefined;
 let lease:Awaited<ReturnType<typeof acquireLocalLease>>|undefined;
 let stopping:Promise<void>|undefined;
@@ -17,6 +18,6 @@ try{
   }
   if(process.env.LUMI_NEW_WORLD!==undefined&&process.env.LUMI_NEW_WORLD!=='1')throw new Error('LUMI_NEW_WORLD must be exactly 1 or unset');
   const selected=await RecoveryStore.open({directory,checkpoint,newWorld:process.env.LUMI_NEW_WORLD==='1',intervalMs:process.env.LUMI_RECOVERY_INTERVAL_MS?Number(process.env.LUMI_RECOVERY_INTERVAL_MS):undefined});
-  world=createWorldServer({checkpoint:selected.checkpoint,seed:process.env.LUMI_SEED?Number(process.env.LUMI_SEED):undefined,diagnosticsDirectory:directory,recoveryStore:selected.store});
+  world=createWorldServer({checkpoint:selected.checkpoint,seed:process.env.LUMI_SEED?Number(process.env.LUMI_SEED):undefined,diagnosticsDirectory:directory,recoveryStore:selected.store,cognition:{config:loadCognitionConfig()}});
   const port=await world.listen(Number(process.env.PORT??3001));console.log(`Lumi's world: http://127.0.0.1:${port} (simulation runs with zero viewers)`);console.log('LIVE recovery: '+JSON.stringify(selected.store.status()));process.send?.({type:'lumi:ready',port,historyId:selected.store.historyId,runId:world.registry.live.target.runId});
 }catch(error){console.error(error);await world?.close().catch(()=>{});await lease?.close();process.exitCode=1;if(process.connected)process.disconnect();}

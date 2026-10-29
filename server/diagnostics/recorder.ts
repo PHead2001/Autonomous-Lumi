@@ -57,6 +57,7 @@ const ranks: Record<Severity, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 const compress = promisify(gzip);
 const safeId = (value: string) => /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const dataKeys = new Set([
+  'requestId','provider','model','promptRevision','schemaRevision','attentionTick','interpretationTick','encodedTick','source','interpretation','uncertainty','latencyMs','attempts','costUsd','costBasis','inputTokens','outputTokens',
   'sequence', 'receivedTick', 'applyTick', 'admission', 'reason', 'type', 'command', 'id', 'time', 'intensity', 'suddenness', 'x', 'z', 'slamCount', 'startTick', 'durationSeconds',
   'strength', 'duration', 'start', 'thresholdIntensity', 'thresholdSuddenness', 'intensityThreshold', 'suddennessThreshold',
   'waypoint', 'nextWaypoint', 'pauseUntilTick', 'cooldownUntilTick', 'count', 'recipients', 'sent', 'failed', 'skipped',
@@ -79,7 +80,7 @@ export function sanitizeData(data: Record<string, Primitive> = {}): Record<strin
     if (!dataKeys.has(key)) continue;
     if (typeof value === 'number' && Number.isFinite(value)) result[key] = value;
     else if (typeof value === 'boolean' || value === null) result[key] = value;
-    else if (typeof value === 'string') result[key] = safeLabel(value);
+    else if (typeof value === 'string') result[key] = key==='interpretation'?value.slice(0,1200):safeLabel(value);
   }
   return result;
 }
@@ -202,7 +203,7 @@ export class FlightRecorder {
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
     try {
-    const command = validateCommand(input.command,true,true);
+    const command = validateCommand(input.command,true,true,true);
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
       schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
@@ -214,8 +215,8 @@ export class FlightRecorder {
     } catch { this.counters.droppedRecords++; this.counters.criticalDroppedRecords++; this.gap('input_serialization_failed'); }
   }
   recordEvent(event: DeterministicEvent): void {
-    const experienceEligible=this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
-    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||['hearing','attention'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
+    const experienceEligible=event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
+    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||['hearing','attention','cognition'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
       eventType: event.type, component: event.component, outcome: event.outcome, eventSequence: event.sequence,
       inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true,experienceEligible);
   }

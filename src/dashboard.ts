@@ -9,6 +9,7 @@ import type { CaptureMetadata, CaptureView } from '../shared/capture-protocol';
 import type { AttentionState } from '../shared/attention-protocol';
 import { eyePose } from '../shared/eye-pose';
 import { VisionCaptureDeadline, VisionRequestGate, displayedCapture, validateCaptureViewScope, visionScopeKey } from './dashboard-vision';
+import { cognitionActionLabel, cognitionFrameUrl, modelResponseMetric, selectCognitionRequest, validateCognitionViewScope, type CognitionView } from './dashboard-cognition';
 
 interface TimelineRecord {
   event_id: string; world_id: string; branch_id: string; run_id: string;
@@ -35,7 +36,7 @@ export function mountDashboard(): void {
   document.getElementById('app')!.innerHTML = `
     <header class="lab-header"><a class="brand" href="/">lumi<span> / experiment laboratory</span></a><a class="lab-return" href="/">Open LIVE viewer ↗</a></header>
     <main class="lab-main">
-      <div class="lab-heading"><div><p class="eyebrow">PHASE 2b · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, hearing, selective attention, and first-person sensor evidence.</p></div><span class="lab-local">Local / private</span></div>
+      <div class="lab-heading"><div><p class="eyebrow">PHASE 2c · LOCAL DEVELOPMENT</p><h1>A place to try things.</h1><p>Isolated branches, sight-limited interpretation, and trustworthy experience evidence.</p></div><span class="lab-local">Local / private</span></div>
       <div id="lab-message" class="lab-message" role="status" aria-live="polite">Connecting to the laboratory…</div>
       <section class="lab-selection lab-panel" aria-label="World and branch selection">
         <label class="lab-field lab-select-field">World / branch<select id="lab-branch" aria-label="World and branch"></select></label>
@@ -47,10 +48,19 @@ export function mountDashboard(): void {
         <article class="lab-panel lab-metric"><p class="lab-label">WORLD TRUTH</p><strong id="lab-tick">—</strong><span id="lab-world-time">Exact elapsed time</span></article>
         <article class="lab-panel lab-metric"><p class="lab-label">SUBJECTIVE ESTIMATE</p><strong id="lab-subjective">—</strong><span id="lab-uncertainty">Uncertainty —</span><small id="lab-calibration">No synthetic clock calibration</small></article>
         <article class="lab-panel lab-metric"><p class="lab-label">GENERIC ACTIVITY</p><strong id="lab-activity">—</strong><progress id="lab-progress" max="1" value="0"></progress><span id="lab-activity-detail">No activity</span></article>
-        <article class="lab-panel lab-metric"><p class="lab-label">MODEL RESPONSE METRIC</p><strong>N/A</strong><span>world_seconds_per_model_response</span><small>No model calls exist.</small></article>
+        <article class="lab-panel lab-metric"><p class="lab-label">MAIN MODEL RESPONSE METRIC</p><strong id="lab-model-metric">N/A</strong><span>world_seconds_per_model_response</span><small id="lab-model-metric-note">No successful main response samples.</small></article>
+      </section>
+      <section class="lab-panel lab-cognition" aria-labelledby="lab-cognition-heading">
+        <div class="lab-section-title"><div><h2 id="lab-cognition-heading">Interpretation & experience</h2><p class="lab-note">Provider proposals are advisory. Local validation, action execution and experience encoding are separate outcomes. Interpretation is fallible; no internal monologue is shown.</p></div><span id="lab-cognition-status" class="lab-badge">Waiting</span></div>
+        <p id="lab-cognition-scope" class="lab-note">Select a current branch/run.</p><p id="lab-cognition-error" class="lab-note warning" role="status"></p><p id="lab-cognition-availability" class="lab-note">Loading server configuration.</p>
+        <div class="lab-health-grid"><div><span>Main interpretation route</span><strong id="lab-cognition-route">Unavailable</strong></div><div><span>Application-wide budget</span><strong id="lab-cognition-budget">Unavailable</strong></div><div><span>Pending / provider queue</span><strong id="lab-cognition-pending">Unavailable</strong></div><div><span>Optional Decisions</span><strong id="lab-decisions-status">Unavailable</strong></div></div><p id="lab-decisions-metric" class="lab-note">Decisions measurements: N/A.</p><details><summary>Safe configuration, host limits & accounting</summary><pre id="lab-cognition-config">No configuration loaded.</pre></details>
+        <div class="lab-divider"></div><label class="lab-field">Inspected interpretation request<select id="lab-cognition-request"><option value="">No requests for this run</option></select></label>
+        <div class="lab-columns lab-cognition-columns"><div><h3>Actual associated observation</h3><div class="lab-cognition-frame"><img id="lab-cognition-image" alt="Actual first-person frame bound to the selected interpretation request" hidden><p id="lab-cognition-image-empty" class="lab-note">No selected image.</p></div><p id="lab-cognition-frame-note" class="lab-note">A request never substitutes whichever image is latest.</p><details><summary>Filtered context sent for interpretation</summary><p class="lab-note">This allowlisted sensory context is separate from the private source/geometry diagnostics below. Full images are sent privately to the configured provider, not publicly hosted.</p><pre id="lab-cognition-context">No selected context.</pre></details></div>
+          <div><h3>Interpretation · model estimate</h3><p id="lab-cognition-interpretation" class="lab-note">No interpretation.</p><p id="lab-cognition-uncertainty" class="lab-note">Uncertainty N/A.</p><h3>Proposed → validated → executed</h3><pre id="lab-cognition-proposed">No action proposal.</pre><p id="lab-cognition-action" class="lab-note">No local action outcome.</p><p class="lab-note">“Started / queued” means a local action began or a capture intention was queued. It does not prove the physical action completed or its intended outcome occurred.</p><h3>Encoding outcome</h3><p id="lab-cognition-encoding" class="lab-note">No encoding outcome.</p><details><summary>Request/result timing, usage & cost basis</summary><pre id="lab-cognition-metadata">No selected request.</pre></details></div></div>
+        <div class="lab-divider"></div><h3>Admitted real experiences · selected world</h3><p class="lab-note">Only successfully admitted records appear here. These are fallible perceived interpretations with original provenance, separate from diagnostics and the experiment-only TEST STUB harness. An intention is not a completed action.</p><div id="lab-real-experiences" class="lab-experiences"><p class="lab-note">No real experience records loaded.</p></div>
       </section>
       <section class="lab-panel lab-attention" aria-labelledby="lab-attention-heading">
-        <div class="lab-section-title"><div><h2 id="lab-attention-heading">Hearing & selective attention</h2><p class="lab-note">Local sensor and motor decisions. Hearing a sound or obtaining an image does not identify its source or encode personal experience.</p></div><span id="lab-attention-status" class="lab-badge">Waiting</span></div>
+        <div class="lab-section-title"><div><h2 id="lab-attention-heading">Hearing & selective attention</h2><p class="lab-note">Local sensor and motor decisions. Hearing or capturing alone does not identify a source or encode personal experience; interpretation and admission have separate gates above.</p></div><span id="lab-attention-status" class="lab-badge">Waiting</span></div>
         <p id="lab-attention-scope" class="lab-note">Select a current branch/run.</p><p id="lab-attention-error" class="lab-note warning" role="status"></p>
         <div class="lab-columns">
           <div><h3>Received evidence · SIMULATED HEARING</h3><p id="lab-heard-summary" class="lab-note">No received sound in this run.</p><p id="lab-reflex-summary" class="lab-note">No reflex evidence loaded.</p><details><summary>Receiver-facing sound evidence</summary><pre id="lab-heard-json">No received evidence.</pre></details><details class="lab-attention-truth"><summary>Private source & propagation truth</summary><p class="lab-note">Exact positions, source identities and barriers are developer measurements. They are excluded from the received evidence above. Recorded traces may lag the current state while the writer flushes.</p><pre id="lab-sound-truth">No recorded source evidence loaded.</pre></details></div>
@@ -60,7 +70,7 @@ export function mountDashboard(): void {
         <details><summary>Experiment sound fixture</summary><p class="lab-note">Emit a labelled TEST STUB world sound only in the selected experiment. It propagates through the physical scene before the reflex and attention evaluate it. Coordinates below are private room units; strength and onset are normalized 0–1 game values. A paused experiment must step or resume to apply the queued emission.</p><button id="lab-sound-place" class="lab-button text experiment">Place source 1 unit ahead of the listening pose</button><div class="lab-inline"><label class="lab-field">Source X<input id="lab-sound-x" type="number" min="-20" max="20" step="0.1" value="0"></label><label class="lab-field">Source Y<input id="lab-sound-y" type="number" min="-20" max="20" step="0.1" value="2.4"></label><label class="lab-field">Source Z<input id="lab-sound-z" type="number" min="-20" max="20" step="0.1" value="0"></label><label class="lab-field">Strength<input id="lab-sound-intensity" type="number" min="0" max="1" step="0.05" value="1"></label><label class="lab-field">Suddenness<input id="lab-sound-suddenness" type="number" min="0" max="1" step="0.05" value="1"></label><label class="lab-field">Private fixture ID<input id="lab-sound-id" value="test-cue" maxlength="100" pattern="[A-Za-z0-9_-]+"></label><button id="lab-sound-emit" class="lab-button secondary experiment">Emit experiment sound</button></div><p class="lab-note">Repeat the same perceived cue to inspect habituation. Change its received strength, direction or onset to test renewed attention; changing only its private ID does not make it perceptually novel.</p></details>
       </section>
       <section class="lab-panel lab-vision" aria-labelledby="lab-vision-heading">
-        <div class="lab-section-title"><div><h2 id="lab-vision-heading">Virtual Eyes</h2><p class="lab-note">Manual and bounded automatic captures from Lumi’s physical viewpoint. Sensor evidence can inform local attention; no semantic interpretation or personal memory is created.</p></div><span id="lab-vision-status" class="lab-badge">No capture</span></div>
+        <div class="lab-section-title"><div><h2 id="lab-vision-heading">Virtual Eyes</h2><p class="lab-note">Manual and bounded automatic captures from Lumi’s physical viewpoint. A capture alone does not establish attention, interpretation or encoding. Only eligible selected observations enter the enabled cognition path.</p></div><span id="lab-vision-status" class="lab-badge">No capture</span></div>
         <p id="lab-vision-scope" class="lab-note">Select a current branch/run.</p>
         <div class="lab-vision-columns">
           <div>
@@ -101,7 +111,7 @@ export function mountDashboard(): void {
       <section class="lab-panel lab-hashes" aria-label="Canonical hashes"><h2>Canonical evidence</h2><div><span>Simulation state</span><code id="lab-state-hash">—</code></div><div><span>Deterministic events</span><code id="lab-event-hash">—</code></div><div><span>Complete runtime</span><code id="lab-runtime-hash">—</code></div><p class="lab-note">Runtime evidence includes control and scheduler state. Hashes are verification data, not character knowledge.</p></section>
       <section class="lab-panel" aria-labelledby="lab-timeline-heading"><div class="lab-section-title"><div><h2 id="lab-timeline-heading">Causal timeline</h2><p class="lab-note">Every record and link stays inside the selected world, branch and run.</p></div><button id="lab-export" class="lab-button">Export diagnostic ZIP</button></div>
         <form id="lab-filters" class="lab-filters"><label class="lab-field">Run<select id="lab-filter-run"></select></label><label class="lab-field">Category<select id="lab-category"><option value="">All four categories</option><option>WORLD_TRUTH</option><option>FOX_EXPERIENCE</option><option>PRIVATE_SENSOR</option><option>OPERATIONAL_REPLAY</option></select></label><label class="lab-field">Event class<input id="lab-event-type" placeholder="REFLEX_STATE"></label><label class="lab-field">Component<input id="lab-component" placeholder="reflex"></label><label class="lab-field">Severity<select id="lab-severity"><option value="">All severities</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></label><label class="lab-field">Causal identifier<input id="lab-causal" placeholder="simulation:9"></label><label class="lab-field">From tick<input id="lab-from" type="number" min="0" step="1" placeholder="Start"></label><label class="lab-field">To tick<input id="lab-to" type="number" min="0" step="1" placeholder="Latest"></label><label class="lab-field lab-search">Search<input id="lab-search" type="search" placeholder="Event, outcome or measured factors"></label><button class="lab-button secondary" type="submit">Apply filters</button><button id="lab-clear-filters" class="lab-button text" type="button">Clear</button></form>
-        <div class="lab-category-key"><span>WORLD_TRUTH · authoritative facts</span><span>FOX_EXPERIENCE · eligible encoded TEST STUB</span><span>PRIVATE_SENSOR · gate / sensor traces</span><span>OPERATIONAL_REPLAY · developer evidence</span></div>
+        <div class="lab-category-key"><span>WORLD_TRUTH · authoritative facts</span><span>FOX_EXPERIENCE · trusted real admission / experiment TEST STUB</span><span>PRIVATE_SENSOR · gate / sensor traces</span><span>OPERATIONAL_REPLAY · developer evidence</span></div>
         <p id="lab-timeline-coverage" class="lab-note"></p><div class="lab-table-scroll"><table class="lab-table"><thead><tr><th>Tick / time</th><th>Source category</th><th>Event / outcome</th><th>Component / severity</th><th>Scoped references & measured data</th></tr></thead><tbody id="lab-timeline"></tbody></table></div>
       </section><footer class="lab-footer"><span>LIVE stays at 1×. Experiment state and experiences never flow back to LIVE.</span><a href="/">Return to Lumi’s room</a></footer>
     </main>`;
@@ -122,6 +132,9 @@ export function mountDashboard(): void {
   const attentionGate = new VisionRequestGate();
   let attentionView: AttentionView | null = null, attentionTrace: TimelineRecord[] = [], attentionScope = '', attentionLoading = false, attentionError = '', autoCaptureIdentity = '';
   let attentionAbort: AbortController | undefined;
+  const cognitionGate = new VisionRequestGate();
+  let cognitionView: CognitionView | null = null, cognitionScope = '', cognitionLoading = false, cognitionError = '', inspectedCognitionRequest = '';
+  let cognitionAbort: AbortController | undefined;
   const message = (value: string, error = false) => { text('lab-message', value); el('lab-message').classList.toggle('error', error); };
   const active = (): ActiveTarget => {
     if (!current) throw new Error('Select a branch first.');
@@ -147,6 +160,72 @@ export function mountDashboard(): void {
     // Applying selection is independent of rebuilding options: a restore response can
     // arrive after an overlapping refresh has already populated the new run.
     select.value = values.some(item => item.value === preferred) ? preferred : values[0]?.value ?? '';
+  }
+  function renderCognition() {
+    const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
+    if (identity !== cognitionScope) {
+      cognitionAbort?.abort(); cognitionAbort = undefined; cognitionLoading = false;
+      cognitionScope = identity; cognitionGate.select(target); cognitionView = null; cognitionError = ''; inspectedCognitionRequest = '';
+    }
+    const view = cognitionView, main = view?.configuration.main, decisions = view?.configuration.decisions, budget = record(view?.budget), providers = record(view?.providers);
+    const metric = modelResponseMetric(view?.worldSecondsPerModelResponse);
+    text('lab-model-metric', metric);
+    text('lab-model-metric-note', view?.metricDefinition ?? 'N/A without successful main interpretation responses.');
+    text('lab-cognition-scope', target ? `${target.worldId} / ${target.branchId} / ${target.runId} · request evidence scoped here; provider capacity and spending are application-wide.` : 'No current branch/run selected.');
+    text('lab-cognition-error', cognitionError ? `${cognitionError}${view ? ' Showing the last successfully loaded evidence for this run.' : ''}` : '');
+    text('lab-cognition-status', cognitionError ? 'Status unavailable' : !main ? 'Waiting' : !main.enabled ? 'Main disabled' : !main.available ? 'Main unavailable' : view?.pending ? `${view.pending} pending` : 'Main enabled');
+    el('lab-cognition-status').classList.toggle('warning', !!cognitionError || !!main?.enabled && !main.available);
+    text('lab-cognition-availability', !main ? 'Configuration unavailable.' : !main.enabled ? 'Main interpretation is disabled. Existing local behavior and admitted experiences remain available. Enable only through server configuration; credentials alone do not enable inference.' : !main.available ? 'Main interpretation is enabled but its credential/configuration is unavailable. Local behavior continues.' : 'Main interpretation is enabled for eligible selected observations. Provider failures, latency or exhausted budget return to local behavior.');
+    const providerMode = typeof providers.mode === 'string' ? providers.mode : null;
+    text('lab-cognition-route', main ? `${providerMode ? `${providerMode} · configured route ` : 'OpenRouter · '}${main.model}` : 'Unavailable');
+    text('lab-cognition-budget', typeof budget.accountedUsd === 'number' ? `$${format(budget.accountedUsd, 6)} accounted / $${format(budget.ceilingUsd, 2)} ceiling · ${format(budget.pending, 0)} reserved pending · ${format(budget.unknown, 0)} unknown-usage requests` : budget.status === 'unavailable' ? 'Budget ledger unavailable · paid admission fails closed' : view ? 'Not initialized while providers are disabled' : 'Unavailable');
+    text('lab-cognition-pending', view ? `${view.pending} logical requests · ${format(providers.pending, 0)} provider active / ${format(providers.queued, 0)} queued${view.lastFailure ? ` · last controller failure: ${view.lastFailure}` : ''}` : 'Unavailable');
+    text('lab-decisions-status', view && decisions ? `${view.decisions.status} · OpenAI ${decisions.model}${decisions.enabled && !decisions.available ? ' · unavailable' : ''} · LIVE ${view.decisions.liveEnabled ? 'enabled' : 'disabled'}` : 'Unavailable');
+    const request = selectCognitionRequest(view?.requests ?? [], inspectedCognitionRequest);
+    inspectedCognitionRequest = request?.requestId ?? '';
+    options(el<HTMLSelectElement>('lab-cognition-request'), view?.requests.length ? view.requests.map(item => ({ value: item.requestId, label: `Tick ${item.requestedTick} · ${item.provider} / ${item.model} · ${item.outcome ?? item.status} · ${item.requestId}` })) : [{ value: '', label: 'No requests for this run' }], inspectedCognitionRequest);
+    el<HTMLSelectElement>('lab-cognition-request').disabled = !request;
+    const saved = request ? current?.cognition?.requests.find(item => item.request.requestId === request.requestId) : null;
+    const purpose = request?.purpose ?? saved?.request.purpose ?? null;
+    const decisionSamples = view?.requests.filter(item => (item.purpose ?? current?.cognition?.requests.find(savedItem => savedItem.request.requestId === item.requestId)?.request.purpose) === 'decisions_evaluation' && item.metrics) ?? [];
+    text('lab-decisions-metric', decisionSamples.length ? `Decisions: ${decisionSamples.length} recorded evaluation result(s) in the displayed window. Its latency, confidence/uncertainty and cost belong to those requests; the main-model response metric excludes them.` : 'Decisions measurements: N/A · no evaluation samples in the displayed window. It does not gate reflexes or ordinary main interpretation.');
+    text('lab-cognition-config', view ? JSON.stringify({ configuration: view.configuration, providerCapacity: { pending: providers.pending, queued: providers.queued }, budget: view.budget, decisions: view.decisions, mainMetricDefinition: view.metricDefinition, controllerLastFailure: view.lastFailure }, null, 2) : 'No safe configuration loaded.');
+    text('lab-cognition-interpretation', request?.interpretation ?? (request ? `No successful interpretation · ${request.outcome ?? request.status}.` : 'No request selected.'));
+    text('lab-cognition-uncertainty', typeof request?.uncertainty === 'number' ? `Model uncertainty ${format(request.uncertainty, 3)} (0–1 estimate; not calibrated accuracy).` : 'Uncertainty N/A.');
+    text('lab-cognition-proposed', request?.proposedAction ? JSON.stringify(request.proposedAction, null, 2) : 'No normalized action proposal.');
+    text('lab-cognition-action', cognitionActionLabel(request?.action ?? null));
+    text('lab-cognition-encoding', request?.encoding ? `${request.encoding.status}: ${request.encoding.reason}${request.encoding.experienceId === null ? '' : ` · experience ${request.encoding.experienceId}`}` : 'No encoding outcome. A response or action proposal alone does not admit experience.');
+    text('lab-cognition-metadata', request ? JSON.stringify({ requestId: request.requestId, purpose, provider: request.provider, model: request.model, status: request.status, outcome: request.outcome, observationId: request.observationId, captureId: request.captureId ?? request.observationId, frameHash: request.frameHash, capturedTick: request.capturedTick, attentionTick: request.attentionTick, requestedTick: request.requestedTick, resultTick: request.resultTick, metrics: request.metrics, action: request.action, encoding: request.encoding }, null, 2) : 'No selected request.');
+    text('lab-cognition-context', saved ? JSON.stringify(saved.request.selection.context, null, 2) : 'The selected request context is not present in the current bounded state view. No private-truth substitute is supplied.');
+    const image = el<HTMLImageElement>('lab-cognition-image');
+    if (request && target) {
+      try {
+        const url = cognitionFrameUrl(target, request);
+        if (image.getAttribute('src') !== url) { image.hidden = false; el('lab-cognition-image-empty').hidden = true; image.src = url; }
+        text('lab-cognition-frame-note', `Bound observation ${request.observationId} · original capture tick ${request.capturedTick} · attention tick ${request.attentionTick} · frame hash ${request.frameHash}. ${request.metrics ? `${request.metrics.attempts} provider attempt(s).` : 'Dispatch/result not yet confirmed.'} A newer capture is never substituted.`);
+      } catch (error) { image.removeAttribute('src'); image.hidden = true; el('lab-cognition-image-empty').hidden = false; text('lab-cognition-image-empty', error instanceof Error ? error.message : 'Associated frame unavailable.'); }
+    } else { image.removeAttribute('src'); image.hidden = true; el('lab-cognition-image-empty').hidden = false; text('lab-cognition-image-empty', 'No selected request image.'); text('lab-cognition-frame-note', 'Only the specific recorded capture associated with a request is shown.'); }
+    const experiences = current?.realExperiences?.slice(-8) ?? [], list = el('lab-real-experiences');
+    list.replaceChildren();
+    for (const experience of experiences) {
+      const card = document.createElement('article'), heading = document.createElement('h3'), content = document.createElement('p'), provenance = document.createElement('p'), details = document.createElement('details'), summary = document.createElement('summary'), pre = document.createElement('pre');
+      card.className = 'lab-experience'; content.className = 'lab-note'; provenance.className = 'lab-note';
+      heading.textContent = `Experience ${experience.id} · encoded tick ${experience.encodedTick}`; content.textContent = experience.interpretation;
+      provenance.textContent = `${experience.provenance} · ${experience.identity.mode} origin ${experience.identity.worldId}/${experience.identity.branchId}/${experience.identity.runId} · uncertainty ${format(experience.uncertainty, 3)}. ${cognitionActionLabel(experience.actionOutcome)}`;
+      summary.textContent = 'Admission provenance and original timing'; pre.textContent = JSON.stringify(experience, null, 2); details.append(summary, pre); card.append(heading, content, provenance, details); list.append(card);
+    }
+    if (!experiences.length) { const note = document.createElement('p'); note.className = 'lab-note'; note.textContent = 'No admitted real experiences in this selected world. Diagnostic records and TEST STUB harness entries are not shown as real autobiography.'; list.append(note); }
+  }
+  async function loadCognition() {
+    if (!current || cognitionLoading || stopped) return;
+    const token = cognitionGate.begin(), controller = new AbortController(); cognitionAbort = controller; cognitionLoading = true;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const view = await request<CognitionView>(`/api/cognition?${new URLSearchParams({ ...token.target })}`, undefined, controller.signal);
+      if (!cognitionGate.accepts(token) || stopped) return;
+      validateCognitionViewScope(view, token.target); cognitionView = view; cognitionError = ''; renderCognition();
+    } catch (error) { if (cognitionGate.accepts(token) && !stopped) { cognitionError = error instanceof Error ? error.message : 'Cognition evidence unavailable.'; renderCognition(); } }
+    finally { clearTimeout(timeout); if (cognitionGate.accepts(token)) { cognitionLoading = false; cognitionAbort = undefined; } }
   }
   function renderAttention() {
     const target = current ? active() : null, identity = target ? visionScopeKey(target) : '';
@@ -248,7 +327,7 @@ export function mountDashboard(): void {
     if (visionError) text('lab-vision-operation', `${visionError} Use Refresh captures to retry the status query.`);
     else if (latest?.error) text('lab-vision-operation', `${latest.status}: ${latest.error}`);
     else if (latest && ['pending', 'queued'].includes(latest.status)) text('lab-vision-operation', `Capture ${latest.status} for tick ${latest.tick}. Simulation continues independently.`);
-    else if (latest?.status === 'success') text('lab-vision-operation', `Capture complete at ${latest.completedAt}; ${format(latest.durationMs, 0)} ms. No experience was encoded.`);
+    else if (latest?.status === 'success') text('lab-vision-operation', `Capture complete at ${latest.completedAt}; ${format(latest.durationMs, 0)} ms. Capture production alone does not encode experience; consult the separate interpretation/admission outcome.`);
     const observation = visionView?.observation;
     const expired = !!observation && (scene?.revision !== observation.dynamicRevision || (current?.tick ?? 0) - observation.tick > 300);
     text('lab-vision-target-note', observation ? expired ? 'Target context expired or its physical scene changed. Request a fresh capture.' : `Evidence from tick ${observation.tick}. Look toward the captured coarse bearing, adjusted for Lumi’s own turning. Targets expire after 300 world ticks; a new capture may show that the shape has gone.` : 'A successful capture is required for observation-scoped targeting.');
@@ -269,7 +348,7 @@ export function mountDashboard(): void {
       if (!visionGate.accepts(token) || stopped) return;
       validateCaptureViewScope(result, token.target); visionView = result; visionError = ''; visionDirty = false;
       visionDeadline.observe(result.latest);
-      renderAttention(); renderVision();
+      renderCognition(); renderAttention(); renderVision();
     } catch (error) {
       if (visionGate.accepts(token) && !stopped) { visionDirty = false; visionError = error instanceof Error ? error.message : 'Visual sensor unavailable.'; renderVision(); }
     } finally {
@@ -282,7 +361,7 @@ export function mountDashboard(): void {
     if (!current) {
       document.querySelectorAll<HTMLButtonElement>('.experiment, .vision-control, #lab-save, #lab-fork, #lab-export, #lab-reopen').forEach(button => { button.disabled = true; });
       text('lab-state', 'Selected branch unavailable');
-      renderAttention(); renderVision();
+      renderCognition(); renderAttention(); renderVision();
       return;
     }
     const c = current, health = record(c.logging), experiment = c.mode === 'EXPERIMENT';
@@ -334,7 +413,7 @@ export function mountDashboard(): void {
       renderedIdentity = identity;
     }
     if (document.activeElement !== el('lab-speed')) el<HTMLInputElement>('lab-speed').value = String(c.speed);
-    renderAttention(); renderVision();
+    renderCognition(); renderAttention(); renderVision();
   }
   function filters(): Record<string, string> {
     const values: Record<string, string> = { runId: val('lab-filter-run') || current?.runId || '', limit: '150' };
@@ -378,7 +457,7 @@ export function mountDashboard(): void {
         return;
       }
       options(branches, summaries.map(item => ({ value: key(item), label: `${item.mode} · ${item.branchId} · ${item.worldId}` })), selected);
-      render(); await Promise.all([loadTimeline(), loadVision(showMessage), loadAttention()]); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
+      render(); await Promise.all([loadTimeline(), loadVision(showMessage), loadAttention(), loadCognition()]); if (!catalogLoaded) await loadCatalog(); if (showMessage) message('Selected branch evidence refreshed.');
     } catch (error) { if (generation === refreshGeneration) message(error instanceof Error ? error.message : 'Laboratory unavailable', true); }
   }
   async function loadCatalog() {
@@ -520,12 +599,14 @@ export function mountDashboard(): void {
     lastExports.set(`${key(target)}/${selectedFilters.runId}`, `${result.manifest.evidence_status} · ${result.manifest.evidence_status === 'COMPLETE' ? 'replay verified' : 'evidence gaps; replay not certified'}`);
   }));
   bind('lab-refresh', () => { catalogLoaded = false; return refresh(true); });
+  el<HTMLSelectElement>('lab-cognition-request').onchange = () => { inspectedCognitionRequest = val('lab-cognition-request'); renderCognition(); };
+  el<HTMLImageElement>('lab-cognition-image').onerror = () => { el<HTMLImageElement>('lab-cognition-image').hidden = true; el('lab-cognition-image-empty').hidden = false; text('lab-cognition-image-empty', 'This exact associated frame is evicted or unavailable. Its original identity and recorded interpretation remain; no newer image is substituted.'); };
   el<HTMLImageElement>('lab-auto-image').onerror = () => { el<HTMLImageElement>('lab-auto-image').hidden = true; el('lab-auto-image-empty').hidden = false; text('lab-auto-image-empty', 'This associated image is no longer retained or is unavailable. Its captured tick and recorded result remain visible.'); };
-  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void Promise.all([loadTimeline(), loadVision(), loadAttention()]); message('Selected branch changed. Controls now target this branch’s current run.'); };
+  branches.onchange = () => { selected = branches.value; filterGeneration++; el<HTMLSelectElement>('lab-filter-run').replaceChildren(); el<HTMLSelectElement>('lab-checkpoint').replaceChildren(); el<HTMLInputElement>('lab-causal').value = ''; render(); void Promise.all([loadTimeline(), loadVision(), loadAttention(), loadCognition()]); message('Selected branch changed. Controls now target this branch’s current run.'); };
   el<HTMLFormElement>('lab-filters').onsubmit = event => { event.preventDefault(); void loadTimeline(); render(); };
   bind('lab-clear-filters', () => { for (const id of ['lab-category', 'lab-component', 'lab-severity', 'lab-causal', 'lab-from', 'lab-to', 'lab-search', 'lab-event-type']) el<HTMLInputElement | HTMLSelectElement>(id).value = ''; if (current) el<HTMLSelectElement>('lab-filter-run').value = current.runId; void loadTimeline(); render(); });
   async function poll() { if (!busy) await refresh(); if (!stopped) setTimeout(() => { void poll(); }, 1200); }
-  window.addEventListener('pagehide', () => { stopped = true; visionAbort?.abort(); attentionAbort?.abort(); });
+  window.addEventListener('pagehide', () => { stopped = true; visionAbort?.abort(); attentionAbort?.abort(); cognitionAbort?.abort(); });
   window.addEventListener('pageshow', event => { if (event.persisted && stopped) { stopped = false; void poll(); } });
   void refresh(true).then(() => { if (!stopped) setTimeout(() => { void poll(); }, 1200); });
 }
