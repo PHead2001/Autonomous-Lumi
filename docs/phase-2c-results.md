@@ -1,6 +1,6 @@
 # Phase 2c verification results
 
-Offline implementation and an actual-renderer **MOCK provider** workflow have been verified. The latest supplied full offline run passed **231 tests**, lint and build; real Chromium attention checks passed **2/2**. Chrome inspected the normal dashboard and exported a COMPLETE replayable experiment bundle. **Actual OpenRouter image capability, positive provider-backed temporary LIVE admission/restart and the optional Decisions comparison remain unverified.** Mock evidence does not satisfy those acceptance requirements. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) is open and unmerged with these paid-acceptance gaps explicit. Hosted review identified cost-accounting and checkpoint-capacity defects; the cost fix is resolved, while capacity review remains pending as detailed below.
+Offline implementation and an actual-renderer **MOCK provider** workflow have been verified. The latest supplied full offline run passed **231 tests**, lint and build; real Chromium attention checks passed **2/2**. Chrome inspected the normal dashboard and exported a COMPLETE replayable experiment bundle. **Actual OpenRouter image capability, positive provider-backed temporary LIVE admission/restart and the optional Decisions comparison remain unverified.** Mock evidence does not satisfy those acceptance requirements. [Draft PR #8](https://github.com/PHead2001/Autonomous-Lumi/pull/8) is open and unmerged with these paid-acceptance gaps explicit. Hosted review identified cost-accounting and checkpoint-capacity defects; both are fixed and resolved. Targeted hosted Codex re-review of `da6b1b2` is clean (`has_any_findings: false`, `has_unresolved_findings: false`).
 
 See [Multimodal interpretation and experience](multimodal-experience.md) for configuration, budgets, admission, replay/recovery and exact opt-in commands.
 
@@ -18,11 +18,11 @@ The actual attention/image check measured decoded RGB difference approximately *
 
 Independent Astra review/fix/re-review accepted the queued-result delivery and selected 256→512 visual follow-up boundaries. A model-head action that incorrectly granted developer priority was fixed and passed **37 affected tests**, with clean targeted re-review. A subsequent provider world-scope fix passed **13 focused tests** and scoped lint. The CLI acceptance correction passed **9 host/verification tests**, TypeScript and lint, with clean targeted re-review. The latest restart/configured-world-cadence correction passed **8/8 host tests**, lint and TypeScript, with clean targeted re-review. The earlier full-suite result and these later affected checks are distinct evidence, rather than a claimed fresh full-suite rerun.
 
-## Hosted review corrections in progress
+## Hosted review corrections
 
 The hosted P2 cost-overage finding was fixed and pushed in `808a870`; its thread is resolved. **16 provider tests**, lint and TypeScript passed, and independent boundary re-review is clean. Reported actual overage remains accounted rather than being hidden by an admission reservation; the application ceiling is not a provider-enforced billing cap.
 
-The hosted P1 checkpoint-capacity fix passed **76 affected tests**, owned ESLint and build including TypeScript, with **clean independent Astra review**. Hosted re-review/thread closure remains pending; hosted approval is not claimed. The old compact-size guard admitted a counterexample of **1,390,041 compact bytes** whose actual stored envelope was **2,145,509 bytes**, above the **2,097,152-byte** limit. The replacement measures the actual pretty-printed recovery/named envelopes and reserves future activity, synthetic, motor/sensor and terminal-delivery growth. Supplied corrected fixtures measured **1,743,094 actual recovery bytes** for 221 real experiences with a **2,042,291-byte derived budget**, and **1,972,720 named-checkpoint bytes** after LIVE→EXPERIMENT fork with 256 synthetic records and 10,000 activity milestones. Maximum escaped terminal-result and ordered-delivery fixtures measured **23,886 / 12,002 bytes**, below their individual **32 KiB** allowances; combined growth was **35,888 bytes**, below **64 KiB**. These are focused capacity fixtures and affected checks, not a fresh full-suite result.
+The hosted P1 checkpoint-capacity fix passed **76 affected tests**, owned ESLint and build including TypeScript, with **clean independent Astra review**. Both initial hosted findings are resolved. Targeted hosted Codex re-review of `da6b1b2` completed with no findings and no unresolved findings; independent Astra re-reviews are also clean. The old compact-size guard admitted a counterexample of **1,390,041 compact bytes** whose actual stored envelope was **2,145,509 bytes**, above the **2,097,152-byte** limit. The replacement measures the actual pretty-printed recovery/named envelopes and reserves future activity, synthetic, motor/sensor and terminal-delivery growth. Supplied corrected fixtures measured **1,743,094 actual recovery bytes** for 221 real experiences with a **2,042,291-byte derived budget**, and **1,972,720 named-checkpoint bytes** after LIVE→EXPERIMENT fork with 256 synthetic records and 10,000 activity milestones. Maximum escaped terminal-result and ordered-delivery fixtures measured **23,886 / 12,002 bytes**, below their individual **32 KiB** allowances; combined growth was **35,888 bytes**, below **64 KiB**. These are focused capacity fixtures and affected checks, not a fresh full-suite result.
 
 ## Actual renderer plus explicitly MOCK interpretation
 
@@ -71,7 +71,7 @@ Generated bundles, images, logs and reports are local ignored artifacts. They do
 
 ## Paid preflight and remaining acceptance gaps
 
-The actual paid preflight reported **unavailable**, `actualProviderAcceptance: false`, a US$1 ceiling and **zero paid calls**, before renderer/provider execution. Report: `diagnostics/phase2c-paid-preflight-20261029/verification.json`. Its message requires main enablement and `OPENROUTER_API_KEY` to be configured locally; credentials alone do not enable calls.
+The actual paid preflight reported **unavailable**, `actualProviderAcceptance: false`, a US$1 ceiling and **zero paid calls**, before renderer/provider execution. Report: `diagnostics/phase2c-paid-preflight-20261029/verification.json`. Its message requires main enablement and `OPENROUTER_API_KEY` to be configured locally; credentials alone do not enable calls. The latest supplied configuration status remains `mainEnabled: false` and `mainAvailable: false`, with zero paid calls; local configuration is still being edited.
 
 With the local main flag/key configured, the remaining explicit check is:
 
@@ -92,7 +92,7 @@ The harness bounds paid work to at most six main calls covering five image cases
 | `2c-4` actual provider-backed temporary LIVE admission/restart | **UNVERIFIED**; mock experiment encoding is not a substitute |
 | Optional Decisions comparison | **UNVERIFIED**; no benefit/adoption conclusion, normal LIVE use remains disabled |
 | Original viewer browser regression | Upright avatar, walking/idle and advancing-world reconnect observed; audio unverified and no reliable new door/ear transient capture |
-| Final independent/hosted review | Core/CLI and restart/cadence targeted re-reviews clean; hosted P2 cost fix resolved with clean independent re-review. Hosted P1 capacity fix passed 76 affected tests, owned lint/build and independent Astra review; hosted re-review/thread closure pending. Draft PR #8 open/unmerged |
+| Final independent/hosted review | Core/CLI and restart/cadence targeted re-reviews clean; hosted P2 cost fix resolved with clean independent re-review. Hosted P1 capacity fix passed 76 affected tests, owned lint/build and independent Astra review. Both hosted findings are resolved; targeted Codex re-review of `da6b1b2` is clean with no findings or unresolved findings. Draft PR #8 open/unmerged |
 
 ## Material limits
 
