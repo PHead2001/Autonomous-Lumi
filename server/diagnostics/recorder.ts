@@ -3,7 +3,7 @@ import { Gunzip } from 'fflate';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { dirname, join, resolve, sep } from 'node:path';
-import type { Checkpoint, DeterministicEvent, OrderedInput } from '../simulation.js';
+import { validateCommand, type Checkpoint, type DeterministicEvent, type OrderedInput } from '../simulation.js';
 import {validateRuntimeCheckpoint,validateRuntimeOperation,type RuntimeCheckpoint,type RuntimeOperation} from '../branch-runtime.js';
 import {assertOwnedPath} from '../checkpoint-storage.js';
 type SimulationCheckpoint = Checkpoint;
@@ -66,6 +66,9 @@ const dataKeys = new Set([
   'provenance', 'attended', 'encoded', 'observationId', 'cue', 'valueSeconds', 'estimateSeconds', 'uncertaintySeconds', 'calibrated', 'rate', 'bias',
   'activityId', 'cursor', 'total', 'progress', 'completed', 'completionCount', 'paused', 'speed', 'ticks', 'remainingTicks', 'controlSequence', 'action', 'checkpointHash',
   'sensed','experienceId','observedSeconds','totalTicks','control','kind','historyId','generation','fallback','checkpointAgeMs','enabled',
+  'fromSchema','toSchema','actionId','yaw','pitch','targetYaw','targetPitch','sceneRevision','illumination','fixture','fixtureColor','doorOpenRadians','frameHash','capturedTick',
+  'captureId','stateVersion','dynamicRevision','renderRevision','captureReason','width','height','bodyHeading','headYaw','headPitch','eyeX','eyeY','eyeZ','horizontalFovDegrees','backend','webglRenderer','visibleCount','validationTick','durationMs','completionUtc',
+  'format','chromium','webglVendor','webglVersion',
 ]);
 const safeLabel = (value: string) => value.replace(/[^A-Za-z0-9_. :/-]/g, '_').slice(0, 160);
 export function sanitizeData(data: Record<string, Primitive> = {}): Record<string, Primitive> {
@@ -77,6 +80,20 @@ export function sanitizeData(data: Record<string, Primitive> = {}): Record<strin
     else if (typeof value === 'string') result[key] = safeLabel(value);
   }
   return result;
+}
+
+// A branch's recorders share retention ownership. Serialize their filesystem
+// publication, scans and readers: a scan must never stat another writer's
+// disappearing .tmp file or hold its metadata open during a Windows rename.
+// Other branches and the authoritative simulation do not acquire this lock.
+const storageQueues = new Map<string, Promise<void>>();
+async function withStorage<T>(runDirectory:string,work:()=>Promise<T>):Promise<T> {
+  const directory=resolve(dirname(runDirectory)),key=process.platform==='win32'?directory.toLowerCase():directory;
+  const previous=storageQueues.get(key)??Promise.resolve();let release!:()=>void;
+  const gate=new Promise<void>(done=>{release=done;}),tail=previous.then(()=>gate);storageQueues.set(key,tail);
+  await previous;
+  try{return await work();}
+  finally{release();if(storageQueues.get(key)===tail)storageQueues.delete(key);}
 }
 
 /** Observational writer. It never throws from record/capture or consumes simulation IDs/randomness. */
@@ -145,7 +162,7 @@ export class FlightRecorder {
   }
   private gap(message: string): void { if (!this.gaps.includes(message) && this.gaps.length < 32) this.gaps.push(message); }
   /** Preparation is a failable lifecycle boundary; ordinary observational flushes remain nonthrowing. */
-  async prepare():Promise<void>{await this.prepareDirectory();await this.flush();if(this.counters.writerFailures)throw new Error('Diagnostic writer initialization failed; replacement was not activated');}
+  async prepare():Promise<void>{await this.flush();if(this.counters.writerFailures)throw new Error('Diagnostic writer initialization failed; replacement was not activated');}
   private async prepareDirectory():Promise<void>{await mkdir(this.ownedRoot,{recursive:true});await assertOwnedPath(this.ownedRoot,this.runDirectory);await mkdir(this.runDirectory,{recursive:true});await assertOwnedPath(this.ownedRoot,this.runDirectory);}
   setLoggingMode(mode:LoggingMode,compressClosed=this.compressClosed):void{if(!['off','default','verbose'].includes(mode)||typeof compressClosed!=='boolean')throw new Error('Invalid logging mode');this.loggingMode=mode;this.compressClosed=compressClosed;if(mode==='off')this.gap('logging_disabled');}
   private enabled():boolean{if(this.closed)return false;if(this.loggingMode==='off'){this.disabledRecords++;this.gap('logging_disabled');return false;}return true;}
@@ -183,7 +200,7 @@ export class FlightRecorder {
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
     try {
-    const command = input.command.type === 'slam' ? { type: 'slam' as const } : { type: 'invalid' as const, reason: input.command.reason };
+    const command = validateCommand(input.command,true);
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
       schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
@@ -316,7 +333,9 @@ export class FlightRecorder {
     this.globalHealth={globalRetainedBytes:total,globalRetainedRuns:count,globalCapExceeded:count>this.limits.retainedRuns || total>this.limits.globalDiskBytes,globalAccountingComplete:accountingComplete,protectedActiveRuns:runs.filter(r=>r.active).length};
     if(this.globalHealth.globalCapExceeded)this.gap('global_retention_cap_blocked_by_active_or_unowned_data');
   }
-  private async writeBatch(throughSequence=Number.MAX_SAFE_INTEGER): Promise<void> {
+  private writeBatch(throughSequence=Number.MAX_SAFE_INTEGER):Promise<void>{return withStorage(this.runDirectory,()=>this.writeBatchLocked(throughSequence));}
+  /** Called only while this branch's storage serializer is held. */
+  private async writeBatchLocked(throughSequence=Number.MAX_SAFE_INTEGER): Promise<void> {
     if (!this.queue.length && !this.dirtyCheckpoint && this.persistedHealth === JSON.stringify(this.health())) return;
     const count=this.queue.findIndex(entry=>entry.sequence>throughSequence);
     const batch=this.queue.splice(0,count<0?this.queue.length:count),batchBytes=batch.reduce((sum,entry)=>sum+Buffer.byteLength(entry.line),0);
@@ -366,7 +385,7 @@ export class FlightRecorder {
   }
   async close(): Promise<void> {
     if (this.closed) return; clearInterval(this.timer); if(this.snapshotFinished)await this.snapshotFinished;await this.flush(); if (this.queue.length || this.dirtyCheckpoint) await this.flush(); this.closed = true;
-    try {if(this.compressClosed&&this.files.at(-1)&&!this.files.at(-1)!.name.endsWith('.gz')){await this.compressFile(this.files.at(-1)!);await this.flush();}await assertOwnedPath(this.ownedRoot,join(this.runDirectory,'_active.json'));await unlink(join(this.runDirectory,'_active.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
+    try {await withStorage(this.runDirectory,async()=>{if(this.compressClosed&&this.files.at(-1)&&!this.files.at(-1)!.name.endsWith('.gz')){await this.compressFile(this.files.at(-1)!);await this.writeBatchLocked();}await assertOwnedPath(this.ownedRoot,join(this.runDirectory,'_active.json'));await unlink(join(this.runDirectory,'_active.json'));});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){this.gap('active_marker_cleanup_failed');}}
   }
   private async compressFile(file:{name:string;bytes:number;records:number}):Promise<void>{
     if(file.name.endsWith('.gz'))return;
@@ -376,7 +395,8 @@ export class FlightRecorder {
   }
 }
 
-export async function readRun(directory: string): Promise<RunSnapshot> {
+export function readRun(directory:string):Promise<RunSnapshot>{return withStorage(directory,()=>readRunLocked(directory));}
+async function readRunLocked(directory: string): Promise<RunSnapshot> {
   const allNames=await readdir(directory);const names = allNames.filter(name => /^events-\d{5}\.jsonl(\.gz)?$/.test(name)).sort();
   let bytes = 0; const records: DiagnosticRecord[] = [],readGaps:string[]=[];
   for (const name of names) {
