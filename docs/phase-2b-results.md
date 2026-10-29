@@ -2,7 +2,7 @@
 
 Current `lumi-attention-v2` corrects the sensory truth leaks found by Claude: eligible uncertainty/distance fields now use received loudness only, and a hidden global scene revision cannot reject automatic visual feedback or change backoff. Schema 4 is retained, with explicit active migration and exact historical v1 replay. [PR #7](https://github.com/PHead2001/Autonomous-Lumi/pull/7) remains open and unmerged.
 
-The correction passed **192/192 tests**, lint, build/typecheck, **2/2 actual image/attention checks**, an actual zero-viewer scenario, Chrome dashboard inspection/export and exact offline replay. Independent Astra boundary review is clean; a new hosted review is pending. The reported intermittent renderer-cleanup flake was not encountered in this run, but the full eight-case renderer suite was not rerun and no cleanup repair is claimed. Audible playback remains unverified.
+The correction passed **192/192 tests**, lint, build/typecheck, **2/2 actual image/attention checks**, an actual zero-viewer scenario, Chrome dashboard inspection/export and exact offline replay. Independent Astra boundary review and [hosted Codex review of the v2 correction](https://github.com/PHead2001/Autonomous-Lumi/pull/7#issuecomment-6503987525) completed cleanly, with no findings or unresolved findings. The reported intermittent renderer-cleanup flake was not encountered in this run, but the full eight-case renderer suite was not rerun and no cleanup repair is claimed. Audible playback remains unverified.
 
 ## Current sensory boundaries
 
@@ -82,7 +82,7 @@ Earlier Chrome checks covered event filtering and a three-record scoped causal l
 
 Earlier implementation checks caught the posed-slam reflex regression and two outdated renderer assertions. Focused review corrected wall-group/self-emission handling, causal export fields and later-cause deferral. The owner's low-Hz/high-speed collision finding is fixed by current schema-4 swept movement; historical schema 3 retains endpoint-only replay. Hosted review then found queued-admission restore ownership, rejected-head arbitration and inaudible-exposure defects; five regressions brought that accepted v1 baseline to **186/186**, with clean [hosted re-review](https://github.com/PHead2001/Autonomous-Lumi/pull/7#issuecomment-6503987525).
 
-Claude subsequently identified the two sensory truth leaks addressed by v2. The current checks, actual v2 artifact and unchanged historical replay above verify those corrections. Independent Astra boundary review is clean; fresh hosted review of this latest correction is pending. No new security scan or cleanup repair is claimed.
+Claude subsequently identified the two sensory truth leaks addressed by v2. The current checks, actual v2 artifact and unchanged historical replay above verify those corrections. Independent Astra boundary review and [hosted Codex review of the v2 correction](https://github.com/PHead2001/Autonomous-Lumi/pull/7#issuecomment-6503987525) completed cleanly, with no findings or unresolved findings. No new security scan or cleanup repair is claimed.
 
 ## Limits
 
