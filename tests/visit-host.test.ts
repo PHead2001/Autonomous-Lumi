@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket } from 'ws';
+import { strFromU8 } from 'fflate';
+import { createWorldServer } from '../server/world-server.js';
+import { setupOwnerCredential } from '../server/owner-auth.js';
+import { exportIncident, inspectBundle, replayBundle } from '../server/diagnostics/bundle.js';
+import { hashCheckpoint } from '../server/simulation.js';
+
+test('Visit authenticates separately, binds one controller and records disconnect safety without exporting secrets', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lumi-visit-host-')), credentialFile = join(directory, 'private', 'owner.json');
+  const credential = await setupOwnerCredential(credentialFile), app = createWorldServer({ diagnosticsDirectory: join(directory, 'runs'), ownerCredentialFile: credentialFile, autoSchedule: false, automaticCaptures: false });
+  const clients: WebSocket[] = [];
+  try {
+    const port = await app.listen(0), origin = `http://127.0.0.1:${port}`;
+    const post = (path: string, value: unknown, cookie = '', requestOrigin: string | null = origin) => fetch(origin + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(requestOrigin ? { Origin: requestOrigin } : {}), ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(value) });
+    const sessionStatus = await (await fetch(origin + '/api/visit/session')).json(); assert.deepEqual(sessionStatus, { authenticated: false, configured: true });
+    assert.equal(app.registry.live.viewerState().visit?.actor, null, 'configuration alone creates no avatar');
+    const saved = await app.registry.checkpoint(app.registry.live.target), runtime = await app.registry.fork(app.registry.live.target, saved.id, 'visit-host'); runtime.applyControl({ type: 'pause' });
+    const scope = runtime.target, other = await app.registry.fork(app.registry.live.target, saved.id, 'visit-other'); other.applyControl({ type: 'pause' });
+    assert.equal((await post('/api/visit/enter', scope)).status, 403);
+    for (const badOrigin of [null, 'http://evil.invalid', 'null', 'http://127.0.0.1:5173']) assert.equal((await post('/api/visit/login', { credential }, '', badOrigin)).status, 403);
+    const rejected = await post('/api/visit/login', { credential: 'invalid-secret' }); assert.equal(rejected.status, 403); assert.ok(!(await rejected.text()).includes('invalid-secret'));
+    const login = await post('/api/visit/login', { credential }), cookie = login.headers.get('set-cookie')!.split(';')[0], session = await login.json();
+    const login2 = await post('/api/visit/login', { credential }), cookie2 = login2.headers.get('set-cookie')!.split(';')[0], session2 = await login2.json();
+    assert.equal((await post('/api/visit/enter', { ...scope, csrf: session2.csrf }, cookie)).status, 403, 'CSRF belongs to session');
+    const entered = await post('/api/visit/enter', { ...scope, csrf: session.csrf }, cookie); assert.equal(entered.status, 200); const control = await entered.json();
+    assert.equal((await post('/api/visit/enter', { ...scope, csrf: session.csrf }, cookie)).status, 403, 'same-cookie tabs cannot silently take over');
+    runtime.applyControl({ type: 'step' });
+    const connect = async (token: string) => { const ws = new WebSocket(`ws://127.0.0.1:${port}/visit`, { headers: { Origin: origin, Cookie: token } }); clients.push(ws); await once(ws, 'open'); return ws; };
+    const packet = async (ws: WebSocket, value: unknown) => { const response = once(ws, 'message'); ws.send(JSON.stringify(value)); return JSON.parse((await response)[0].toString()); };
+    await assert.rejects(connect(''), /403/);
+    const ws = await connect(cookie), serverSocket = [...app.visitSockets.clients][0];
+    assert.equal((await packet(ws, { type: 'bind', ...scope, csrf: session.csrf, generation: control.generation })).type, 'bound');
+    const foreign = await connect(cookie2);
+    assert.equal((await packet(foreign, { type: 'bind', ...scope, csrf: session2.csrf, generation: control.generation })).type, 'error');
+    const movement = { type: 'control', ...scope, generation: control.generation, sequence: 1, forward: 1, strafe: 0, yaw: 0, pitch: 0 };
+    assert.equal((await packet(ws, { ...movement, x: 999 })).type, 'error', 'coordinates are never accepted');
+    assert.equal((await packet(ws, { ...movement, runId: 'wrong-run' })).type, 'error');
+    assert.equal((await packet(ws, { ...movement, ...other.target })).type, 'error', 'a valid other branch cannot reuse this binding');
+    assert.equal((await packet(ws, { ...movement, forward: 20 })).type, 'error');
+    assert.equal((await packet(ws, movement)).type, 'ack');
+    assert.equal((await packet(ws, movement)).type, 'error', 'duplicate sequence rejected at host');
+    runtime.applyControl({ type: 'step' });
+    const avatar = runtime.viewerState().visit!.actor!;
+    assert.ok(avatar);
+    // Saturating normal inputs cannot prevent admission of a disconnect stop.
+    let filled = 0;
+    while (runtime.enqueue({ type: 'doorbell' }).input.admission === 'queued') { if (++filled % 32 === 0) await runtime.recorder!.flush(); }
+    await runtime.recorder!.flush();
+    const closed = once(serverSocket, 'close'); ws.close(); await closed;
+    const queuedStop = runtime.simulation.checkpoint().pendingInputs.find(input => input.command.type === 'visit_stop'); assert.ok(queuedStop);
+    runtime.applyControl({ type: 'step' });
+    const parked = runtime.viewerState().visit!.actor!; assert.equal(parked.id, avatar.id);
+    const resumed = await post('/api/visit/enter', { ...scope, csrf: session2.csrf }, cookie2); assert.equal(resumed.status, 200); const next = await resumed.json();
+    runtime.applyControl({ type: 'step' }); assert.equal(runtime.viewerState().visit!.actor!.id, avatar.id);
+    const resumedSocket = await connect(cookie2); assert.equal((await packet(resumedSocket, { type: 'bind', ...scope, csrf: session2.csrf, generation: next.generation })).type, 'bound');
+    const revoked = once(resumedSocket, 'close');
+    const takeover = await post('/api/visit/enter', { ...scope, csrf: session.csrf, takeover: true }, cookie); assert.equal(takeover.status, 200); const takeoverControl = await takeover.json(); assert.ok(takeoverControl.generation > next.generation); await revoked;
+    const takeoverSocket = await connect(cookie); assert.equal((await packet(takeoverSocket, { type: 'bind', ...scope, csrf: session.csrf, generation: next.generation })).type, 'error'); assert.equal((await packet(takeoverSocket, { type: 'bind', ...scope, csrf: session.csrf, generation: takeoverControl.generation })).type, 'bound');
+    assert.equal((await packet(takeoverSocket, { ...movement, generation: next.generation, sequence: 2 })).type, 'error');
+    runtime.applyControl({ type: 'step' });
+    assert.equal((await post('/api/visit/observe', { ...scope, csrf: session.csrf }, cookie)).status, 200); runtime.applyControl({ type: 'step' });
+    runtime.capture(); const snapshot = await runtime.recorder!.snapshotForExport(), out = join(directory, 'visit.zip');
+    await exportIncident({ runDirectory: runtime.recorder!.runDirectory, out, snapshot });
+    const files = await inspectBundle(out), bundleText = Object.values(files).map(bytes=>strFromU8(bytes)).join('\n');
+    for (const secret of [credential, cookie.slice(cookie.indexOf('=') + 1), session.csrf, session2.csrf]) assert.ok(!bundleText.includes(secret), 'host secret excluded from export');
+    assert.ok(bundleText.includes('visit_stop'), 'normalized stop retained'); assert.ok(bundleText.includes('disconnect'), 'disconnect reason retained');
+    assert.equal((await replayBundle(out)).stateHash, hashCheckpoint(runtime.checkpoint().simulation));
+    assert.equal(app.registry.live.viewerState().visit?.actor, null, 'test visit never enters LIVE');
+    assert.equal(other.viewerState().visit?.actor, null, 'cross-branch input creates no visitor');
+  } finally { for (const client of clients) client.terminate(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

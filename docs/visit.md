@@ -1,0 +1,55 @@
+# Local owner Visit
+
+Observe and Visit are different entry modes. Observe moves only the browser camera. Visit controls a separate persistent humanoid avatar in the same physical home, path and shop as Lumi. It never controls her body, needs, private knowledge or memories.
+
+## Pair this browser
+
+From the project terminal, configure one local owner credential:
+
+```powershell
+npm run owner:pair
+```
+
+The command shows a private credential. Restart the normal server to load it, then open `http://127.0.0.1:5173/`, choose **Visit**, and enter the credential in the password field. **Pair this browser** creates a local authenticated session; pairing does not spawn an avatar. Press **Enter Visit** separately when ready to enter the selected world.
+
+The credential is stored separately from world checkpoints, diagnostics and replay exports in the local user's `.autonomous-lumi/private` directory. It is not a creator-recognition cue. Do not place it in a URL, source file, screenshot or diagnostic bundle.
+
+For an explicit credential replacement:
+
+```powershell
+npm run owner:pair -- --rotate
+```
+
+Restart the server after replacement so old sessions are revoked. Server restart also invalidates ephemeral control credentials while preserving the logical avatar and inventory.
+
+## Move and interact
+
+Visit uses a third-person camera based on the server-owned avatar pose. Focus the scene, then:
+
+- **W/A/S/D:** move forward, left, backward and right relative to your look.
+- **Drag the view:** turn/look.
+- **E** or **Interact:** use a nearby door, or attempt a checkout interaction.
+- **At checkout:** select fruit or bread and press **Buy selected item**.
+- **Observe:** release control and return to the nonphysical Observe cameras.
+
+Movement and interaction are intentions. The server applies bounded movement at fixed simulation ticks and validates collision, control generation, sequence, reach, stock, funds and ownership. A client never submits a finished position or an inventory assertion. The UI waits for the actual server outcome before reporting a purchase.
+
+The Visit panel shows your credits, held item and inventory. Starting credits are configured world state, not wages or an invented history. Prices and the shop's actual opening/availability rules remain the same as [the shop increment](town.md). Basic home care remains independent of the owner or the shop.
+
+## Reconnect, tabs and Observe
+
+One tab controls the one eligible avatar. Another tab must use the explicit **Take control from another tab** action to revoke the prior control generation. Merely observing, opening a page, or pairing a browser cannot create another actor.
+
+Switching to Observe leaves an existing avatar visibly parked, without autonomous actions that impersonate the absent owner. Refreshing/reconnecting can resume the same avatar and owned items after re-entering Visit. Losing focus clears held movement; disconnect, timeout and revocation also have server-side stop handling. Do not infer continued walking from a last frozen viewer frame.
+
+Changing world/branch/run requires a new control grant. Old-run inputs cannot silently act on another experiment or fall back to LIVE. Server restart retains logical world state and rejects old ephemeral sessions and controls. The honest checkpoint recovery window still applies: uncommitted progress can be lost after an abrupt failure.
+
+## What Lumi can perceive
+
+The visitor body and held item are part of the same captured physical snapshot used by the ordinary renderer, actual first-person renderer, masks, visibility, acoustics and collision. They are not spectator-only meshes. Being authenticated or present in server state does not mean Lumi sensed or attended the visitor; walls, view direction, lighting and attention still matter.
+
+The small foundational premise that a creator built Lumi and her world is separate from autobiography. This Visit increment does not introduce the visitor as that creator, establish a relationship, force a greeting or create a meeting memory. Public introduction and real item offers are the next implementation increment within Phase 2.5c.
+
+Use isolated EXPERIMENT histories for acceptance visits and future introductions. Configuring owner access does not require spawning an avatar into the owner's LIVE world or consuming the first real LIVE encounter as a test.
+
+Full remote accounts, guests, mobile first-person controls and independent hosting are outside this local prototype. Narrow Observe remains available; desktop keyboard/mouse is the primary Visit interface.

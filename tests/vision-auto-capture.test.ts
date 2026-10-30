@@ -16,13 +16,13 @@ const frame:RenderedFrame={bytes:PNG.sync.write(png),backend};
 const turn=()=>new Promise<void>(done=>setImmediate(done));
 function fixture(branchId:string,mode:WorldMode='EXPERIMENT',submitted=false){
   const original=new BranchRuntime({worldId:'auto-test',branchId,mode,offline:true,physiology:{active:false}}),checkpoint=original.checkpoint();
-  const c=checkpoint.simulation;if(c.schemaVersion!==5&&c.schemaVersion!==6&&c.schemaVersion!==7&&c.schemaVersion!==8&&c.schemaVersion!==9)throw new Error('Current sensory schema required');
+  const c=checkpoint.simulation;if(c.schemaVersion!==5&&c.schemaVersion!==6&&c.schemaVersion!==7&&c.schemaVersion!==8&&(c.schemaVersion!==9&&c.schemaVersion!==10))throw new Error('Current sensory schema required');
   const visual=createVisibilityFixture();c.character=visual.character;c.scene=visual.scene!;c.head=visual.head!;c.pauseUntilTick=100000;
   c.attention.pending={id:1,createdTick:0,expiresTick:300,reasons:['salient_sound','head_milestone'],triggers:[{reason:'salient_sound',tick:0,parentSequence:null},{reason:'head_milestone',tick:0,parentSequence:null}],parentSequence:null,status:submitted?'submitted':'pending',captureId:submitted?'previous-process-capture':null,requestedTick:submitted?0:null};
   c.attention.nextIntentId=2;
   return new BranchRuntime({worldId:'auto-test',branchId,mode,offline:true,checkpoint});
 }
-const logical=(r:BranchRuntime)=>{const cp=r.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6&&cp.schemaVersion!==7&&cp.schemaVersion!==8&&cp.schemaVersion!==9)throw new Error('Current schema');return cp.attention;};
+const logical=(r:BranchRuntime)=>{const cp=r.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6&&cp.schemaVersion!==7&&cp.schemaVersion!==8&&(cp.schemaVersion!==9&&cp.schemaVersion!==10))throw new Error('Current schema');return cp.attention;};
 class DelayedRenderer implements FrameRenderer {
   calls=0;private releaseFrame:((value:RenderedFrame)=>void)|undefined;
   render(){this.calls++;return new Promise<RenderedFrame>(done=>{this.releaseFrame=done;});}
@@ -47,7 +47,7 @@ test('automatic capture uses existing queue, coalesced reasons and ordered snaps
 
 test('automatic delayed duplicate frame survives an unseen revision change without changing backoff or probe schedule',async()=>{
   const original=fixture('hidden-revision'),checkpoint=original.checkpoint();
-  if(checkpoint.simulation.schemaVersion!==5&&checkpoint.simulation.schemaVersion!==6&&checkpoint.simulation.schemaVersion!==7&&checkpoint.simulation.schemaVersion!==8&&checkpoint.simulation.schemaVersion!==9)throw new Error('Current schema');
+  if(checkpoint.simulation.schemaVersion!==5&&checkpoint.simulation.schemaVersion!==6&&checkpoint.simulation.schemaVersion!==7&&checkpoint.simulation.schemaVersion!==8&&(checkpoint.simulation.schemaVersion!==9&&checkpoint.simulation.schemaVersion!==10))throw new Error('Current schema');
   const c=checkpoint.simulation,p=eyePose(original.viewerState());
   c.attention.baseline={capturedTick:0,sceneRevision:0,pose:{x:p.position[0],y:p.position[1],z:p.position[2],bodyHeading:p.bodyHeading,headYaw:p.headYaw,headPitch:p.headPitch},signature:Array(48).fill(255),frameHash:'a'.repeat(64),captureId:'baseline'};
   c.attention.lastAcceptedCaptureTick=0;
@@ -74,7 +74,7 @@ test('paused, fast-forward and repeated host pumps cannot dispatch accumulated w
     runtime.applyControl({type:'cancel-fast-forward'});runtime.applyControl({type:'resume'});host.pump([runtime]);assert.equal(renderer.calls,1);
     runtime.simulation.step();renderer.release();await turn();await turn();runtime.simulation.step();
     // A fresh logical intention before the host budget recovers is an explicit input outcome.
-    const cp=runtime.checkpoint();if(cp.simulation.schemaVersion!==5&&cp.simulation.schemaVersion!==6&&cp.simulation.schemaVersion!==7&&cp.simulation.schemaVersion!==8&&cp.simulation.schemaVersion!==9)throw new Error('Current schema');
+    const cp=runtime.checkpoint();if(cp.simulation.schemaVersion!==5&&cp.simulation.schemaVersion!==6&&cp.simulation.schemaVersion!==7&&cp.simulation.schemaVersion!==8&&(cp.simulation.schemaVersion!==9&&cp.simulation.schemaVersion!==10))throw new Error('Current schema');
     const intent:CaptureIntent={id:2,createdTick:cp.simulation.tick,expiresTick:cp.simulation.tick+300,reasons:['uncertainty_probe'],triggers:[{reason:'uncertainty_probe',tick:cp.simulation.tick,parentSequence:null}],parentSequence:null,status:'pending',captureId:null,requestedTick:null};
     cp.simulation.attention.pending=intent;cp.simulation.attention.nextIntentId=3;
     const second=new BranchRuntime({worldId:'auto-test',branchId:'pause',mode:'EXPERIMENT',offline:true,checkpoint:cp});
@@ -112,7 +112,7 @@ test('restart reconciles a saved queued admission before dispatching and accepts
   try{
     oldHost.pump([original]);const oldCapture=oldManager.view(original.target).latest!;
     const saved=JSON.parse(JSON.stringify(original.checkpoint())) as ReturnType<BranchRuntime['checkpoint']>;
-    if(saved.simulation.schemaVersion!==5&&saved.simulation.schemaVersion!==6&&saved.simulation.schemaVersion!==7&&saved.simulation.schemaVersion!==8&&saved.simulation.schemaVersion!==9)throw new Error('Current schema');
+    if(saved.simulation.schemaVersion!==5&&saved.simulation.schemaVersion!==6&&saved.simulation.schemaVersion!==7&&saved.simulation.schemaVersion!==8&&(saved.simulation.schemaVersion!==9&&saved.simulation.schemaVersion!==10))throw new Error('Current schema');
     assert.equal(saved.simulation.attention.pending?.status,'pending');
     assert.equal(saved.simulation.pendingInputs[0].command.type,'sensor_feedback');
     // A short logical probe interval proves recovery before the old intention expires.

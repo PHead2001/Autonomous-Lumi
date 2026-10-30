@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type {WorldState} from '../shared/protocol.js';
 import type {TownWorldView} from '../shared/town-protocol.js';
 import {worldActivity,recentWorldTimeline} from '../src/viewer-town.js';
+import {CREATOR_FOUNDATION,type VisitWorldView} from '../shared/visit-protocol.js';
 
 const town=():TownWorldView=>({layoutVersion:'home-shop-v1',doors:{home:false,homeAngle:0,shop:false,shopAngle:0,slam:null},shop:{open:true,available:true,fruitVisible:true,breadVisible:true},heldItem:null,activity:{label:'Walking to shop',status:'started',stage:'outbound',progress:0},timeline:[],firstRetainedSequence:1,droppedCount:0});
 const state=():Pick<WorldState,'home'|'town'|'character'|'capability'>=>({character:{x:0,z:0,heading:0,moving:true,gait:0},town:town()});
@@ -25,4 +26,8 @@ test('combined public timeline orders independent streams and discloses both ret
   const before=structuredClone({h,t}),view=recentWorldTimeline(h,t,45,1,2);
   assert.deepEqual(view.entries.map(e=>e.label),['Returned home','Home action']);assert.match(view.note,/2 of 3/);assert.match(view.note,/4 earlier home events/);assert.match(view.note,/2 earlier neighborhood events/);
   assert.ok(view.entries.every(e=>Object.keys(e).sort().join(',')==='age,label,type'));assert.deepEqual({h,t},before);
+});
+test('owner timeline reports transactions and movement without inventing a sensed meeting or a parked timeout',()=>{
+  const visit:VisitWorldView={actor:null,control:{generation:0,lastSequence:0,status:'parked',expiresTick:0},inventory:[],balance:20,lastActionId:2,feedback:null,foundation:CREATOR_FOUNDATION,droppedCount:3,timeline:[{actionId:1,type:'purchase',outcome:'rejected',reason:'out_of_reach',tick:10},{actionId:2,type:'purchase',outcome:'accepted',reason:'committed',tick:20},{actionId:2,type:'control',outcome:'stopped',reason:'timeout',tick:30}]};
+  const view=recentWorldTimeline(undefined,undefined,30,1,8,visit);assert.deepEqual(view.entries.map(e=>e.label),['Owner movement stopped','Owner purchase confirmed','Owner purchase not completed']);assert.match(view.note,/3 earlier owner events/);assert.doesNotMatch(JSON.stringify(view),/creator|recognized|meeting|parked|out_of_reach/i);
 });

@@ -2,6 +2,7 @@ import type { WorldState } from '../shared/protocol';
 import type { HomeWorldView } from '../shared/home-protocol';
 import type { TownWorldView } from '../shared/town-protocol';
 import { homePresentation, recentHomeTimeline } from './viewer-home';
+import type {VisitWorldView} from '../shared/visit-protocol';
 
 /** An owner-facing projection of confirmed activity, never a source of cognition. */
 export function worldActivity(state: Pick<WorldState,'home'|'town'|'capability'|'character'>) {
@@ -20,14 +21,15 @@ export function worldActivity(state: Pick<WorldState,'home'|'town'|'capability'|
 }
 
 /** Merge only the two bounded public histories, retaining their independent gap counts. */
-export function recentWorldTimeline(home:HomeWorldView|undefined,town:TownWorldView|undefined,currentTick:number,secondsPerTick:number,limit=8) {
-  if(!town)return recentHomeTimeline(home,currentTick,secondsPerTick,limit);
-  const events=[...(home?.timeline??[]).map(e=>({...e,source:0})),...town.timeline.map(e=>({...e,source:1}))];
+export function recentWorldTimeline(home:HomeWorldView|undefined,town:TownWorldView|undefined,currentTick:number,secondsPerTick:number,limit=8,visit?:VisitWorldView) {
+  if(!town&&!visit)return recentHomeTimeline(home,currentTick,secondsPerTick,limit);
+  const ownerEvents=(visit?.timeline??[]).map((f,i)=>({tick:f.tick,sequence:i,type:f.outcome,label:f.type==='control'?(f.outcome==='stopped'?'Owner movement stopped':'Owner Visit control started'):f.type==='purchase'?(f.outcome==='accepted'?'Owner purchase confirmed':'Owner purchase not completed'):(f.outcome==='accepted'?'Owner used a door':'Owner door interaction not completed'),source:2}));
+  const events=[...(home?.timeline??[]).map(e=>({...e,source:0})),...(town?.timeline??[]).map(e=>({...e,source:1})),...ownerEvents];
   events.sort((a,b)=>b.tick-a.tick||b.source-a.source||b.sequence-a.sequence);
   const entries=events.slice(0,Math.min(12,Math.max(1,limit))).map(e=>{
     const age=Math.max(0,Math.floor((currentTick-e.tick)*secondsPerTick));
     return {label:e.label,type:e.type,age:age<2?'Just now':age<60?`${age}s ago`:age<3600?`${Math.floor(age/60)}m ago`:`${Math.floor(age/3600)}h ago`};
   });
-  const gaps=[home?.droppedCount?`${home.droppedCount} earlier home events`:null,town.droppedCount?`${town.droppedCount} earlier neighborhood events`:null].filter(Boolean);
+  const gaps=[home?.droppedCount?`${home.droppedCount} earlier home events`:null,town?.droppedCount?`${town.droppedCount} earlier neighborhood events`:null,visit?.droppedCount?`${visit.droppedCount} earlier owner events`:null].filter(Boolean);
   return {entries,note:events.length?`Showing ${entries.length} of ${events.length} retained events${gaps.length?` · ${gaps.join(' and ')} no longer retained`:''}`:'No home or neighborhood actions recorded yet'};
 }

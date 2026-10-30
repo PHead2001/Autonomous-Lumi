@@ -2,7 +2,7 @@
 
 ## Increment 1 — Home, path, shop and purchase
 
-The shop increment is implemented on `Assist/phase-2-5c-shop`. It is one delivery slice of Phase 2.5c; authenticated Visit and offers/creator introduction remain the next two slices. This report does not claim the combined milestone is complete.
+The shop increment is implemented on `Assist/phase-2-5c-shop`. Authenticated Visit is recorded under Increment 2 below; offers and creator introduction remain Increment 3. This report does not claim the combined milestone is complete.
 
 The final current-source checks passed:
 
@@ -59,8 +59,36 @@ Current-source actual-eye replay inspection images are `replay-eyes-approach.png
 
 ### Review, runtime and limits
 
-Focused review findings about historical acoustic grouping, signed door migration, static slams and later rebound collision were corrected with regressions. Root owns the final independent review/PR status and the ordered relationship to the later two increments.
+Focused review findings about historical acoustic grouping, signed door migration, static slams and later rebound collision were corrected with regressions. [Increment 1 PR #11](https://github.com/PHead2001/Autonomous-Lumi/pull/11) is open for the owner's merge decision. Hosted code review completed without findings or unresolved threads, and automatic security review completed.
 
-The canonical owner world was not reset, moved or used for a creator encounter. It remains the preserved history `90d139a5-e9a6-429d-98ac-a484539c9e24` on the normal 3001/5173 workflow; this slice's acceptance used disposable data. The temporary 3030 candidate was stopped. A worktree edit or push alone does not update the owner checkout. Actual owner rollout remains separately reported by the root.
+The canonical owner world was not reset, moved or used for a creator encounter. Root subsequently rolled the tested shop candidate into the normal 3001/5173 runtime while preserving history `90d139a5-e9a6-429d-98ac-a484539c9e24`. Recovery resumed at tick 3,639,233/generation 1,296, progressed beyond 3,643,105, and reported no fallback or save error. In ordinary Observe, root witnessed an independent LIVE shop purchase, return and consumption without injecting a choice. Rollout evidence is `diagnostics/operations/town-preflight-20261030T141757746Z/{report,rollout-proof}.json` in the canonical checkout. No Visit actor or creator encounter was added to that LIVE history. The earlier disposable shop candidate was stopped; Increment 2 uses its own separate experiment below.
 
 Audible playback and rapid ear articulation were not independently captured in this walkthrough. The recognizer is an authored RGB mechanism, the opportunity policy is engineered reactive behavior, and these bounded trials do not establish learned preferences, full-day balance, social familiarity or independent hosting.
+
+## Increment 2 — Authenticated embodied Visit
+
+`Assist/phase-2-5c-visit` builds on the shop increment. Local setup is `npm run owner:pair`, followed by restarting the server and entering the displayed private credential in the normal viewer's Visit login. Setup and login alone create no avatar. Pairing stores a hash outside the project and diagnostics; cookies, session CSRF values and sockets stay host-only. Observe remains nonphysical. Enter Visit controls a separate persistent humanoid through WASD, mouse look and E; the reachable checkout offers explicit fruit/bread purchases. Observe parks the same visible avatar and its held item. Multiple tabs require explicit takeover.
+
+Checkpoint 10/runtime envelope 9 preserve public avatar state, logical control generations, normalized intentions and reserved safety stops; historical checkpoint 9/runtime 8 still replay under town rules. Recovery parks an active visitor before scheduler activation and rejects old-run inputs. The shared item ledger commits stock, payment and ownership once. A versioned creator-origin premise exists before Visit, but authentication supplies no perceived recognition, meeting or social familiarity.
+
+| Check | Verified result |
+| --- | --- |
+| Full repository tests | **413/413 PASS**, 43.139 seconds; `diagnostics/visit-increment2/host-integration-report.json` identifies the local full-suite log |
+| Subsequent UI handshake correction | **8 affected checks PASS**, followed by lint and build/typecheck PASS; controls wait for the matching authoritative actor/generation, and blocked or unapplied entry reports an honest retry |
+| Focused independent re-review | **Clean** after reciprocal collision, floor-seam and control-handshake fixes; this local result does not substitute for the increment's hosted PR review |
+| Authentication and recovery ZIP tests | Actual temporary ZIPs exclude known credential/cookie/CSRF values and replay exactly; restart coverage includes a purchased held item plus queued old-run movement, interaction and stop |
+| Actual first-person rendering | **PASS**, real ANGLE D3D11/NVIDIA GPU; visitor head 6,778 qualified pixels and held fruit 5,789; closed home geometry qualifies neither. The image and grounding retain the captured actor pose while the current actor advances |
+
+Actual-eye artifacts are `diagnostics/visit-perception/{visible.png,blocked.png,report.json}`. They use explicitly staged disposable EXPERIMENT poses and a production stock/payment purchase. They establish rendering, occlusion and captured-snapshot consistency, without claiming a walk, attended introduction or encoded personal encounter. No provider call was made.
+
+### Ordinary browser walkthrough and retained export
+
+Root used the normal viewer on disposable port 3030, branch `disposable-visit-1793371923542`, run `722cd5df-2c88-4559-8d08-2fad7cb6e61e`. Pairing persisted through refresh without spawning an actor. Enter Visit created a separate avatar; normal WASD/mouse/E controls traversed home→shop, opened doors, and correctly rejected a door interaction with an occupied sweep. At checkout, a confirmed purchase produced fruit ×1 and a balance of 17. Refresh while holding stopped movement; re-entry preserved the same actor, item and funds. Root walked home and switched to Observe, then visually inspected the parked humanoid holding fruit beside Lumi. No offer or introduction was used.
+
+The scoped API and archived ending checkpoint independently confirm `owner-avatar-v1`, parked/nonmoving, exactly one owner-owned unconsumed fruit, held item 1 and balance 17. The server export was retrieved through its own scoped application URL with HTTP 200/application ZIP; no Downloads folder was inspected.
+
+**The retained browser export is incomplete and does not verify exact replay of the full walkthrough.** `diagnostics/visit-increment2/browser-journey.zip` is 237,402 bytes with 2,965 retained records, 396 inputs and 1,353 deterministic events. Normal bounded retention had evicted 38,710 records before export; reported drops and writer failures are zero. The manifest declares missing prefix/terminal coverage and ordered-input replay failure. Fresh `npm.cmd run replay -- --bundle diagnostics/visit-increment2/browser-journey.zip` correctly exits 1: `Diagnostic evidence is INCOMPLETE or incompatible`. The walkthrough was not reconstructed or relabelled COMPLETE.
+
+`browser-journey.inspection.json` records the scope, checked ending state, coverage and secret checks; `browser-journey-replay.log` records the fresh CLI rejection. The known disposable credential's fingerprint matches no archived scalar value. Strict normalized schemas and recursive field/header inspection find no credential, cookie, CSRF or authorization fields. Cookie/CSRF values were deliberately not acquired from the browser for this inspection; their value-based exclusion is covered separately by the host ZIP tests.
+
+Visit remains a candidate increment; only the shop slice has been activated in the canonical owner runtime. The disposable launcher remains root-owned until stopped. Actual audio playback is unverified. A COMPLETE retained ordinary-browser journey export remains an evidence limitation; Increment 3 offers, creator introduction and the combined playable exit are still outstanding.

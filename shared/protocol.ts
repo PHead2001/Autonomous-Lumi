@@ -1,7 +1,7 @@
 import type { HeadState } from './vision-protocol.js';
 import { PHYSICAL_ROOM, type PhysicalSceneState } from './physical-scene.js';
 export const ROOM = PHYSICAL_ROOM;
-export interface AcousticEvent { kind?:'slam'|'doorbell'; id: number; time: number; intensity: number; suddenness: number; x: number; z: number }
+export interface AcousticEvent { kind?:'slam'|'doorbell'|'footstep'; id: number; time: number; intensity: number; suddenness: number; x: number; z: number }
 export interface WorldState {
   worldId: string; runId: string; branchId?: string; mode?: 'LIVE' | 'EXPERIMENT'; time: number; tick: number;
   character: { x: number; z: number; heading: number; moving: boolean; gait: number };
@@ -12,6 +12,7 @@ export interface WorldState {
   head?: HeadState; scene?: PhysicalSceneState;
   home?:import('./home-protocol.js').HomeWorldView;
   town?:import('./town-protocol.js').TownWorldView;
+  visit?:import('./visit-protocol.js').VisitWorldView;
 }
 export type ServerMessage = { type: 'state'; state: WorldState } | { type: 'sound'; event: AcousticEvent; state: WorldState };
 export const REFLEX_DURATION = 0.8;

@@ -1,3 +1,6 @@
+import { VISIT_RULES,VISIT_LIMITS,validateVisitCommand,validateVisitState,type VisitState,type VisitCommand,type VisitStopCommand,type VisitFeedback } from '../shared/visit-protocol.js';
+import { canOccupyVisitActor,canSweepVisitActor,visitEntrance } from '../shared/visit-geometry.js';
+import { createVisitState,visitPublicView,visitFeedback } from './visit.js';
 import { TOWN_RULES,TOWN_LIMITS,validateTownCommand,validateTownState,type TownState,type TownCommand,type KnownTownAffordance } from '../shared/town-protocol.js';
 import { TOWN_GEOMETRY,TOWN_SLAM_RANGE,canOccupyTownCharacter,canSweepTownCharacter,canChangeTownDoor,canSweepTownDoor,townDoorTarget } from '../shared/town-geometry.js';
 import { createTownState,townPublicView,townTimeline,townTaskBusy,shopOpenAt,beginTownTask,purchaseTownItem } from './town.js';
@@ -31,7 +34,7 @@ export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_comman
 export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
 export type PhysiologyCommand = {type:'physiology_fixture';effect:PhysiologyEffect}|{type:'physiology_safety_fixture';ticks:number}|{type:'physiology_encoding';enabled:boolean};
 export type HomeCommand=HomeObservationCommand|{type:'doorbell'}|{type:'home_layout_fixture';layout:HomeLayout};
-export type NormalizedCommand = TownCommand | HomeCommand | PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
+export type NormalizedCommand = VisitCommand | TownCommand | HomeCommand | PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -55,9 +58,10 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false, home=false, town=false): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false, home=false, town=false, visit=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
+  if(visit&&['visit_start','visit_stop','visit_control','visit_interact'].includes(c.type as string))return validateVisitCommand(value);
   if(town&&['town_observation','shop_purchase','town_door','town_fixture'].includes(c.type as string))return validateTownCommand(value);
   if(home&&c.type==='home_observation')return validateHomeObservation(value);
   if(home&&c.type==='doorbell'&&Object.keys(c).length===1)return {type:'doorbell'};
@@ -115,6 +119,7 @@ export class Simulation {
   protected supportsPhysiologyInputs():boolean{return false;}
   protected supportsHomeInputs():boolean{return false;}
   protected supportsTownInputs():boolean{return false;}
+  protected supportsVisitInputs():boolean{return false;}
   protected boundMovement(x:number,z:number):[number,number]{return [Math.max(-ROOM.walkX,Math.min(ROOM.walkX,x)),Math.max(-ROOM.walkZ,Math.min(ROOM.walkZ,z))];}
   protected cognitionActionAllowed():boolean{return true;}
   protected movementPermitted():boolean{return true;}
@@ -158,7 +163,7 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs()), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
     const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
     if(capacityReason!==null)input.admission='queue_full';
@@ -251,7 +256,8 @@ export interface CheckpointV6 extends Omit<CheckpointV5,'schemaVersion'|'rulesVe
 export interface CheckpointV7 extends Omit<CheckpointV6,'schemaVersion'|'rulesVersion'|'interoception'|'physiology'> {schemaVersion:7;rulesVersion:typeof CURRENT_PHYSIOLOGY_RULES;interoception:InteroceptionStateV2;physiology:PhysiologyRuntimeState&{taskCredit:number;taskCreditActivityId:number}}
 export interface CheckpointV8 extends Omit<CheckpointV7,'schemaVersion'|'rulesVersion'> {schemaVersion:8;rulesVersion:typeof HOME_RULES;home:HomeState}
 export interface CheckpointV9 extends Omit<CheckpointV8,'schemaVersion'|'rulesVersion'> {schemaVersion:9;rulesVersion:typeof TOWN_RULES;town:TownState}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8 | CheckpointV9;
+export interface CheckpointV10 extends Omit<CheckpointV9,'schemaVersion'|'rulesVersion'> {schemaVersion:10;rulesVersion:typeof VISIT_RULES;visit:VisitState}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8 | CheckpointV9 | CheckpointV10;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -268,6 +274,7 @@ export function upgradeCheckpoint(value: unknown): CheckpointV2 {
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===10)return validateVisitCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===9)return validateTownCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===8)return validateHomeCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===7)return validatePhysiologyCheckpointV2(value);
@@ -343,7 +350,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -378,7 +385,7 @@ export class VisionSimulation extends LabSimulation {
     super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
   }
   override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
-    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs());
+    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs());
     if(normalized.type==='look_at'&&normalized.evidence) {
       if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
       if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
@@ -389,7 +396,7 @@ export class VisionSimulation extends LabSimulation {
   protected override onDoorChanged():void{this.scene.revision++;}
   protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command;if(command.type==='town_observation'||command.type==='town_door'||command.type==='town_fixture'||command.type==='shop_purchase')return false;if(command.type==='home_observation'||command.type==='home_layout_fixture'||command.type==='doorbell')return false;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
+    const command=input.command;if(command.type==='visit_start'||command.type==='visit_stop'||command.type==='visit_control'||command.type==='visit_interact')return false;if(command.type==='town_observation'||command.type==='town_door'||command.type==='town_fixture'||command.type==='shop_purchase')return false;if(command.type==='home_observation'||command.type==='home_layout_fixture'||command.type==='doorbell')return false;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
     if(command.type==='configure_scene') {
       if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
@@ -452,7 +459,7 @@ export class VisionSimulation extends LabSimulation {
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return;
   }
-  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -684,7 +691,7 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }
 function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
@@ -712,9 +719,9 @@ export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
 }
 function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
 /** External callbacks supply only complete ordered commands; this class owns all consequences. */
-export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9 = CheckpointV5> extends SensorySimulation {
+export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10 = CheckpointV5> extends SensorySimulation {
  protected cognition:CognitionState;private realExperiences:RealExperience[];private experienceAncestry:{historyId:string;afterTick:number;throughTick:number}[]|null=null;
- constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9}){
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10}){
   const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
   const cp=source.schemaVersion===5?source:null;
   super({...options,checkpoint:cp?cognitionSensoryPart(cp):source,historical:false});
@@ -722,7 +729,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
   this.cognition=cp?structuredClone(cp.cognition):{identity,requests:[],nextRequestTick:0,actionCooldownUntilTick:0,responses:0,firstRequestTick:null,lastResponseTick:null,observationRequestedTick:null,captureUpgrade:null};
   this.realExperiences=structuredClone(cp?.realExperiences??[]);
   if(cp){this.data.pendingInputs=structuredClone(cp.pendingInputs);if(!options.historical)this.cognition.identity=identity;}
-  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
+  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
   if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||!this.admitsExperienceHistory(e.identity.historyId,e.encodedTick))||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
  }
  protected admitsExperienceHistory(historyId:string,encodedTick:number):boolean{return this.experienceAncestry?this.experienceAncestry.some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick):historyId===this.cognition.identity.historyId;}
@@ -833,7 +840,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
 }
 
 /** Schema 6 is an active-world migration only. V1-V5 offline execution keeps its original class. */
-function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9):CheckpointV5 {
+function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10):CheckpointV5 {
  const raw=structuredClone(cp) as unknown as Record<string,unknown>;
  for(const key of ['body','interoception','physiology','internalExperiences'])delete raw[key];
  raw.schemaVersion=5;raw.rulesVersion=COGNITION_RULES;
@@ -870,13 +877,13 @@ export function validatePhysiologyCheckpoint(value:unknown):CheckpointV6 {
  return structuredClone(cp);
 }
 /** Derived solely from the persisted, validated ancestry; no history wildcard. */
-function experienceEpochs(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9):{historyId:string;afterTick:number;throughTick:number}[]{
+function experienceEpochs(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10):{historyId:string;afterTick:number;throughTick:number}[]{
  const epochs:{historyId:string;afterTick:number;throughTick:number}[]=[];let historyId=cp.physiology.origin.historyId,afterTick=-1;
  for(const edge of cp.physiology.verifiedCheckpointImports){epochs.push({historyId,afterTick,throughTick:edge.importTick});historyId=edge.destinationHistoryId;afterTick=edge.importTick;}
  epochs.push({historyId,afterTick,throughTick:cp.physiology.legacyImport?.importTick??Number.MAX_SAFE_INTEGER});if(cp.physiology.legacyImport)epochs.push({historyId:cp.physiology.legacyImport.destinationHistoryId,afterTick:cp.physiology.legacyImport.importTick,throughTick:Number.MAX_SAFE_INTEGER});return epochs;
 }
-export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
-export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9=CheckpointV7> extends CognitionSimulation<C> {
+export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
+export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10=CheckpointV7> extends CognitionSimulation<C> {
  protected body:BodyState;private interoception:InteroceptionState|InteroceptionStateV2;private physiology:PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};private physiologyVersion:6|7;private internalExperiences:InternalExperience[];
  private intervalStart={x:0,z:0,cursor:0,yaw:0,pitch:0,capable:true};
  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiology?:PhysiologyOptions}){
@@ -1015,7 +1022,7 @@ export function validateHomeCheckpoint(value:unknown):CheckpointV8 {
  if(cp.home.task?.committedEffectSequence!==null&&cp.home.task?.committedEffectSequence!==undefined&&cp.home.task.committedEffectSequence>cp.body.lastEffectSequence)fail('home committed effect cursor');
  return structuredClone(cp);
 }
-export class HomeSimulation<C extends CheckpointV8|CheckpointV9=CheckpointV8> extends PhysiologySimulation<C> {
+export class HomeSimulation<C extends CheckpointV8|CheckpointV9|CheckpointV10=CheckpointV8> extends PhysiologySimulation<C> {
  protected home!:HomeState;
  protected homeControllerAllowed():boolean{return true;}
  protected planHomeNavigation(...args:Parameters<typeof planHomeRoute>):ReturnType<typeof planHomeRoute>{return planHomeRoute(...args);}
@@ -1137,7 +1144,7 @@ export function validateTownCheckpoint(value:unknown):CheckpointV9 {
  if(townTaskBusy(cp.town)&&homeTaskBusy(cp.home))fail('competing home and town tasks');
  return structuredClone(cp);
 }
-export class TownSimulation extends HomeSimulation<CheckpointV9> {
+export class TownSimulation<C extends CheckpointV9|CheckpointV10=CheckpointV9> extends HomeSimulation<C> {
  protected town!:TownState;
  constructor(options:ConstructorParameters<typeof HomeSimulation>[0]) {
   const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===9?source:null;
@@ -1223,5 +1230,93 @@ export class TownSimulation extends HomeSimulation<CheckpointV9> {
  }
  townState():TownState{return structuredClone(this.town);}
  override snapshot():WorldState{return {...super.snapshot(),...(this.town?{town:townPublicView(this.town,this.data.config.hz)}:{})};}
- override checkpoint():CheckpointV9 {const base=super.checkpoint();return this.town?{...base,schemaVersion:9,rulesVersion:TOWN_RULES,town:structuredClone(this.town)}:base;}
+ override checkpoint():C {const base=super.checkpoint();return (this.town?{...base,schemaVersion:9,rulesVersion:TOWN_RULES,town:structuredClone(this.town)}:base) as C;}
+}
+
+function visitTownPart(cp:CheckpointV10):CheckpointV9 {
+ const raw=structuredClone(cp) as unknown as Record<string,unknown>;delete raw.visit;raw.schemaVersion=9;raw.rulesVersion=TOWN_RULES;
+ // A single reserved safety-stop slot is additional to the ordinary queue.
+ // Its full metadata is validated by CP10, never smuggled into CP9 semantics.
+ raw.pendingInputs=cp.pendingInputs.filter(i=>i.command.type!=='visit_stop').map(i=>({...i,command:i.command.type.startsWith('visit_')?{type:'invalid',reason:'unknown_command'}:i.command}));
+ return validateTownCheckpoint(raw);
+}
+export function validateVisitCheckpoint(value:unknown):CheckpointV10 {
+ const cp=value as CheckpointV10;if(cp?.schemaVersion!==10||cp.rulesVersion!==VISIT_RULES)fail('visit schema/rules');
+ if(!Array.isArray(cp.pendingInputs)||cp.pendingInputs.length>cp.config.maxPendingInputs+1||cp.pendingInputs.filter(i=>i?.command?.type==='visit_stop').length>1||cp.pendingInputs.length>cp.config.maxPendingInputs&&!cp.pendingInputs.some(i=>i.command.type==='visit_stop'))fail('visit reserved input queue');
+ let previous=0;for(const raw of cp.pendingInputs){const i=object(raw,['sequence','receivedTick','applyTick','command','admission'],'visit input');if(!integer(i.sequence,previous+1,cp.nextInputSequence-1)||i.receivedTick!==cp.tick||i.applyTick!==cp.tick+1||i.admission!=='queued')fail('visit pending input order');validateCommand(i.command,true,true,true,true,true,true,true);previous=i.sequence as number;}
+ const base=visitTownPart(cp);object(cp,[...Object.keys(base).filter(k=>k!=='schemaVersion'&&k!=='rulesVersion'),'schemaVersion','rulesVersion','visit'],'visit root');validateVisitState(cp.visit,cp.tick,cp.config.hz);
+ const view={worldId:cp.cognition.identity.worldId,runId:cp.cognition.identity.runId,tick:cp.tick,time:cp.tick/cp.config.hz,character:cp.character,head:cp.head,scene:cp.scene,door:{lastSlam:cp.door.lastSlamTick/cp.config.hz,slamCount:cp.door.slamCount},home:homePublicView(cp.home,cp.config.hz),town:townPublicView(cp.town,cp.config.hz),visit:visitPublicView(cp.visit,cp.town)} as WorldState;
+ if(cp.home.posture.kind==='upright'?!canOccupyTownCharacter(view,cp.character.x,cp.character.z):!canUseHomePosture(view))fail('visitor overlaps Lumi');
+ const actor=cp.visit.actor,owned=cp.town.items.filter(i=>i.owner==='owner'&&i.consumedTick===null);if(owned.length>1||!actor&&owned.length||actor&&(actor.heldItemId===null?owned.length>0:owned.length!==1||owned[0].id!==actor.heldItemId))fail('visitor inventory ownership');
+ if(actor&&!canOccupyVisitActor(view,actor.x,actor.z))fail('visitor physical clearance');
+ return structuredClone(cp);
+}
+export class VisitSimulation extends TownSimulation<CheckpointV10> {
+ protected visit!:VisitState;
+ constructor(options:ConstructorParameters<typeof TownSimulation>[0]) {
+  const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===10?source:null;
+  super({...options,checkpoint:saved?visitTownPart(saved):source??undefined});this.visit=saved?structuredClone(saved.visit):createVisitState(this.data.tick);
+  if(saved)this.data.pendingInputs=structuredClone(saved.pendingInputs);
+  validateVisitCheckpoint(this.checkpoint());if(!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents Visit activation; existing state preserved');
+ }
+ protected override supportsVisitInputs():boolean{return true;}
+ override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {return command.type==='visit_stop'?this.enqueueSafetyStop(command):super.enqueue(command);}
+ /** Exactly one bounded safety slot. Replays call this same enqueue path; no
+  * socket/timer or unrecorded mutation is needed to stop an actor under load. */
+ enqueueSafetyStop(command:VisitStopCommand):{input:OrderedInput;events:DeterministicEvent[]} {
+  const normalized=validateVisitCommand(command) as VisitStopCommand,existing=this.data.pendingInputs.find(i=>i.command.type==='visit_stop');
+  const currentRun=this.cognition.identity.runId;
+  // Give each request a new recorded input sequence. Reusing an earlier input
+  // would make ordinary recorder callers export duplicate sequence numbers.
+  // A stale/wrong-run stop cannot evict the current run's guaranteed stop.
+  const events:DeterministicEvent[]=[],superseded=existing&&existing.command.type==='visit_stop'&&normalized.runId===currentRun&&(existing.command.runId!==currentRun||normalized.generation>=existing.command.generation);
+  const input:OrderedInput={sequence:this.data.nextInputSequence++,receivedTick:this.data.tick,applyTick:this.data.tick+1,command:normalized,admission:existing&&!superseded?'queue_full':'queued'};
+  const received=this.emit(events,'INPUT_RECEIVED','input','received',{command:normalized.type},input.sequence);
+  this.emit(events,'INPUT_ADMITTED','input',input.admission,input.admission==='queued'?{}:{reason:'newer_stop_reserved'},input.sequence,received.sequence);
+  if(input.admission==='queued'){if(existing){this.data.pendingInputs=this.data.pendingInputs.filter(i=>i.sequence!==existing.sequence);this.emit(events,'VISIT_STOP_SUPERSEDED','visit_control','superseded',{generation:normalized.generation,sequence:existing.sequence},input.sequence);}this.data.pendingInputs.push(structuredClone(input));}
+  return {input:structuredClone(input),events};
+ }
+ private visitResult(type:VisitFeedback['type'],outcome:VisitFeedback['outcome'],reason:string,events:DeterministicEvent[],inputSequence?:number,actionId=this.visit.lastActionId):void {visitFeedback(this.visit,{actionId,type,outcome,reason,tick:this.data.tick});this.emit(events,'VISIT_ACTION','visit',outcome,{actionId,kind:type,reason,generation:this.visit.control.generation},inputSequence);}
+ private stopVisit(reason:VisitStopCommand['reason'],events:DeterministicEvent[],inputSequence?:number):void {const c=this.visit.control;c.forward=c.strafe=0;c.expiresTick=0;if(reason!=='timeout')c.status='parked';if(this.visit.actor)this.visit.actor.moving=false;this.visitResult('control','stopped',reason,events,inputSequence);this.emit(events,'VISIT_CONTROL_STOP','visit_control','stopped',{generation:c.generation,reason},inputSequence);}
+ protected override setTownDoor(door:'home'|'shop',open:boolean,events:DeterministicEvent[],inputSequence?:number):boolean {
+  const world=this.snapshot(),from=door==='home'?doorAngle(world):this.town.doors.shopAngle,preferred=townDoorTarget(world,door,open),angles=open?[preferred,-preferred]:[0];
+  const angle=angles.find(a=>canSweepTownDoor(world,door,from,a));if(angle===undefined){this.emit(events,'TOWN_DOOR','town','rejected',{door,open,reason:'occupied_sweep'},inputSequence);return false;}
+  if((door==='home'?this.town.doors.homeAngle:this.town.doors.shopAngle)!==angle||door==='home'&&this.town.doors.slam){this.town.doors[door]=open;if(door==='home'){this.town.doors.homeAngle=angle;this.town.doors.slam=null;}else this.town.doors.shopAngle=angle;this.scene.revision++;townTimeline(this.town,this.data.tick,'door',open?'Door opened':'Door closed');this.emit(events,'TOWN_DOOR','town','changed',{door,open},inputSequence);}return true;
+ }
+ private visitScopeReason(command:VisitCommand):string|null {const c=this.visit.control;return command.runId!==this.cognition.identity.runId?'wrong_run':command.type!=='visit_start'&&command.generation!==c.generation?'stale_generation':command.type!=='visit_start'&&command.type!=='visit_stop'&&(c.status!=='active'||c.runId!==command.runId)?'control_inactive':null;}
+ protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
+  const cmd=input.command;if(!cmd.type.startsWith('visit_'))return super.applyExtendedInput(input,events);const c=cmd as VisitCommand,tick=this.data.tick,control=this.visit.control;
+  if(c.type==='visit_stop'&&c.runId===this.cognition.identity.runId&&c.reason==='restart'&&c.generation>=control.generation){if(c.generation>control.generation){control.generation=c.generation;control.lastSequence=0;}control.runId=c.runId;this.stopVisit(c.reason,events,input.sequence);return true;}
+  const reason=this.visitScopeReason(c);if(reason){this.visitResult('control','rejected',reason,events,input.sequence);return true;}
+  if(c.type==='visit_start'){
+   if(c.generation!==control.generation+1){this.visitResult('control','rejected','stale_generation',events,input.sequence);return true;}
+   if(!this.visit.actor){const point=visitEntrance(this.snapshot());if(!point){this.visitResult('control','rejected','entrance_blocked',events,input.sequence);return true;}this.visit.actor={id:'owner-avatar-v1',appearance:'visitor-neutral-v1',...point,heading:0,pitch:0,moving:false,gait:0,heldItemId:null,spawnedTick:tick,distanceSinceFootstep:0};this.scene.revision++;this.emit(events,'VISITOR_ENTERED','visit','spawned',{actorId:this.visit.actor.id,x:point.x,z:point.z},input.sequence);}
+   const a=this.visit.actor;control.generation=c.generation;control.lastSequence=0;control.status='active';control.runId=c.runId;control.forward=control.strafe=0;control.expiresTick=tick+Math.ceil(VISIT_LIMITS.inputLifetimeSeconds*this.data.config.hz);control.targetYaw=a.heading;control.targetPitch=a.pitch;a.moving=false;this.visitResult('control','accepted','control_acquired',events,input.sequence);return true;
+  }
+  if(c.type==='visit_stop'){this.stopVisit(c.reason,events,input.sequence);return true;}
+  if(c.sequence<=control.lastSequence){this.visitResult('control','rejected','stale_sequence',events,input.sequence);return true;}
+  if(c.type==='visit_control'){
+   if(c.expiresTick<=tick||c.expiresTick>input.receivedTick+Math.ceil(VISIT_LIMITS.inputLifetimeSeconds*this.data.config.hz)){this.visitResult('control','rejected','stale_input',events,input.sequence);return true;}
+   control.lastSequence=c.sequence;control.forward=c.forward;control.strafe=c.strafe;control.targetYaw=c.yaw;control.targetPitch=c.pitch;control.expiresTick=c.expiresTick;this.emit(events,'VISIT_CONTROL','visit_control','accepted',{generation:c.generation,sequence:c.sequence,expiresTick:c.expiresTick,forward:c.forward,strafe:c.strafe,yaw:c.yaw,pitch:c.pitch},input.sequence);return true;
+  }
+  control.lastSequence=c.sequence;if(c.actionId<=this.visit.lastActionId){this.visitResult(c.action,'rejected','duplicate_action',events,input.sequence,c.actionId);return true;}this.visit.lastActionId=c.actionId;
+  const actor=this.visit.actor!;if(c.action==='door'){const point=c.door==='home'?{x:2.97,z:-3.53}:TOWN_GEOMETRY.shopDoor;if(Math.hypot(actor.x-point.x,actor.z-point.z)>1.8){this.visitResult('door','rejected','out_of_reach',events,input.sequence);return true;}const ok=this.setTownDoor(c.door!,!this.town.doors[c.door!],events,input.sequence);this.visitResult('door',ok?'accepted':'rejected',ok?'door_changed':'occupied_sweep',events,input.sequence);return true;}
+  const reachable=Math.hypot(actor.x-TOWN_GEOMETRY.checkout.x,actor.z-TOWN_GEOMETRY.checkout.z)<=1.1&&canSweepVisitActor(this.snapshot(),actor.x,actor.z,TOWN_GEOMETRY.checkout.x,TOWN_GEOMETRY.checkout.z),result=purchaseTownItem(this.town,{purchaseId:this.town.lastPurchaseId+1,good:c.good!},tick,false,reachable,{owner:'owner',funds:this.visit.balance});
+  if(result.outcome==='purchased'){this.visit.balance=result.balance;actor.heldItemId=result.itemId;this.scene.revision++;this.emit(events,'VISIT_PURCHASE','shop','purchased',{actionId:c.actionId,purchaseId:this.town.lastPurchaseId,itemId:result.itemId!,good:c.good!,price:result.price,balance:this.visit.balance,stock:this.town.shop.stock[c.good!]},input.sequence);}
+  this.visitResult('purchase',result.outcome==='purchased'?'accepted':'rejected',result.reason,events,input.sequence);return true;
+ }
+ protected override beforeMotorExecution(events:DeterministicEvent[]):void {
+  if(this.visit?.actor){const a=this.visit.actor,c=this.visit.control,hz=this.data.config.hz,tick=this.data.tick;if(c.status==='active'&&c.expiresTick>0&&tick>c.expiresTick)this.stopVisit('timeout',events);
+   a.moving=false;if(c.status==='active'){
+    const turn=Math.max(-VISIT_LIMITS.turnRadiansPerSecond/hz,Math.min(VISIT_LIMITS.turnRadiansPerSecond/hz,angleDifference(c.targetYaw,a.heading))),pitch=Math.max(-VISIT_LIMITS.pitchRadiansPerSecond/hz,Math.min(VISIT_LIMITS.pitchRadiansPerSecond/hz,c.targetPitch-a.pitch));a.heading=Math.atan2(Math.sin(a.heading+turn),Math.cos(a.heading+turn));a.pitch=Math.max(-.9,Math.min(.9,a.pitch+pitch));
+    const length=Math.max(1,Math.hypot(c.forward,c.strafe)),forward=c.forward/length,strafe=c.strafe/length,dx=(forward*Math.sin(a.heading)-strafe*Math.cos(a.heading))*VISIT_LIMITS.speed/hz,dz=(forward*Math.cos(a.heading)+strafe*Math.sin(a.heading))*VISIT_LIMITS.speed/hz,distance=Math.hypot(dx,dz);
+    if(distance>0){if(canSweepVisitActor(this.snapshot(),a.x,a.z,a.x+dx,a.z+dz)){a.x+=dx;a.z+=dz;a.gait+=distance*8;a.moving=true;a.distanceSinceFootstep+=distance;this.scene.revision++;while(a.distanceSinceFootstep>=VISIT_LIMITS.footstepDistance){a.distanceSinceFootstep-=VISIT_LIMITS.footstepDistance;const sound={kind:'footstep' as const,id:this.data.nextSoundId++,time:tick/hz,x:a.x,y:.1,z:a.z,intensity:.12,suddenness:.18,sourceId:'visitor-footstep'};this.genericSoundCount++;const emitted=this.emit(events,'ACOUSTIC_EVENT','sound','emitted',{...sound,provenance:'WORLD_ACTION'});this.hear(sound,events,undefined,emitted.sequence);}}
+     else{c.forward=c.strafe=0;this.emit(events,'VISIT_MOVEMENT_BLOCKED','visit_control','blocked',{generation:c.generation,x:a.x,z:a.z});this.visitResult('control','rejected','movement_blocked',events);}}
+   }
+  }
+  super.beforeMotorExecution(events);
+ }
+ visitState():VisitState{return structuredClone(this.visit);}
+ override snapshot():WorldState {return {...super.snapshot(),...(this.visit&&this.town?{visit:visitPublicView(this.visit,this.town)}:{})};}
+ override checkpoint():CheckpointV10 {const base=super.checkpoint();return this.visit?{...base,schemaVersion:10,rulesVersion:VISIT_RULES,visit:structuredClone(this.visit)}:base;}
 }

@@ -18,6 +18,12 @@ export class SlamAudio {
       tone.connect(gain); gain.connect(context.destination); tone.start(now + offset); tone.stop(now + offset + .72);
     }
   }
+  playFootstep(): void {
+    const context=this.context;if(!context||context.state!=='running')return;
+    const now=context.currentTime,tone=context.createOscillator(),gain=context.createGain();
+    tone.type='sine';tone.frequency.setValueAtTime(95,now);tone.frequency.exponentialRampToValueAtTime(48,now+.08);
+    gain.gain.setValueAtTime(.045,now);gain.gain.exponentialRampToValueAtTime(.0001,now+.1);tone.connect(gain);gain.connect(context.destination);tone.start(now);tone.stop(now+.11);
+  }
   play(): void {
     const context = this.context;
     if (!context || context.state !== 'running') return;
