@@ -4,6 +4,7 @@ import type {WorldState} from '../shared/protocol.js';
 import type {TownWorldView} from '../shared/town-protocol.js';
 import {worldActivity,recentWorldTimeline} from '../src/viewer-town.js';
 import {CREATOR_FOUNDATION,type VisitWorldView} from '../shared/visit-protocol.js';
+import {VisitSimulation} from '../server/simulation.js';
 
 const town=():TownWorldView=>({layoutVersion:'home-shop-v1',doors:{home:false,homeAngle:0,shop:false,shopAngle:0,slam:null},shop:{open:true,available:true,fruitVisible:true,breadVisible:true},heldItem:null,activity:{label:'Walking to shop',status:'started',stage:'outbound',progress:0},timeline:[],firstRetainedSequence:1,droppedCount:0});
 const state=():Pick<WorldState,'home'|'town'|'character'|'capability'>=>({character:{x:0,z:0,heading:0,moving:true,gait:0},town:town()});
@@ -30,4 +31,12 @@ test('combined public timeline orders independent streams and discloses both ret
 test('owner timeline reports transactions and movement without inventing a sensed meeting or a parked timeout',()=>{
   const visit:VisitWorldView={actor:null,control:{generation:0,lastSequence:0,status:'parked',expiresTick:0},inventory:[],balance:20,lastActionId:2,feedback:null,foundation:CREATOR_FOUNDATION,droppedCount:3,timeline:[{actionId:1,type:'purchase',outcome:'rejected',reason:'out_of_reach',tick:10},{actionId:2,type:'purchase',outcome:'accepted',reason:'committed',tick:20},{actionId:2,type:'control',outcome:'stopped',reason:'timeout',tick:30}]};
   const view=recentWorldTimeline(undefined,undefined,30,1,8,visit);assert.deepEqual(view.entries.map(e=>e.label),['Owner movement stopped','Owner purchase confirmed','Owner purchase not completed']);assert.match(view.note,/3 earlier owner events/);assert.doesNotMatch(JSON.stringify(view),/creator|recognized|meeting|parked|out_of_reach/i);
+});
+test('actual repeated collision rejections remain blocked movement rather than fictitious Visit starts',()=>{
+  const initial=new VisitSimulation({mode:'EXPERIMENT',runId:'timeline-run'});initial.enqueue({type:'visit_start',runId:'timeline-run',generation:1});initial.step();const cp=initial.checkpoint();cp.pauseUntilTick=100000;cp.home.controller.searchNextTick=100000;cp.visit.control.targetYaw=0;
+  const sim=new VisitSimulation({checkpoint:cp,mode:'EXPERIMENT',runId:'timeline-run'});
+  for(let sequence=1;sequence<=30&&sim.state.visit!.timeline.filter(f=>f.reason==='movement_blocked').length<3;sequence++){sim.enqueue({type:'visit_control',runId:'timeline-run',generation:1,sequence,forward:0,strafe:1,yaw:0,pitch:0,expiresTick:sim.state.tick+20});sim.step();}
+  sim.enqueue({type:'visit_stop',runId:'timeline-run',generation:1,reason:'timeout'});sim.step();
+  const snapshot=sim.state.visit!,view=recentWorldTimeline(undefined,undefined,sim.state.tick,1/30,12,snapshot);assert.equal(snapshot.control.generation,1);assert.equal(snapshot.timeline.filter(f=>f.reason==='movement_blocked').length,3);assert.equal(view.entries.filter(e=>e.label==='Owner Visit control started').length,1);assert.equal(view.entries.filter(e=>e.label==='Owner movement blocked').length,3);assert.equal(view.entries[0].label,'Owner movement stopped');
+  const rejected=recentWorldTimeline(undefined,undefined,sim.state.tick,1/30,12,{...snapshot,timeline:[{actionId:0,type:'control',outcome:'rejected',reason:'stale_generation',tick:sim.state.tick}]});assert.equal(rejected.entries[0].label,'Owner Visit control rejected');
 });

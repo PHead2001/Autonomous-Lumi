@@ -13,7 +13,10 @@ export function visitActorBoxes(world:WorldState):PhysicalBox[]{const a=world.vi
  box('left-arm',[.17,.65,.2],[-.36,1.2,0],'#426b84');box('right-arm',[.17,.65,.2],[.36,1.2,a.heldItemId===null?0:.14],'#426b84');box('left-hand',[.16,.18,.17],[-.36,.8,0],'#d9b394');box('right-hand',[.16,.18,.17],[.36,.8,a.heldItemId===null?0:.27],'#d9b394');
  box('left-leg',[.2,.6,.22],[-.15,.34,stride],'#394658');box('right-leg',[.2,.6,.22],[.15,.34,-stride],'#394658');box('left-shoe',[.22,.14,.33],[-.15,.07,.04+stride],'#303238');box('right-shoe',[.22,.14,.33],[.15,.07,.04-stride],'#303238');
  box('left-eye',[.045,.045,.02],[-.085,1.9,.224],'#292b30',false);box('right-eye',[.045,.045,.02],[.085,1.9,.224],'#292b30',false);
+ const offering=world.social?.offer?.status==='pending'&&world.social.offer.itemId===a.heldItemId;
+ if(offering){const hand=boxes.find(b=>b.id===VISITOR_PHYSICAL_PREFIX+'right-hand')!;hand.position=[a.x+.14*cs+.43*sn,1.24,a.z-.14*sn+.43*cs];}
  if(a.heldItem){box('held-hand',[.16,.18,.17],[.32,1.1,.3],'#d9b394',false);boxes.push({id:VISITOR_HELD_PHYSICAL_ID,size:[.27,.24,.27],position:[a.x+.32*cs+.36*sn,1.21,a.z-.32*sn+.36*cs],yaw:a.heading,color:a.heldItem==='fruit'?'#d8683f':'#e3ba73',collides:false,occludes:true,observable:true,cutaway:false});}
+ if(offering){const item=boxes.find(b=>b.id===VISITOR_HELD_PHYSICAL_ID);if(item)item.position=[a.x+.14*cs+.44*sn,1.27,a.z-.14*sn+.44*cs];}
  return boxes;
 }
 function withoutVisitor(world:WorldState):WorldState{return {...world,visit:world.visit?{...world.visit,actor:null}:undefined};}

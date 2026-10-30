@@ -6,7 +6,7 @@ import type { BranchRegistry } from './branch-registry.js';
 import { BranchRuntime } from './branch-runtime.js';
 import { atomicJson,namedCheckpointPayload } from './checkpoint-storage.js';
 import { publishHomeLabResult,type HomeLabCheck,type HomeLabView } from './home-lab.js';
-import type { CheckpointV9, CheckpointV10 } from './simulation.js';
+import type { CheckpointV9, CheckpointV10, CheckpointV11 } from './simulation.js';
 import { replayBundle } from './diagnostics/bundle.js';
 
 export type TownLabScenario='shop'|'shop-closed';
@@ -26,7 +26,7 @@ export class TownLab {
       const scenarioId='town-'+randomUUID(),seedBranch='seed-'+randomUUID(),historyId=randomUUID();
       const initial=new BranchRuntime({worldId:'lumi',branchId:seedBranch,historyId,mode:'EXPERIMENT',offline:true,physiology:{active:true,genesisPreset:'production-v1'}});
       const cp=initial.checkpoint();await initial.close();
-      if(cp.simulation.schemaVersion!==9&&cp.simulation.schemaVersion!==10)throw new Error('Current town schema required');
+      if(cp.simulation.schemaVersion!==9&&(cp.simulation.schemaVersion!==10&&cp.simulation.schemaVersion!==11))throw new Error('Current town schema required');
       const s=cp.simulation;s.config.hz=1;s.body.hz=1;s.body.satiety=.25;s.body.sleepPressure=.15;s.interoception.sampling.nextSampleTick=5;
       for(const [key,value]of Object.entries(s.attention.config))if(key.endsWith('Ticks'))(s.attention.config as unknown as Record<string,number>)[key]=Math.max(1,Math.round(Number(value)/30));
       s.character.x=-1;s.character.z=2.5;s.character.heading=Math.PI;s.character.moving=false;s.pauseUntilTick=30;s.home.controller.searchNextTick=30;
@@ -51,7 +51,7 @@ export class TownLab {
   pump():void{
     for(const run of this.runs.values()){
       if(run.finishing||run.view.status!=='RUNNING')continue;
-      const cp=run.runtime.simulation.checkpoint();if(cp.schemaVersion!==9&&cp.schemaVersion!==10)continue;
+      const cp=run.runtime.simulation.checkpoint();if(cp.schemaVersion!==9&&(cp.schemaVersion!==10&&cp.schemaVersion!==11))continue;
       const busy=!!cp.town.task&&['selected','started','interrupted'].includes(cp.town.task.status),homeBusy=!!cp.home.task&&['selected','started','interrupted'].includes(cp.home.task.status),speed=busy||homeBusy||run.scenario==='shop-closed'&&run.closureQueued?1:6;
       if(speed!==run.speed){run.runtime.applyControl({type:'speed',speed});run.speed=speed;}
       if(run.scenario==='shop-closed'&&!run.closureQueued&&cp.town.task?.stage==='outbound'&&cp.town.known.some(k=>k.kind==='shop'&&k.open)){
@@ -66,7 +66,7 @@ export class TownLab {
       if(done||timeout){run.finishing=true;void this.finish(run,cp,done,timeout).catch(()=>{run.view.status='INCONCLUSIVE';run.view.phase='Diagnostic export unavailable';run.view.observed='No passing result is asserted. The isolated run remains inspectable.';});}
     }
   }
-  private async finish(run:Run,cp:CheckpointV9|CheckpointV10,done:boolean,timeout:boolean){
+  private async finish(run:Run,cp:CheckpointV9|CheckpointV10|CheckpointV11,done:boolean,timeout:boolean){
     run.runtime.applyControl({type:'pause'});
     const checks:HomeLabCheck[]=[],check=(name:string,expected:string,observed:string,pass:boolean)=>checks.push({name,expected,observed,status:pass?'PASS':'FAIL'});
     check('Grounded discovery','Actual RGB recognition precedes the selected shop journey',cp.town.known.map(k=>k.kind+':'+k.recognition).join(', '),cp.town.known.some(k=>k.kind==='shop'&&k.recognition==='authored-town-rgb-v1'));

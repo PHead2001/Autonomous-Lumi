@@ -13,6 +13,7 @@ export interface WorldState {
   home?:import('./home-protocol.js').HomeWorldView;
   town?:import('./town-protocol.js').TownWorldView;
   visit?:import('./visit-protocol.js').VisitWorldView;
+  social?:import('./social-protocol.js').SocialWorldView;
 }
 export type ServerMessage = { type: 'state'; state: WorldState } | { type: 'sound'; event: AcousticEvent; state: WorldState };
 export const REFLEX_DURATION = 0.8;

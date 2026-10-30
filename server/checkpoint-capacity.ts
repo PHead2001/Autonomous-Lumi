@@ -1,5 +1,5 @@
 import { checkpointBytes, MAX_CHECKPOINT_BYTES, namedCheckpointPayload, recoveryCheckpointPayload } from './checkpoint-storage.js';
-import type { CheckpointV5, CheckpointV6, CheckpointV7, CheckpointV8, CheckpointV9, CheckpointV10, SyntheticExperience } from './simulation.js';
+import type { CheckpointV5, CheckpointV6, CheckpointV7, CheckpointV8, CheckpointV9, CheckpointV10, CheckpointV11, SyntheticExperience } from './simulation.js';
 
 /** Per pending request: 32 KiB for its largest normalized terminal record plus
  * real experience, and 32 KiB for delivery through the ordered input queue.
@@ -15,12 +15,14 @@ export const COGNITION_MOTOR_SENSOR_BYTES = 64 * 1024;
 export const TOWN_FUTURE_BYTES = 128 * 1024;
 /** Public avatar, bounded control/result history and reserved stop slot. */
 export const VISIT_FUTURE_BYTES = 64 * 1024;
+/** Offers, reservation state, bounded authored experience and social timeline. */
+export const SOCIAL_FUTURE_BYTES = 384 * 1024;
 const MAX_ID = 'x'.repeat(64); // Runtime/registry/recovery identifiers: validId max64.
 
 /** Same builders and JSON indentation as actual storage. Runtime controls and
  * wrapper metadata use maximal widths allowed by their validators/writers. */
-export function cognitionEnvelopeBytes(simulation:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10):number {
-  const runtime={schemaVersion:simulation.schemaVersion===10?9:simulation.schemaVersion===9?8:simulation.schemaVersion===8?7:simulation.schemaVersion===7?6:simulation.schemaVersion===6?5:4,kind:'lumi-branch-runtime',mode:'EXPERIMENT',simulation,
+export function cognitionEnvelopeBytes(simulation:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11):number {
+  const runtime={schemaVersion:simulation.schemaVersion===11?10:simulation.schemaVersion===10?9:simulation.schemaVersion===9?8:simulation.schemaVersion===8?7:simulation.schemaVersion===7?6:simulation.schemaVersion===6?5:4,kind:'lumi-branch-runtime',mode:'EXPERIMENT',simulation,
     control:{paused:false,speed:1.1234567890123457,fastForwardRemaining:100000,nextOperationSequence:Number.MAX_SAFE_INTEGER,loggingMode:'verbose',compressClosed:false},
     scheduler:{config:{hz:120,maxStepsPerPump:1000,maxBacklogSteps:10000,suspendThresholdMs:Number.MAX_VALUE},backlogMs:1.2345678901234567e-100}};
   return Math.max(checkpointBytes(recoveryCheckpointPayload(runtime,MAX_ID,Number.MAX_SAFE_INTEGER)),checkpointBytes(namedCheckpointPayload(runtime,{worldId:MAX_ID,branchId:MAX_ID,historyId:MAX_ID,mode:'EXPERIMENT',createdAt:'+275760-09-13T00:00:00.000Z'})));
@@ -31,8 +33,8 @@ const MAX_SYNTHETIC:SyntheticExperience[]=Array.from({length:256},(_,index)=>({i
 /** Required durable bytes, including future work already admitted. No records
  * are trimmed to make this fit. Replaying the same normalized inputs makes the
  * same capacity decision without the runtime, filesystem, provider or renderer. */
-export function cognitionStorageBytes(checkpoint:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10):number {
-  const future:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10={...checkpoint,activity:{...checkpoint.activity,status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:MAX_MILESTONES,completionCount:1,activityId:Number.MAX_SAFE_INTEGER},
+export function cognitionStorageBytes(checkpoint:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11):number {
+  const future:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11={...checkpoint,activity:{...checkpoint.activity,status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:MAX_MILESTONES,completionCount:1,activityId:Number.MAX_SAFE_INTEGER},
     // A LIVE history may fork into EXPERIMENT, where these slots become legal.
     experiences:MAX_SYNTHETIC,nextExperienceId:257};
   const pending=new Set(checkpoint.cognition.requests.filter(request=>request.status==='pending').map(request=>request.request.requestId));
@@ -52,10 +54,10 @@ export function cognitionStorageBytes(checkpoint:CheckpointV5|CheckpointV6|Check
   // their encoding keys, incapacity intervals, 32 pending absorption effects and 8 verified import edges.
   // Actual existing records remain measured in the envelope, never trimmed.
   // Home maximum-shape serialized growth: 48679 bytes; 64 KiB covers every bounded route/knowledge/timeline slot.
-  const homeGrowth=checkpoint.schemaVersion===8||(checkpoint.schemaVersion===9||checkpoint.schemaVersion===10)?64*1024:0;
-  const physiologyGrowth=(checkpoint.schemaVersion===6||checkpoint.schemaVersion===7||checkpoint.schemaVersion===8||(checkpoint.schemaVersion===9||checkpoint.schemaVersion===10))?(checkpoint.body.active?384*1024:8*1024):0;
+  const homeGrowth=checkpoint.schemaVersion===8||(checkpoint.schemaVersion===9||(checkpoint.schemaVersion===10||checkpoint.schemaVersion===11))?64*1024:0;
+  const physiologyGrowth=(checkpoint.schemaVersion===6||checkpoint.schemaVersion===7||checkpoint.schemaVersion===8||(checkpoint.schemaVersion===9||(checkpoint.schemaVersion===10||checkpoint.schemaVersion===11)))?(checkpoint.body.active?384*1024:8*1024):0;
   // Town owns bounded item/transaction/knowledge and route slots separately from home.
-  const townGrowth=(checkpoint.schemaVersion===9||checkpoint.schemaVersion===10)?TOWN_FUTURE_BYTES:0;
-  return bytes+COGNITION_MOTOR_SENSOR_BYTES+pendingBytes+physiologyGrowth+homeGrowth+townGrowth+(checkpoint.schemaVersion===10?VISIT_FUTURE_BYTES:0);
+  const townGrowth=(checkpoint.schemaVersion===9||(checkpoint.schemaVersion===10||checkpoint.schemaVersion===11))?TOWN_FUTURE_BYTES:0;
+  return bytes+COGNITION_MOTOR_SENSOR_BYTES+pendingBytes+physiologyGrowth+homeGrowth+townGrowth+((checkpoint.schemaVersion===10||checkpoint.schemaVersion===11)?VISIT_FUTURE_BYTES:0)+(checkpoint.schemaVersion===11?SOCIAL_FUTURE_BYTES:0);
 }
-export const fitsCognitionStorage=(checkpoint:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10):boolean=>cognitionStorageBytes(checkpoint)<=MAX_CHECKPOINT_BYTES;
+export const fitsCognitionStorage=(checkpoint:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11):boolean=>cognitionStorageBytes(checkpoint)<=MAX_CHECKPOINT_BYTES;

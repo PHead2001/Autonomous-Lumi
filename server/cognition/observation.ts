@@ -1,10 +1,11 @@
+import { socialProviderExperiences } from '../social.js';
 import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
-import { experienceHistoryAdmitted, type CheckpointV5, type CheckpointV6, type CheckpointV7, type CheckpointV8, type CheckpointV9, CheckpointV10 } from '../simulation.js';
+import { experienceHistoryAdmitted, type CheckpointV5, type CheckpointV6, type CheckpointV7, type CheckpointV8, type CheckpointV9, CheckpointV10, CheckpointV11 } from '../simulation.js';
 import type { BranchRuntime } from '../branch-runtime.js';
 import { hashCanonical } from '../canonical.js';
 import type { CaptureManager } from '../vision/capture-manager.js';
-import { currentCognitionProfile, validateCognitionContext, type CognitionContext, type CognitionIdentity, type CognitionSelection } from '../../shared/cognition-protocol.js';
+import { currentCognitionProfile, CREATOR_FOUNDATION_CONTEXT, validateCognitionContext, type CognitionContext, type CognitionIdentity, type CognitionSelection } from '../../shared/cognition-protocol.js';
 
 export interface ImmutableCognitionObservation {
   selection:CognitionSelection;
@@ -13,13 +14,20 @@ export interface ImmutableCognitionObservation {
   evidence:Omit<ReturnType<CaptureManager['observation']>,'png'>;
 }
 /** Legacy geometry-aided prose remains on disk, but never becomes future provider context. */
-export function providerExperiences(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10,identity:CognitionIdentity):CognitionContext['experiences'] {if(identity.historyId!==cp.cognition.identity.historyId)return [];return cp.realExperiences.filter(e=>cp.cognition.requests.some(r=>r.request.requestId===e.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))&&e.identity.worldId===identity.worldId&&experienceHistoryAdmitted(cp,e.identity.historyId,e.encodedTick)&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).slice(-8).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));}
+export function providerExperiences(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11,identity:CognitionIdentity):CognitionContext['experiences'] {
+  if(identity.historyId!==cp.cognition.identity.historyId)return [];
+  const visual=cp.realExperiences.filter(e=>cp.cognition.requests.some(r=>r.request.requestId===e.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))&&e.identity.worldId===identity.worldId&&experienceHistoryAdmitted(cp,e.identity.historyId,e.encodedTick)&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).map(e=>({encodedTick:e.encodedTick,interpretation:e.interpretation,uncertainty:e.uncertainty as number|string}));
+  if(cp.schemaVersion!==11)return visual.slice(-8).map(({interpretation,uncertainty})=>({interpretation,uncertainty}));
+  const eligible=socialProviderExperiences(cp,identity);
+  const social=cp.social.experiences.filter(e=>eligible.some(semantic=>semantic.interpretation===e.interpretation&&semantic.uncertainty===e.uncertainty)).map(e=>({encodedTick:e.encodedTick,interpretation:e.interpretation,uncertainty:e.uncertainty as number|string}));
+  return [...visual,...social].sort((a,b)=>a.encodedTick-b.encodedTick).slice(-8).map(({interpretation,uncertainty})=>({interpretation,uncertainty}));
+}
 /** This allowlist is the only world-to-provider assembly path. Private pose and
  * correlation timing remain in selection, separately from the provider DTO. */
 export function assembleCognitionObservation(runtime:BranchRuntime,manager:CaptureManager,captureId:string,identity:CognitionIdentity,maxImageBytes:number,maxContextBytes:number):ImmutableCognitionObservation {
   const retained=manager.observation(runtime.target,captureId),{metadata,observation}=retained;
   const cp=runtime.simulation.checkpoint();
-  if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&(cp.schemaVersion!==9&&cp.schemaVersion!==10))))throw new Error('Cognition schema unavailable');
+  if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&(cp.schemaVersion!==9&&(cp.schemaVersion!==10&&cp.schemaVersion!==11)))))throw new Error('Cognition schema unavailable');
   const capture=cp.attention.lastCapture;
   if(!capture||capture.captureId!==captureId||capture.outcome!=='success'||capture.freshness!=='applicable'||cp.attention.baseline?.captureId!==captureId||metadata.automatic?.intentId!==capture.intentId)throw new Error('Selected capture has no applicable automatic attention association');
   const png=retained.png;
@@ -34,7 +42,8 @@ export function assembleCognitionObservation(runtime:BranchRuntime,manager:Captu
     sound:relatedSound?{observationId:received.observationId,intensity:received.intensity,suddenness:received.suddenness,bearingDegrees:received.bearingDegrees,directionUncertaintyDegrees:received.directionUncertaintyDegrees,distanceBand:received.distanceBand,distanceUncertainty:received.distanceUncertainty,provenance:received.provenance,relation:received.tick===metadata.tick?'same_capture':'before_image',ageBand:metadata.tick-received.tick<=90?'recent':'earlier'}:null,
     activity:{status:cp.activity.status},
     experiences:providerExperiences(cp,identity),
-    ...((cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||(cp.schemaVersion===9||cp.schemaVersion===10)))&&cp.body.active&&'providerInternalSensations' in runtime.simulation?{internalSensations:runtime.simulation.providerInternalSensations()}:{}),
+    ...(cp.schemaVersion===11?{creatorFoundation:structuredClone(CREATOR_FOUNDATION_CONTEXT)}:{}),
+    ...((cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||(cp.schemaVersion===9||(cp.schemaVersion===10||cp.schemaVersion===11))))&&cp.body.active&&'providerInternalSensations' in runtime.simulation?{internalSensations:runtime.simulation.providerInternalSensations()}:{}),
   };
   validateCognitionContext(context);
   if(Buffer.byteLength(JSON.stringify(context))>maxContextBytes)throw new Error('Selected context exceeds bound');

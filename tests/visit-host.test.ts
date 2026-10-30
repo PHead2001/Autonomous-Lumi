@@ -45,7 +45,14 @@ test('Visit authenticates separately, binds one controller and records disconnec
     assert.equal((await packet(ws, { ...movement, forward: 20 })).type, 'error');
     assert.equal((await packet(ws, movement)).type, 'ack');
     assert.equal((await packet(ws, movement)).type, 'error', 'duplicate sequence rejected at host');
+    const badge = { type: 'badge', ...scope, generation: control.generation, sequence: 2, actionId: 1, display: true };
+    assert.equal((await packet(foreign, badge)).type, 'error', 'foreign session cannot issue a creator cue');
+    assert.equal((await packet(ws, { ...badge, verified: true })).type, 'error', 'client cannot assert verification');
+    assert.equal((await packet(ws, badge)).type, 'ack');
+    assert.equal((await packet(ws, { type: 'offer', ...scope, generation: control.generation, sequence: 3, actionId: 2, itemId: 999 })).type, 'ack');
     runtime.applyControl({ type: 'step' });
+    const socialState = runtime.simulation.checkpoint(); if (socialState.schemaVersion !== 11) throw new Error('Social schema required');
+    assert.equal(socialState.social.badge.display, true); assert.equal(socialState.social.offer, null); assert.equal(socialState.social.feedback?.outcome, 'rejected'); assert.deepEqual(socialState.social.experiences, []); assert.equal(socialState.social.firstRecognizedEncounter, null, 'authentication alone supplies no recognition');
     const avatar = runtime.viewerState().visit!.actor!;
     assert.ok(avatar);
     // Saturating normal inputs cannot prevent admission of a disconnect stop.

@@ -2,6 +2,7 @@ import type {WorldState} from '../shared/protocol';
 import type {ActiveTarget} from '../shared/lab-protocol';
 import {VisitControls,type VisitInteraction,type VisitLook} from './visit-controls';
 import {VisitGrant} from './visit-grant';
+import {offerPresentation,socialControls,socialRequestResult,type PendingSocialRequest} from './viewer-social';
 
 export interface VisitorCameraPose {x:number;z:number;heading:number;pitch:number}
 interface VisitViewCallbacks {camera(active:boolean,pose:VisitorCameraPose|null,look:VisitLook):void;mode(active:boolean):void;activateAudio():void}
@@ -11,14 +12,20 @@ const readable=(reason:string)=>({out_of_reach:'Move closer to the door or check
 export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks) {
   const el=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
   const panel=el('visit-panel'),status=el('visit-session-status'),feedback=el('visit-feedback'),login=el<HTMLFormElement>('visit-login'),ready=el('visit-ready'),play=el('visit-play'),enter=el<HTMLButtonElement>('visit-enter'),takeover=el<HTMLButtonElement>('visit-takeover'),observe=el<HTMLButtonElement>('enter-observe'),choose=el<HTMLButtonElement>('choose-visit'),credential=el<HTMLInputElement>('visit-credential'),good=el<HTMLSelectElement>('visit-good');
-  const controls=new VisitControls();let world:WorldState|null=null,csrf:string|null=null,socket:WebSocket|null=null,timer:ReturnType<typeof setInterval>|undefined,bindingTimer:ReturnType<typeof setTimeout>|undefined,pending=false,entering=false,epoch=0,drag:number|null=null,px=0,py=0,lastFeedback='',grant:VisitGrant|null=null;
+  const controls=new VisitControls();let world:WorldState|null=null,csrf:string|null=null,socket:WebSocket|null=null,timer:ReturnType<typeof setInterval>|undefined,bindingTimer:ReturnType<typeof setTimeout>|undefined,pending=false,entering=false,epoch=0,drag:number|null=null,px=0,py=0,lastFeedback='',grant:VisitGrant|null=null,socialRequest:PendingSocialRequest|null=null;
   const report=(message:string)=>{feedback.textContent=message;el('visit-hud-feedback').textContent=message;};
   function scope():ActiveTarget {if(!world?.branchId)throw new Error('Wait for the selected current world before entering.');return {worldId:world.worldId,branchId:world.branchId,runId:world.runId};}
   function camera(){callbacks.camera(controls.active,world?.visit?.actor??null,controls.cameraLook);}
   function send(value:unknown){if(value&&socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
   function stopHeld(){send(controls.clear());drag=null;}
-  function setMode(active:boolean){observe.setAttribute('aria-pressed',String(!active));choose.setAttribute('aria-pressed',String(active));el('visit-hud').hidden=!active;callbacks.mode(active);camera();}
-  function release(message?:string){clearInterval(timer);clearTimeout(bindingTimer);send(controls.end());grant=null;const prior=socket;socket=null;prior?.close();play.hidden=true;setMode(false);enter.disabled=!world?.visit||!csrf||pending;if(message)status.textContent=message;}
+  function renderSocial(){
+    if(!world)return;const social=world.social,eligibility=socialControls(social,world.visit,world.character,controls.active),presentation=offerPresentation(social);
+    el('visit-social').hidden=!social;el<HTMLButtonElement>('visit-offer').disabled=!eligibility.canOffer||!!socialRequest;el<HTMLButtonElement>('visit-cancel-offer').disabled=!eligibility.canCancel||!!socialRequest;el<HTMLButtonElement>('visit-badge').disabled=!eligibility.canToggleBadge||!!socialRequest;
+    el('visit-offer-hint').textContent=socialRequest?'Request sent; waiting for its server outcome.':eligibility.hint;el('visit-offer-status').textContent=`${presentation.title}. ${presentation.detail}`;el('visit-hud-offer').textContent=social?presentation.title:'';
+    el('visit-badge').textContent=social?.badge.display?'Hide introduction badge':'Show introduction badge';el('visit-badge').setAttribute('aria-pressed',String(social?.badge.display??false));el('visit-badge-status').textContent=social?.badge.display?'The in-world introduction badge is displayed. Visibility, attention and successful encoding are still required; no greeting or meeting is guaranteed.':'The optional in-world badge is hidden. Login alone does not identify you to Lumi.';
+  }
+  function setMode(active:boolean){observe.setAttribute('aria-pressed',String(!active));choose.setAttribute('aria-pressed',String(active));el('visit-hud').hidden=!active;callbacks.mode(active);camera();renderSocial();}
+  function release(message?:string){clearInterval(timer);clearTimeout(bindingTimer);send(controls.end());grant=null;socialRequest=null;const prior=socket;socket=null;prior?.close();play.hidden=true;setMode(false);enter.disabled=!world?.visit||!csrf||pending;if(message)status.textContent=message;}
   function confirmEntry(){
     if(!grant||!world)return;const state=grant.inspect(world);
     if(state.status==='rejected'){release(state.message);return;}
@@ -47,11 +54,11 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
       const current=new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/visit`);socket=current;
       current.onopen=()=>{if(socket!==current)return;current.send(JSON.stringify({type:'bind',...target,csrf,generation:result.generation}));};
       current.onmessage=event=>{
-        if(socket!==current)return;let message:{type?:string;generation?:number;queued?:boolean;error?:string};try{message=JSON.parse(event.data);}catch{release('Unreadable control response. Re-enter Visit to resume safely.');return;}
+        if(socket!==current)return;let message:{type?:string;generation?:number;queued?:boolean;sequence?:number;error?:string};try{message=JSON.parse(event.data);}catch{release('Unreadable control response. Re-enter Visit to resume safely.');return;}
         if(message.type==='bound'){
           try{grant?.bind(message.generation!);confirmEntry();}catch(error){release(error instanceof Error?error.message:'Control grant changed. Re-enter Visit.');}
         }else if(message.type==='error'){report(message.error??'The server rejected that control.');}
-        else if(message.type==='ack'&&message.queued===false)report('That intention was not admitted. Your last confirmed world state remains authoritative.');
+        else if(message.type==='ack'&&message.queued===false){if(message.sequence===socialRequest?.sequence){socialRequest=null;renderSocial();}report('That intention was not admitted. Your last confirmed world state remains authoritative.');}
       };
       current.onclose=()=>{if(socket===current)release('Visit control disconnected. Movement is stopped by the server; re-enter to resume the same avatar.');};current.onerror=()=>current.close();
       bindingTimer=setTimeout(()=>{if(socket===current&&grant&&world&&!controls.active){const state=grant.timeout(world);if(state.status==='active')confirmEntry();else release(state.message);}},8000);
@@ -70,7 +77,13 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
     send(controls.interaction(action,world.visit.lastActionId));report('Interaction requested; waiting for the server outcome.');
   }
   el('visit-interact').onclick=()=>interact();el('visit-purchase').onclick=()=>interact(true);
-  const keydown=(event:KeyboardEvent)=>{if(!controls.active||event.target!==canvas)return;if(controls.key(event.code,true)){event.preventDefault();if(!event.repeat)send(controls.movement());}else if(event.code==='KeyE'&&!event.repeat){event.preventDefault();interact();}};
+  function socialIntent(kind:'offer'|'cancel'|'badge'){
+    if(!world?.visit||socialRequest||socket?.readyState!==WebSocket.OPEN)return;const eligibility=socialControls(world.social,world.visit,world.character,controls.active),last=world.visit.lastActionId;
+    const packet=kind==='offer'&&eligibility.canOffer&&eligibility.itemId!==null?controls.offer(eligibility.itemId,last):kind==='cancel'&&eligibility.canCancel&&eligibility.offerId!==null?controls.cancelOffer(eligibility.offerId,last):kind==='badge'&&eligibility.canToggleBadge?controls.badge(!world.social!.badge.display,last):null;
+    if(!packet){report(eligibility.hint);return;}socialRequest={actionId:packet.actionId,sequence:packet.sequence,kind};send(packet);renderSocial();report(kind==='offer'?'Offer requested; pending status and response await the server.':kind==='cancel'?'Cancellation requested; waiting for the server outcome.':'Badge display change requested; waiting for the server outcome.');
+  }
+  el('visit-offer').onclick=()=>socialIntent('offer');el('visit-cancel-offer').onclick=()=>socialIntent('cancel');el('visit-badge').onclick=()=>socialIntent('badge');
+  const keydown=(event:KeyboardEvent)=>{if(!controls.active||event.target!==canvas)return;if(controls.key(event.code,true)){event.preventDefault();if(!event.repeat)send(controls.movement());}else if(event.code==='KeyE'&&!event.repeat){event.preventDefault();interact();}else if(event.code==='KeyF'&&!event.repeat){event.preventDefault();socialIntent('offer');}};
   const keyup=(event:KeyboardEvent)=>{if(controls.key(event.code,false)){event.preventDefault();send(controls.movement());}};
   const pointerdown=(event:PointerEvent)=>{if(!controls.active||event.button!==0)return;canvas.focus({preventScroll:true});drag=event.pointerId;px=event.clientX;py=event.clientY;canvas.setPointerCapture(event.pointerId);};
   const pointermove=(event:PointerEvent)=>{if(drag!==event.pointerId||!controls.active)return;controls.turn(event.clientX-px,event.clientY-py);px=event.clientX;py=event.clientY;camera();};
@@ -85,6 +98,7 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
       if(next.visit){const v=next.visit,inventory=v.inventory.reduce((a,i)=>{a[i.kind]=(a[i.kind]??0)+1;return a;},{} as Record<string,number>);el('visit-inventory').textContent=`${v.balance} credits · Holding ${v.actor?.heldItem??'nothing'} · Inventory: ${Object.entries(inventory).map(([kind,count])=>`${kind} × ${count}`).join(', ')||'empty'}`;el('visit-hud-inventory').textContent=`${v.balance} credits · Holding ${v.actor?.heldItem??'nothing'}`;
         const f=v.feedback,key=f?`${f.tick}/${f.actionId}/${f.type}/${f.outcome}`:'';if(f&&key!==lastFeedback){lastFeedback=key;report(`${f.type==='purchase'?'Purchase':f.type==='door'?'Door interaction':'Control'} ${f.outcome==='accepted'?'confirmed':f.outcome==='stopped'?'stopped':'not completed'}. ${readable(f.reason)}`);}
       }
+      const socialResult=socialRequestResult(socialRequest,next.social?.feedback);if(socialResult){socialRequest=null;report(socialResult.message);}renderSocial();
       camera();
     },
     disconnect(){epoch++;release('Viewer disconnected. Visit control released; the server world continues.');},

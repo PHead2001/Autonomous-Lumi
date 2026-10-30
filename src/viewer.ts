@@ -31,7 +31,7 @@ function status(text: string, live: boolean) { connection.textContent = text; do
 const visit=mountVisit(element<HTMLCanvasElement>('scene'),{
   activateAudio(){void audio.activate().then(active=>{element('audio-status').textContent=active?'Sound enabled · Only new server sounds play.':'Audio unavailable · World sound and hearing still run.';});},
   camera(active,pose,look){scene?.setVisitCamera(active,pose,look);},
-  mode(active){isVisiting=active;element<HTMLSelectElement>('camera-mode').disabled=active;element<HTMLButtonElement>('neighborhood-view').disabled=active;element<HTMLButtonElement>('reset-camera').disabled=active;element('entry-help').textContent=active?'Visit controls your separate avatar. Observe releases control and leaves it parked.':'Observe is nonphysical. Visit controls a separate owner avatar.';element<HTMLCanvasElement>('scene').setAttribute('aria-label',active?'Owner Visit. W A S D to move, drag to look, E to interact.':'Observe Lumi’s home. Camera keys 1 to 4; R to recenter.');},
+  mode(active){isVisiting=active;document.querySelector<HTMLElement>('.observe-controls')!.hidden=active;element<HTMLSelectElement>('camera-mode').disabled=active;element<HTMLButtonElement>('neighborhood-view').disabled=active;element<HTMLButtonElement>('reset-camera').disabled=active;element('entry-help').textContent=active?'Visit controls your separate avatar. Observe releases control and leaves it parked.':'Observe is nonphysical. Visit controls a separate owner avatar.';element<HTMLCanvasElement>('scene').setAttribute('aria-label',active?'Owner Visit. W A S D to move, drag to look, E to interact.':'Observe Lumi’s home. Camera keys 1 to 4; R to recenter.');},
 });
 const lifecycle = new ViewerLifecycle(window, {
   resume: connect,
@@ -66,7 +66,7 @@ function connect() {
     element('viewer-room').textContent = `${experiment?'ISOLATED EXPERIMENT':'LUMI’S HOME'} · ${isVisiting?'VISIT':'OBSERVE'}`;
     const presentation = worldActivity(state);
     element('activity-title').textContent = presentation.title; element('activity-detail').textContent = presentation.detail;
-    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30,8,state.visit);
+    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30,8,state.visit,state.social);
     element('history-status').textContent = history.note;
     const timeline = element('activity-timeline'), fragment = document.createDocumentFragment();
     for (const entry of history.entries) { const row = document.createElement('li'), age = document.createElement('time'), label = document.createElement('span'); age.textContent = entry.age; label.textContent = entry.label; row.append(age,label); fragment.append(row); }

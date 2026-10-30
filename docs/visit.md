@@ -48,7 +48,7 @@ Changing world/branch/run requires a new control grant. Old-run inputs cannot si
 
 The visitor body and held item are part of the same captured physical snapshot used by the ordinary renderer, actual first-person renderer, masks, visibility, acoustics and collision. They are not spectator-only meshes. Being authenticated or present in server state does not mean Lumi sensed or attended the visitor; walls, view direction, lighting and attention still matter.
 
-The small foundational premise that a creator built Lumi and her world is separate from autobiography. This Visit increment does not introduce the visitor as that creator, establish a relationship, force a greeting or create a meeting memory. Public introduction and real item offers are the next implementation increment within Phase 2.5c.
+The small foundational premise that a creator built Lumi and her world is separate from autobiography. Pairing and entering Visit do not identify the visitor as that creator, establish a relationship or force a greeting. The optional **Show introduction badge** provides an actual in-world cue that still requires readable attended evidence and successful encoding. Use **Offer held food** or **F** near Lumi for a real voluntary offer. See [offers and introduction](offers.md) for outcomes, identity boundaries and persistence.
 
 Use isolated EXPERIMENT histories for acceptance visits and future introductions. Configuring owner access does not require spawning an avatar into the owner's LIVE world or consuming the first real LIVE encounter as a test.
 

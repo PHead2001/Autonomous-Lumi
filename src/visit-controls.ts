@@ -26,7 +26,11 @@ export class VisitControls {
     const length=Math.hypot(forward,strafe);if(length>1){forward/=length;strafe/=length;}
     return {type:'control' as const,...this.target,generation:this.generation,sequence:++this.sequence,forward,strafe,...this.look};
   }
-  interaction(action:VisitInteraction,authoritativeLastActionId=0){if(!this.target)return null;this.actionId=Math.max(this.actionId,authoritativeLastActionId);return {type:'interact' as const,...this.target,generation:this.generation,sequence:++this.sequence,actionId:++this.actionId,...action};}
+  private action(authoritativeLastActionId:number){if(!this.target)return null;this.actionId=Math.max(this.actionId,authoritativeLastActionId);return {...this.target,generation:this.generation,sequence:++this.sequence,actionId:++this.actionId};}
+  interaction(action:VisitInteraction,authoritativeLastActionId=0){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'interact' as const,...envelope,...action}:null;}
+  offer(itemId:number,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'offer' as const,...envelope,itemId}:null;}
+  cancelOffer(offerId:number,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'cancel_offer' as const,...envelope,offerId}:null;}
+  badge(display:boolean,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'badge' as const,...envelope,display}:null;}
   clear(){this.keys.clear();return this.movement();}
   end(){const stopped=this.clear();this.target=null;return stopped;}
 }

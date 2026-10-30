@@ -30,14 +30,14 @@ test('runtime recovery revokes moving control before ticks while preserving publ
     original.enqueueVisit({ type: 'visit_control', runId: original.target.runId, generation: 2, sequence: 3, forward: -1, strafe: 0, yaw: 1, pitch: 0, expiresTick: original.simulation.state.tick + 20 });
     original.enqueueVisit({ type: 'visit_interact', runId: original.target.runId, generation: 2, sequence: 4, actionId: 2, action: 'purchase', door: null, good: 'fruit' });
     original.enqueueVisit({ type: 'visit_stop', runId: original.target.runId, generation: 2, reason: 'observe' });
-    const saved = original.checkpoint(); assert.equal(saved.schemaVersion, 9); assert.equal(saved.simulation.schemaVersion, 10);
-    if (saved.simulation.schemaVersion !== 10) throw new Error('Visit schema required');
+    const saved = original.checkpoint(); assert.equal(saved.schemaVersion, 10); assert.equal(saved.simulation.schemaVersion, 11);
+    if (saved.simulation.schemaVersion !== 11) throw new Error('Visit schema required');
     const actor = saved.simulation.visit.actor!; assert.ok(actor.moving);
     restored = new BranchRuntime({ worldId: 'test', branchId: 'restored', mode: 'EXPERIMENT', directory, checkpoint: saved, dormant: true });
     const pending = restored.checkpoint(); assert.equal(pending.simulation.pendingInputs.filter(input => input.command.type === 'visit_stop').length, 1); assert.ok(pending.simulation.pendingInputs.some(input => input.command.type === 'visit_stop' && input.command.reason === 'restart' && input.command.runId === restored!.target.runId));
     assert.throws(() => restored!.enqueueVisit({ type: 'visit_start', runId: original.target.runId, generation: 3 }), /stale/);
     await restored.prepare(); restored.activate(); restored.applyControl({ type: 'step' });
-    const current = restored.checkpoint().simulation; if (current.schemaVersion !== 10) throw new Error('Visit schema required');
+    const current = restored.checkpoint().simulation; if (current.schemaVersion !== 11) throw new Error('Visit schema required');
     assert.equal(current.visit.control.status, 'parked'); assert.equal(current.visit.actor!.moving, false);
     assert.equal(current.visit.actor!.id, actor.id); assert.equal(current.visit.actor!.x, actor.x); assert.equal(current.visit.actor!.z, actor.z);
     assert.deepEqual(current.town.items, saved.simulation.town.items); assert.equal(current.visit.balance, saved.simulation.visit.balance);

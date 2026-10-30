@@ -7,8 +7,8 @@ test('attention demo starts from the current simulation schema inside a current 
   const demo = await startAttentionDemo();
   try {
     const checkpoint = demo.experiment.checkpoint();
-    assert.equal(checkpoint.schemaVersion, 9);
-    assert.equal(checkpoint.simulation.schemaVersion, 10);
+    assert.equal(checkpoint.schemaVersion, 10);
+    assert.equal(checkpoint.simulation.schemaVersion, 11);
     assert.equal(checkpoint.mode, 'EXPERIMENT');
     assert.equal(demo.manifest.provenance, 'TEST STUB');
   } finally {

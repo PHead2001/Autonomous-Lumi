@@ -1,3 +1,4 @@
+import { recognizeCapturedSocial } from '../social-observation.js';
 import { recognizeCapturedHome } from '../home-observation.js';
 import { recognizeCapturedTown } from '../town-observation.js';
 import { randomUUID, createHash } from 'node:crypto';
@@ -133,6 +134,7 @@ export class CaptureManager {
   }
   homeObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedHome({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
   townObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedTown({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
+  socialObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedSocial({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
   /** ID-bound filtered evidence for cognition. Never substitutes the latest frame.
    * The caller owns the copied pixels before it enters any provider queue. */
   observation(target: ActiveTarget, captureId: string): { metadata: CaptureMetadata; observation: VisualObservation; png: Uint8Array; sensorSource: 'actual_renderer'|'mock_renderer' } {

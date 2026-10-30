@@ -1,3 +1,4 @@
+import { validateSocialCommand, type SocialIntentCommand } from '../shared/social-protocol.js';
 import type { IncomingMessage } from 'node:http';
 import { WebSocket } from 'ws';
 import type { BranchRegistry } from './branch-registry.js';
@@ -44,7 +45,7 @@ export class VisitHost {
     if (existing && input.takeover !== true) throw new Error('Visit is controlled in another tab. Use Take over to park its control and continue.');
     if (existing) this.stop(existing, 'revoked');
     const checkpoint = runtime.simulation.checkpoint();
-    if (checkpoint.schemaVersion !== 10) throw new Error('Visit requires the current world schema');
+    if ((checkpoint.schemaVersion!==10&&checkpoint.schemaVersion!==11)) throw new Error('Visit requires the current world schema');
     const pendingGeneration = Math.max(checkpoint.visit.control.generation, ...checkpoint.pendingInputs.map(i => i.command.type === 'visit_start' ? i.command.generation : 0));
     const generation = pendingGeneration + 1;
     const accepted = runtime.enqueueVisit({ type: 'visit_start', runId: scope.runId, generation });
@@ -69,11 +70,12 @@ export class VisitHost {
         const controller = this.bindings.get(socket);
         if (!controller || this.auth.session(req.headers.cookie)?.id !== controller.session.id || this.registry.active(this.scope(input)) !== controller.runtime || input.generation !== controller.generation || !Number.isSafeInteger(input.sequence) || Number(input.sequence) <= controller.sequence) throw new Error('Visit control is stale or unavailable');
         const shared = ['type', 'worldId', 'branchId', 'runId', 'generation', 'sequence'];
-        let command;
+        let command;let social:SocialIntentCommand|undefined;
         if (input.type === 'control' && exact(input, [...shared, 'forward', 'strafe', 'yaw', 'pitch'])) command = validateVisitCommand({ type: 'visit_control', runId: controller.runtime.target.runId, generation: input.generation, sequence: input.sequence, forward: input.forward, strafe: input.strafe, yaw: input.yaw, pitch: input.pitch, expiresTick: controller.runtime.simulation.state.tick + Math.ceil(.75 * controller.runtime.simulation.checkpoint().config.hz) });
         else if (input.type === 'interact' && exact(input, [...shared, 'actionId', 'action', 'door', 'good'])) command = validateVisitCommand({ type: 'visit_interact', runId: controller.runtime.target.runId, generation: input.generation, sequence: input.sequence, actionId: input.actionId, action: input.action, door: input.door, good: input.good });
+        else if ((input.type==='offer'&&exact(input,[...shared,'actionId','itemId']))||(input.type==='cancel_offer'&&exact(input,[...shared,'actionId','offerId']))||(input.type==='badge'&&exact(input,[...shared,'actionId','display']))){const normalized=validateSocialCommand({type:input.type==='offer'?'social_offer':input.type==='cancel_offer'?'social_cancel':'social_badge',runId:controller.runtime.target.runId,generation:input.generation,sequence:input.sequence,actionId:input.actionId,...(input.type==='offer'?{itemId:input.itemId}:input.type==='cancel_offer'?{offerId:input.offerId}:{display:input.display})});if(normalized.type==='social_observation')throw new Error('Social intention required');social=normalized;}
         else throw new Error('Invalid Visit control fields');
-        const result = controller.runtime.enqueueVisit(command);
+        const result = social?controller.runtime.enqueueSocial(social):controller.runtime.enqueueVisit(command!);
         controller.sequence = Number(input.sequence);
         this.write(socket, { type: 'ack', sequence: input.sequence, queued: result.input.admission === 'queued' });
       } catch { this.write(socket, { type: 'error', error: 'Visit input rejected; check connection and current control' }); }

@@ -19,7 +19,7 @@ export interface AutomaticCaptureHostView {
 }
 function captureState(runtime: BranchRuntime) {
   const cp = runtime.simulation.checkpoint();
-  return cp.schemaVersion === 4 || cp.schemaVersion === 5 || (cp.schemaVersion === 6 || cp.schemaVersion === 7 || cp.schemaVersion === 8 || (cp.schemaVersion === 9 || cp.schemaVersion === 10)) ? cp : null;
+  return cp.schemaVersion === 4 || cp.schemaVersion === 5 || (cp.schemaVersion === 6 || cp.schemaVersion === 7 || cp.schemaVersion === 8 || (cp.schemaVersion === 9 || (cp.schemaVersion===10||cp.schemaVersion===11))) ? cp : null;
 }
 function pose(runtime: BranchRuntime): SensorPose {
   const p = eyePose(runtime.viewerState(), AUTO_CAPTURE_HOST_LIMITS.width, AUTO_CAPTURE_HOST_LIMITS.height);
@@ -57,6 +57,7 @@ export class AutomaticCaptureCoordinator {
   private reject(runtime:BranchRuntime,intent:CaptureIntent,outcome:'quota'|'queue_full'|'stale'|'interrupted',stage:'rejected'|'recovered'='rejected') {
     this.submit(runtime,{type:'sensor_feedback',intentId:intent.id,stage,captureId:intent.captureId,capturedTick:runtime.simulation.state.tick,sceneRevision:runtime.viewerState().scene!.revision,pose:pose(runtime),outcome,signature:null,frameHash:null});
   }
+  private readonly socialSeen=new Map<string,string>();
   pump(all:Iterable<BranchRuntime>):void {
     if (this.closed) return;
     const candidates: {runtime:BranchRuntime;intent:CaptureIntent}[] = [];
@@ -65,8 +66,9 @@ export class AutomaticCaptureCoordinator {
       const scope = key(runtime.target); currentKeys.add(scope);
       if (!this.current(runtime.target)) continue;
       const checkpoint = captureState(runtime), intent = checkpoint?.attention.pending;
-      if((checkpoint?.schemaVersion===8||(checkpoint?.schemaVersion===9||checkpoint?.schemaVersion===10))&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.homeSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='home_observation')){const selected=this.manager.homeObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueHomeObservation(selected.command,selected.proof).input.admission==='queued')this.homeSeen.set(scope,capture.captureId);}catch{/* Admission remains private and capability/association checked. */}}else this.homeSeen.set(scope,capture.captureId);}}
-      if((checkpoint?.schemaVersion===9||checkpoint?.schemaVersion===10)&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.townSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='town_observation')){const selected=this.manager.townObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueTownObservation(selected.command,selected.proof).input.admission==='queued')this.townSeen.set(scope,capture.captureId);}catch{/* Current scope, attention and private RGB proof remain authoritative. */}}else this.townSeen.set(scope,capture.captureId);}}
+      if((checkpoint?.schemaVersion===8||(checkpoint?.schemaVersion===9||(checkpoint?.schemaVersion===10||checkpoint?.schemaVersion===11)))&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.homeSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='home_observation')){const selected=this.manager.homeObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueHomeObservation(selected.command,selected.proof).input.admission==='queued')this.homeSeen.set(scope,capture.captureId);}catch{/* Admission remains private and capability/association checked. */}}else this.homeSeen.set(scope,capture.captureId);}}
+      if((checkpoint?.schemaVersion===9||(checkpoint?.schemaVersion===10||checkpoint?.schemaVersion===11))&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.townSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='town_observation')){const selected=this.manager.townObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueTownObservation(selected.command,selected.proof).input.admission==='queued')this.townSeen.set(scope,capture.captureId);}catch{/* Current scope, attention and private RGB proof remain authoritative. */}}else this.townSeen.set(scope,capture.captureId);}}
+      if(checkpoint?.schemaVersion===11&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.socialSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='social_observation')){const selected=this.manager.socialObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueSocialObservation(selected.command,selected.proof).input.admission==='queued')this.socialSeen.set(scope,capture.captureId);}catch{/* Only scoped immutable RGB proof and current attention cross this boundary. */}}else this.socialSeen.set(scope,capture.captureId);}}
       if (!intent) continue;
       const summary = runtime.captureAvailability();
       // Paused/fast-forward experiments never release accumulated renderer work.
@@ -137,6 +139,6 @@ export class AutomaticCaptureCoordinator {
     const state=this.runs.get(key(scope)),now=this.monotonicMs();
     return {inFlight:this.active && key(this.active.runtime.target)===key(scope)?{intentId:this.active.intentId,captureId:this.active.captureId}:null,lastIntentId:state?.lastIntentId??null,lastOutcome:state?.lastOutcome??null,captureId:state?.captureId??null,nextHostOpportunityMs:Math.max(0,AUTO_CAPTURE_HOST_LIMITS.globalIntervalMs-(now-this.lastGlobalMs),AUTO_CAPTURE_HOST_LIMITS.perRunIntervalMs-(now-(state?.lastAttemptMs??-Infinity))),limits:AUTO_CAPTURE_HOST_LIMITS};
   }
-  retire(scope:ActiveTarget):void { this.runs.delete(key(scope));this.homeSeen.delete(key(scope)); }
-  close():void { this.closed=true;this.runs.clear();this.homeSeen.clear(); }
+  retire(scope:ActiveTarget):void { this.runs.delete(key(scope));this.homeSeen.delete(key(scope));this.townSeen.delete(key(scope));this.socialSeen.delete(key(scope)); }
+  close():void { this.closed=true;this.runs.clear();this.homeSeen.clear();this.townSeen.clear();this.socialSeen.clear(); }
 }
