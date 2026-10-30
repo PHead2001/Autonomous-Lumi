@@ -54,7 +54,7 @@ npm.cmd run home:lab -- --scenario bed --out diagnostics/home-lab/my-bed.zip
 npm.cmd run replay -- --bundle 'C:\path\to\downloaded-home.zip'
 ```
 
-Offline replay injects recorded sensory/provider results with zero renderer/provider calls. COMPLETE evidence and exact hashes are determined by the exporter/replay implementation; missing evidence must remain INCOMPLETE. The final review-fix candidate passed 360 tests, both actual lab exports/replays and the normal food/camera/narrow-browser checks; see [Phase 2.5b results](phase-2-5b-results.md) for exact evidence and the completed browser bed timeline and visually observed bed/sleep/wake poses; the initial canonical rollout is verified, while hosted-fix re-review and owner-runtime reload proof remain pending.
+Offline replay injects recorded sensory/provider results with zero renderer/provider calls. COMPLETE evidence and exact hashes are determined by the exporter/replay implementation; missing evidence must remain INCOMPLETE. The final review-fix candidate passed 360 tests, both actual lab exports/replays and the normal food/camera/narrow-browser checks; see [Phase 2.5b results](phase-2-5b-results.md) for exact evidence and the completed browser bed timeline and visually observed bed/sleep/wake poses; hosted application review is clean and the final canonical sensor-watch/recovery rollout is verified. The post-fix wake boundary has actual bundle/audit proof; the earlier visual pose walkthrough was not repeated after that backend fix because final computer use was unavailable.
 
 ## Versioning and update boundary
 
