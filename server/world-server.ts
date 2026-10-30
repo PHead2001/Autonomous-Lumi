@@ -21,7 +21,7 @@ import { CognitionCoordinator, type CognitionProviderClient } from './cognition/
 import { loadCognitionConfig, type CognitionConfig } from './cognition/config.js';
 import { DurableBudget } from './cognition/budget.js';
 import { CognitionProviders } from './cognition/providers.js';
-export interface WorldServerOptions {seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;historyId?:string;recoveryStore?:RecoveryStore;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[];renderer?:FrameRenderer;automaticCaptures?:boolean;cognition?:{config:CognitionConfig;providers?:CognitionProviderClient;experimentsOnly?:boolean}}
+export interface WorldServerOptions {physiology?:import('./branch-runtime.js').RuntimeOptions['physiology'];seed?:number;checkpoint?:unknown;diagnosticsDirectory?:string;historyId?:string;recoveryStore?:RecoveryStore;clock?:HostClock;schedulerConfig?:Partial<SchedulerConfig>;autoSchedule?:boolean;viewerOrigins?:string[];renderer?:FrameRenderer;automaticCaptures?:boolean;cognition?:{config:CognitionConfig;providers?:CognitionProviderClient;experimentsOnly?:boolean}}
 const loopback=(name:string)=>['127.0.0.1','localhost','[::1]'].includes(name);
 function localHost(host:string|undefined){try{if(!host)return false;const u=new URL('http://'+host);return loopback(u.hostname)&&!u.username&&!u.password&&u.pathname==='/';}catch{return false;}}
 async function body(req:IncomingMessage):Promise<Record<string,unknown>>{if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']??''))throw new Error('JSON content type required');let size=0;const chunks:Buffer[]=[];for await(const chunk of req){const b=Buffer.from(chunk);size+=b.length;if(size>8192)throw new Error('Request exceeds 8 KiB');chunks.push(b);}const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('JSON object required');return value;}
@@ -40,7 +40,7 @@ export function createWorldServer(options:WorldServerOptions={}) {
     }
   };
   let shuttingDown=false;
-  const registry=new BranchRegistry({directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true,beforeRetireRuntime:runtime=>{automatic.retire(runtime.target);cognition.retire(runtime.target);vision.manager.retire(runtime.target);}});
+  const registry=new BranchRegistry({physiology:options.physiology,directory:options.diagnosticsDirectory,checkpoint:options.checkpoint,seed:options.seed,clock:options.clock,onEvents:observe,historyId:options.historyId??options.recoveryStore?.historyId,dormantLive:true,beforeRetireRuntime:runtime=>{automatic.retire(runtime.target);cognition.retire(runtime.target);vision.manager.retire(runtime.target);}});
   const vision=createVisionApi({registry,renderer:options.renderer});
   const current=(scope:ActiveTarget)=>{try{return registry.get(scope).target.runId===scope.runId;}catch{return false;}};
   const cognitionConfig=options.cognition?.config??loadCognitionConfig({env:{},loadEnv:false});
@@ -65,7 +65,12 @@ export function createWorldServer(options:WorldServerOptions={}) {
       if(pathname==='/api/attention'&&req.method==='GET'){
         if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}
         const scope=active(query),runtime=registry.active(scope),checkpoint=runtime.simulation.checkpoint();
-        json(200,{...scope,attention:checkpoint.schemaVersion===4||checkpoint.schemaVersion===5?checkpoint.attention:null,automatic:automatic.summary(scope)});return;
+        json(200,{...scope,attention:checkpoint.schemaVersion===4||checkpoint.schemaVersion===5||checkpoint.schemaVersion===6?checkpoint.attention:null,automatic:automatic.summary(scope)});return;
+      }
+      if(pathname==='/api/physiology'&&req.method==='GET'){
+        if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}
+        const runtime=registry.active(active(query)),cp=runtime.simulation.checkpoint();
+        json(200,{...runtime.target,active:cp.schemaVersion===6&&cp.body.active,mode:cp.schemaVersion===6?cp.body.mode:'inactive',presentSensations:'presentInternalSensations' in runtime.simulation?runtime.simulation.presentInternalSensations():[],...(query.advanced==='true'&&cp.schemaVersion===6?{privateDiagnostics:{body:cp.body,interoception:cp.interoception,physiology:cp.physiology,internalExperiences:cp.internalExperiences}}:{})});return;
       }
       if(pathname==='/api/cognition'&&req.method==='GET'){
         if(!permitted(req)){json(403,{error:'Local same-origin request required'});return;}

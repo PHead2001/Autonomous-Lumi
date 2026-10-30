@@ -1,3 +1,5 @@
+import { PHYSIOLOGY_RULES, validateBodyState, validateInteroceptionState, validatePhysiologyEffect, validateInternalSensation, type BodyState, type InteroceptionState, type PhysiologyEffect, type InternalSensation, type InternalSensationContext, type PhysiologyEvent } from '../shared/physiology-protocol.js';
+import { createBody, createInteroception, advanceBody, advanceInteroception, bodyCapability, bodyImpairment, applyAcceptedBodyEffect, presentInternalSensations, providerInternalSensations } from './physiology.js';
 import { currentCognitionProfile, COGNITION_SCHEMA_REVISION, cognitionValidationError, validateCognitionProposalReferences } from '../shared/cognition-protocol.js';
 import { REFLEX_DURATION, ROOM, type AcousticEvent, type WorldState } from '../shared/protocol.js';
 import { hashCanonical, canonicalStringify } from './canonical.js';
@@ -10,14 +12,15 @@ import { defaultAttentionState, deriveHearingEstimates, validateAttentionState, 
 import { eyePose } from '../shared/eye-pose.js';
 import { propagateSound } from './hearing.js';
 import { fitsCognitionStorage } from './checkpoint-capacity.js';
-import { COGNITION_RULES, COGNITION_LIMITS, validateCognitionCommand, validateCognitionIdentity, type CognitionCommand, type CognitionState, type CognitionIdentity, type CognitionRequestCommand, type CognitionResultCommand, type RealExperience, type CognitionActionOutcome, type CognitionObservationRequestCommand } from '../shared/cognition-protocol.js';
+import { COGNITION_RULES, COGNITION_LIMITS, validateCognitionCommand, validateCognitionIdentity, type CognitionCommand, type CognitionState, type CognitionIdentity, type CognitionRequestCommand, type CognitionResultCommand, type RealExperience, type InternalExperience, type CognitionActionOutcome, type CognitionObservationRequestCommand } from '../shared/cognition-protocol.js';
 
 export const RULES_VERSION = 'lumi-waypoints-v1';
 export const DEFAULT_CONFIG = { hz: 30, speed: 0.75, pauseTicks: 36, cooldownTicks: 27, maxPendingInputs: 256 };
 export type SimulationConfig = typeof DEFAULT_CONFIG;
 export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_command';
 export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
-export type NormalizedCommand = { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
+export type PhysiologyCommand = {type:'physiology_fixture';effect:PhysiologyEffect}|{type:'physiology_safety_fixture';ticks:number}|{type:'physiology_encoding';enabled:boolean};
+export type NormalizedCommand = PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -41,9 +44,12 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
+  if(physiology&&c.type==='physiology_fixture'&&Object.keys(c).length===2)return {type:'physiology_fixture',effect:validatePhysiologyEffect(c.effect)};
+  if(physiology&&c.type==='physiology_safety_fixture'&&Object.keys(c).length===2&&integer(c.ticks,1,36000))return {type:'physiology_safety_fixture',ticks:c.ticks};
+  if(physiology&&c.type==='physiology_encoding'&&Object.keys(c).length===2&&typeof c.enabled==='boolean')return {type:'physiology_encoding',enabled:c.enabled};
   if (c.type === 'slam' && Object.keys(c).length === 1) return { type: 'slam' };
   if (c.type === 'invalid' && Object.keys(c).length === 2 && ['malformed_json', 'invalid_shape', 'unknown_command'].includes(c.reason as string)) return { type: 'invalid', reason: c.reason as InvalidReason };
   if(cognition&&(c.type==='cognition_request'||c.type==='cognition_result'||c.type==='cognition_observation_request'))return validateCognitionCommand(value);
@@ -91,6 +97,14 @@ export class Simulation {
   protected data: CheckpointV1;
   readonly random: SeededRandom;
   readonly worldId: string; readonly runId: string;
+  protected supportsPhysiologyInputs():boolean{return false;}
+  protected capableOfAction():boolean{return true;}
+  protected capableOfAttention():boolean{return true;}
+  protected motorScale():number{return 1;}
+  protected ordinaryAttentionScale():number{return 1;}
+  protected beforeInputs(events:DeterministicEvent[]):void{void events;}
+  protected beforeMotorExecution():void{}
+  protected afterMotors(events:DeterministicEvent[]):void{void events;}
   protected supportsVisionInputs():boolean{return false;}
   protected supportsSensoryInputs():boolean{return false;}
   protected supportsCognitionInputs():boolean{return false;}
@@ -119,7 +133,7 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs()), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
     const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
     if(capacityReason!==null)input.admission='queue_full';
@@ -133,6 +147,7 @@ export class Simulation {
     const d = this.data, events: DeterministicEvent[] = [];
     if (d.tick >= Number.MAX_SAFE_INTEGER - 36001) throw new Error('Simulation tick limit reached');
     d.tick++;
+    this.beforeInputs(events);
     const due = d.pendingInputs; d.pendingInputs = [];
     for (const input of due) {
       if (input.command.type === 'invalid') { this.emit(events, 'INPUT_VALIDATED', 'input', 'rejected', { reason: input.command.reason }, input.sequence); continue; }
@@ -146,7 +161,9 @@ export class Simulation {
       const acoustic = this.emit(events, 'ACOUSTIC_EVENT', 'sound', 'emitted', {...sound}, input.sequence, action.sequence);
       this.hear(sound, events, input.sequence, acoustic.sequence);
     }
+    this.beforeMotorExecution();
     const c = d.character, wasMoving = c.moving; c.moving = d.tick >= d.pauseUntilTick;
+    if (!this.capableOfAction())c.moving=false;
     if (!c.moving) return events;
     if (!wasMoving) this.emit(events, 'WALK_RESUMED', 'movement', 'walking', { waypoint: d.waypoint });
     const [x,z] = waypoints[d.waypoint], dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx,dz);
@@ -187,7 +204,7 @@ export interface SyntheticExperience {
   id: number; tick: number; kind: 'cue' | 'clock'; provenance: 'TEST STUB';
   observedSeconds: number | null; uncertaintySeconds: number | null;
 }
-export type Experience = SyntheticExperience | RealExperience;
+export type Experience = SyntheticExperience | RealExperience | InternalExperience;
 export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rulesVersion'> {
   schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
   experiences: SyntheticExperience[]; nextExperienceId: number;
@@ -197,7 +214,16 @@ export interface CheckpointV3 extends Omit<CheckpointV2,'schemaVersion'|'rulesVe
 export const CURRENT_ATTENTION_RULES='lumi-attention-v2' as const;
 export interface CheckpointV4 extends Omit<CheckpointV3,'schemaVersion'|'rulesVersion'> {schemaVersion:4;rulesVersion:'lumi-attention-v1'|typeof CURRENT_ATTENTION_RULES;attention:AttentionState;genericSoundCount:number}
 export interface CheckpointV5 extends Omit<CheckpointV4,'schemaVersion'|'rulesVersion'> {schemaVersion:5;rulesVersion:typeof COGNITION_RULES;cognition:CognitionState;realExperiences:RealExperience[]}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5;
+export interface PhysiologyOptions {active?:boolean;genesisPreset?:'production-v1'|'acceptance-fast-v1';encodingEnabled?:boolean}
+export interface PhysiologyRuntimeState {
+ origin:{historyId:string;genesisPreset:'production-v1'|'acceptance-fast-v1';rulesVersion:typeof PHYSIOLOGY_RULES;evidenceEligibility:'eligible'|'debug-tainted';taintedAtTick:number|null};
+ legacyImport:null|{kind:'explicit-unverified-import-v1';sourceHistoryId:string;destinationHistoryId:string;importTick:number};
+ encodingEnabled:boolean; encodedNeedCrossings:{kind:InternalSensation['kind'];crossingTick:number;experienceId:number;source:'actual_internal_sensor';observationId:string;attentionId:string;sensedTick:number;attentionTick:number;encodingTick:number;sensationHash:string;identityHash:string}[];
+ interruptedActivity:boolean;safetyUntilTick:number;
+ unconsciousWindows:{startTick:number;endTick:number|null}[];
+}
+export interface CheckpointV6 extends Omit<CheckpointV5,'schemaVersion'|'rulesVersion'> {schemaVersion:6;rulesVersion:typeof PHYSIOLOGY_RULES;body:BodyState;interoception:InteroceptionState;physiology:PhysiologyRuntimeState;internalExperiences:InternalExperience[]}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -207,13 +233,14 @@ function legacyPart(c: CheckpointV2): CheckpointV1 {
 /** Explicit migration: V1 replay remains V1; a new lab run initializes named new systems. */
 export function upgradeCheckpoint(value: unknown): CheckpointV2 {
   const cp = validateCheckpoint(value);
-  if(cp.schemaVersion===3||cp.schemaVersion===4||cp.schemaVersion===5)throw new Error('Vision state cannot be downgraded into historical lab semantics');
+  if(cp.schemaVersion>=3)throw new Error('Vision state cannot be downgraded into historical lab semantics');
   if (cp.schemaVersion === 2) return cp;
   return { ...cp, schemaVersion: 2, rulesVersion: 'lumi-lab-v1',
     subjective: { estimateSeconds: 0, uncertaintySeconds: cp.tick / cp.config.hz + 5, lastCalibrationTick: null, driftPpm: 1200, uncertaintyGrowthPerSecond: 0.02 },
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===6)return validatePhysiologyCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===5)return validateCognitionCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===4)return validateSensoryCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===3)return validateVisionCheckpoint(value);
@@ -285,7 +312,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV6 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -320,7 +347,7 @@ export class VisionSimulation extends LabSimulation {
     super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
   }
   override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
-    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs());
+    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs());
     if(normalized.type==='look_at'&&normalized.evidence) {
       if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
       if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
@@ -331,7 +358,7 @@ export class VisionSimulation extends LabSimulation {
   protected override onDoorChanged():void{this.scene.revision++;}
   protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request')return false;
+    const command=input.command;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
     if(command.type==='configure_scene') {
       if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
@@ -339,6 +366,7 @@ export class VisionSimulation extends LabSimulation {
       if(!canOccupyCharacter(scene,this.data.character.x,this.data.character.z))return reject('fixture_overlaps_character');
       this.scene=scene;this.emit(events,'SCENE_CONFIGURED','scene','applied',{sceneRevision:scene.revision,illumination:scene.illumination,fixture:scene.fixture,fixtureColor:scene.fixtureColor.slice(1),doorOpenRadians:scene.doorOpenRadians??'animated'},input.sequence);return true;
     }
+    if(!this.capableOfAction())return reject('physiological_incapacity');
     if(command.sceneRevision!==this.scene.revision)return reject('scene_revision_changed');
     if(command.type==='look_at'&&command.evidence) {
       if(command.evidence.capturedTick>this.data.tick||this.data.tick-command.evidence.capturedTick>300)return reject('observation_expired');
@@ -372,25 +400,28 @@ export class VisionSimulation extends LabSimulation {
     return true;
   }
   override step():DeterministicEvent[] {
-    const events=super.step(),h=this.head;if(h.status==='idle')return events;
+    const events=super.step();this.advanceHead(events);this.afterMotors(events);return events;
+  }
+  private advanceHead(events:DeterministicEvent[]):void {
+    const h=this.head;if(h.status==='idle'||!this.capableOfAction())return;
     if(h.observedAim) {
       // Base movement can turn the body on this same tick. Rebase the perceived
       // ray after that movement, without consulting a target or world geometry.
       const target=relativeObservedAim(h.observedAim,this.data.character.heading);
       if(target.yaw<HEAD_LIMITS.minYaw||target.yaw>HEAD_LIMITS.maxYaw||target.pitch<HEAD_LIMITS.minPitch||target.pitch>HEAD_LIMITS.maxPitch) {
         const actionId=h.activeActionId!;h.status='idle';h.targetYaw=h.yaw;h.targetPitch=h.pitch;h.scan=null;h.activeActionId=null;h.observedAim=null;
-        this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId,reason:'observed_direction_out_of_head_range'});return events;
+        this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId,reason:'observed_direction_out_of_head_range'});return;
       }
       h.targetYaw=target.yaw;h.targetPitch=target.pitch;
     }
-    const maximum=HEAD_LIMITS.radiansPerSecond/this.data.config.hz,dx=h.targetYaw-h.yaw,dy=h.targetPitch-h.pitch,distance=Math.hypot(dx,dy);
+    const maximum=HEAD_LIMITS.radiansPerSecond*this.motorScale()/this.data.config.hz,dx=h.targetYaw-h.yaw,dy=h.targetPitch-h.pitch,distance=Math.hypot(dx,dy);
     if(distance<=maximum){h.yaw=h.targetYaw;h.pitch=h.targetPitch;
       if(h.status==='scanning'&&h.scan&&h.scan.cursor+1<h.scan.points.length){h.scan.cursor++;const p=h.scan.points[h.scan.cursor];h.targetYaw=p.yaw;h.targetPitch=p.pitch;this.emit(events,'HEAD_SCAN_POINT','head','next',{actionId:h.activeActionId!,cursor:h.scan.cursor,targetYaw:h.targetYaw,targetPitch:h.targetPitch});}
       else{const actionId=h.activeActionId!;h.status='idle';h.scan=null;h.activeActionId=null;if(this.visionRules!== 'lumi-eyes-v1')h.observedAim=null;this.emit(events,'HEAD_ACTION_COMPLETE','head','idle',{actionId,yaw:h.yaw,pitch:h.pitch});}
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
-    return events;
+    return;
   }
-  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV6{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -464,20 +495,21 @@ export class SensorySimulation extends VisionSimulation {
     const reflex=this.emit(events,'REFLEX_DECISION','reflex',strength>0?'triggered':'ignored',{observationId:r.observationId,intensity:r.intensity,suddenness:r.suddenness,intensityThreshold:c.reflexIntensity,suddennessThreshold:c.reflexSuddenness,strength},inputSequence,sensed.sequence);
     if(strength>0){this.data.reflex={startTick:this.data.tick,strength};this.emit(events,'REFLEX_STATE','reflex','changed',{observationId:r.observationId,startTick:this.data.tick,strength,durationSeconds:REFLEX_DURATION},inputSequence,reflex.sequence);}
     const key=`b${r.bearingDegrees===null?'null':Math.round(r.bearingDegrees/45)}-i${Math.floor(r.intensity*5)}-s${Math.floor(r.suddenness*3)}`;
-    const audible=r.intensity>=c.hearingFloor;
+    const audible=r.intensity>=c.hearingFloor&&this.capableOfAttention();
     // Diagnostics retain below-floor receptions, but only perceived cues can
     // decay, evict or add habituation history.
     if(audible)a.exposures=a.exposures.filter(e=>this.data.tick-e.lastTick<c.exposureRecoveryTicks);
     let exposure=audible?a.exposures.find(e=>e.key===key):undefined;
     const previous=exposure?Math.max(0,exposure.count-Math.floor((this.data.tick-exposure.lastTick)/(c.exposureRecoveryTicks/4))):0;
     const novelty=1/(1+previous),commitment=this.activity.status==='running'?.18:0,switchingCost=this.data.tick<a.commitmentUntilTick?.3:0;
-    const score=.65*r.intensity+.3*r.suddenness+.3*novelty+.1*(r.directionUncertaintyDegrees/180)-Math.min(.9,previous*c.habituationPenalty)-commitment-switchingCost;
+    const score=this.ordinaryAttentionScale()*(.65*r.intensity+.3*r.suddenness+.3*novelty+.1*(r.directionUncertaintyDegrees/180)-Math.min(.9,previous*c.habituationPenalty)-commitment-switchingCost);
     if(audible) {
       if(!exposure){exposure={key,count:0,lastTick:this.data.tick,intensity:r.intensity,suddenness:r.suddenness};a.exposures.push(exposure);if(a.exposures.length>8)a.exposures.shift();}
       exposure.count=Math.min(32,previous+1);exposure.lastTick=this.data.tick;exposure.intensity=r.intensity;exposure.suddenness=r.suddenness;
     }
     let reason='below_salience',outcome:'ignored'|'glance'|'investigate'|'unreachable'='ignored';
-    if(r.intensity<c.hearingFloor)reason='below_hearing_floor';
+    if(!this.capableOfAttention())reason='physiological_incapacity';
+    else if(r.intensity<c.hearingFloor)reason='below_hearing_floor';
     else if(this.data.tick<a.developerUntilTick)reason='developer_priority';
     else if(this.data.tick<a.cooldownUntilTick)reason='attention_cooldown';
     else if(this.head.status!=='idle')reason='motor_committed';
@@ -531,7 +563,9 @@ export class SensorySimulation extends VisionSimulation {
     if(matching.length<2){if(!matching.length||matching[0].trigger.tick!==tick)intent.triggers.push(next);}
     else if(tick>=matching[1].trigger.tick)intent.triggers[matching[1].index]=next;
   }
+  protected sensoryCaptureAllowed(capturedTick:number):boolean{void capturedTick;return this.capableOfAttention();}
   protected requestCapture(reason:AutomaticCaptureReason,events:DeterministicEvent[],parentSequence:number|null=null,triggerTick=this.data.tick):void {
+    if(!this.capableOfAttention())return;
     const a=this.attention,tick=this.data.tick,c=a.config;
     if(a.pending?.status==='pending'){this.noteCaptureTrigger(a.pending,reason,triggerTick,parentSequence);if(!a.pending.reasons.includes(reason)){a.pending.reasons.push(reason);this.emit(events,'CAPTURE_INTENTION','attention','coalesced',{intentId:a.pending.id,reasons:a.pending.reasons.join(' '),reason},undefined,parentSequence??undefined);}return;}
     // A submitted image is immutable history. Later causes require a later image;
@@ -555,6 +589,7 @@ export class SensorySimulation extends VisionSimulation {
     const a=this.attention,p=a.pending,c=a.config,tick=this.data.tick;
     const reject=(reason:string)=>this.emit(events,'CAPTURE_FEEDBACK','attention','rejected',{intentId:command.intentId,captureId:command.captureId??'none',capturedTick:command.capturedTick,reason},inputSequence);
     if(!p||p.id!==command.intentId){reject('no_matching_intention');return;}
+    if(!this.sensoryCaptureAllowed(command.capturedTick)){reject('unconscious_capture');return;}
     if(command.capturedTick>tick){reject('future_snapshot');return;}
     if(command.capturedTick<p.createdTick){reject('snapshot_predates_intention');return;}
     if(command.stage==='admitted') {
@@ -569,6 +604,9 @@ export class SensorySimulation extends VisionSimulation {
     if(command.stage==='result'&&(p.status!=='submitted'||p.captureId!==command.captureId||p.requestedTick!==command.capturedTick)){reject('capture_association_mismatch');return;}
     let freshness='missing',difference:number|null=null;
     if(command.stage==='result'&&command.outcome==='success') {
+      // Captured-while-awake evidence is necessary but does not create attention
+      // while unconscious. Already-attended cognition requests complete separately.
+      if(!this.capableOfAttention()){reject('physiological_incapacity');return;}
       const delta=poseDifference(command.pose,sensorPose(this.snapshot()));
       // Scene revision is capture provenance, not perceived evidence. Keep the
       // old freshness rule only for exact v1 replay; v2 compares recorded pixels.
@@ -615,7 +653,7 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4|CheckpointV5 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }
 function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
@@ -643,8 +681,8 @@ export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
 }
 function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
 /** External callbacks supply only complete ordered commands; this class owns all consequences. */
-export class CognitionSimulation extends SensorySimulation {
- private cognition:CognitionState;private realExperiences:RealExperience[];
+export class CognitionSimulation<C extends CheckpointV5|CheckpointV6 = CheckpointV5> extends SensorySimulation {
+ protected cognition:CognitionState;private realExperiences:RealExperience[];
  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean}){
   const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
   const cp=source.schemaVersion===5?source:null;
@@ -668,18 +706,20 @@ export class CognitionSimulation extends SensorySimulation {
  experienceRecords():Experience[]{return structuredClone([...super.checkpoint().experiences,...this.realExperiences]);}
  private applyObservationRequest(command:CognitionObservationRequestCommand,events:DeterministicEvent[],sequence:number){
   const c=this.cognition,a=this.attentionState(),b=a.baseline,last=a.lastCapture;
-  const reason=!sameIdentity(command.identity,c.identity)?'foreign_identity':c.captureUpgrade?.captureId===command.captureId?'duplicate_upgrade':!b||!last||b.captureId!==command.captureId||b.frameHash!==command.frameHash||last.intentId!==command.intentId||last.captureId!==command.captureId||last.outcome!=='success'||last.freshness!=='applicable'||!last.reasons.includes('visible_change')?'unselected_visual_change':this.data.tick-b.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks?'stale_selection':null;
+  const reason=!this.capableOfAttention()?'physiological_incapacity':!sameIdentity(command.identity,c.identity)?'foreign_identity':c.captureUpgrade?.captureId===command.captureId?'duplicate_upgrade':!b||!last||b.captureId!==command.captureId||b.frameHash!==command.frameHash||last.intentId!==command.intentId||last.captureId!==command.captureId||last.outcome!=='success'||last.freshness!=='applicable'||!last.reasons.includes('visible_change')?'unselected_visual_change':this.data.tick-b.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks?'stale_selection':null;
   if(reason){this.emit(events,'COGNITION_OBSERVATION','cognition','rejected',{requestId:command.requestId,captureId:command.captureId,reason},sequence);return;}
   c.captureUpgrade={requestId:command.requestId,captureId:command.captureId,requestedTick:this.data.tick,status:'pending'};c.observationRequestedTick=this.data.tick;
   this.emit(events,'COGNITION_OBSERVATION','cognition','upgrade_pending',{requestId:command.requestId,captureId:command.captureId,frameHash:command.frameHash,intentId:command.intentId,reason:'selected_visual_change_requires_richer_image'},sequence);
  }
+ protected cognitionInternalContextAllowed(context:CognitionRequestCommand['selection']['context']):boolean{return context.internalSensations===undefined;}
  private applyRequest(command:CognitionRequestCommand,events:DeterministicEvent[],sequence:number){
   const c=this.cognition,s=command.selection,a=this.attentionState(),b=a.baseline,last=a.lastCapture,tick=this.data.tick;
   let reason:string|null=null;
-  if(!sameIdentity(s.identity,c.identity))reason='foreign_identity';else if(c.requests.some(r=>r.request.requestId===command.requestId))reason='duplicate_request';else if(c.requests.length>=COGNITION_LIMITS.requests)reason='request_history_capacity';else if(c.requests.filter(r=>r.status==='pending').length>=COGNITION_LIMITS.pending)reason='pending_capacity';else if(tick<c.nextRequestTick)reason='request_cooldown';
+  if(!this.capableOfAttention())reason='physiological_incapacity';else if(!this.sensoryCaptureAllowed(s.capturedTick))reason='unconscious_capture';else if(!sameIdentity(s.identity,c.identity))reason='foreign_identity';else if(c.requests.some(r=>r.request.requestId===command.requestId))reason='duplicate_request';else if(c.requests.length>=COGNITION_LIMITS.requests)reason='request_history_capacity';else if(c.requests.filter(r=>r.status==='pending').length>=COGNITION_LIMITS.pending)reason='pending_capacity';else if(tick<c.nextRequestTick)reason='request_cooldown';
   else if(!b||!last||last.outcome!=='success'||last.freshness!=='applicable'||last.captureId!==s.captureId||last.intentId!==s.intentId||b.captureId!==s.captureId||b.frameHash!==s.frameHash||b.capturedTick!==s.capturedTick||last.receivedTick!==s.attentionTick||canonicalStringify(b.pose)!==canonicalStringify(s.pose))reason='unselected_sensor_evidence';
   else if(!last.reasons.some(r=>['salient_sound','head_milestone','visible_change','activity_outcome'].includes(r))&&!(c.observationRequestedTick!==null&&s.capturedTick>=c.observationRequestedTick))reason='observation_not_attended';
   else if(s.attentionTick>tick||tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)reason='stale_selection';else if(s.source!=='actual_renderer'&&this.mode==='LIVE')reason='test_source_not_live';
+  else if(!this.cognitionInternalContextAllowed(s.context))reason='unattended_internal_context';
   else if(currentCognitionProfile(command)&&s.context.shapes.some(shape=>shape.uncertainty!=='geometry_candidates_pixel_checked'))reason='unqualified_shape_context';
   else if(s.context.activity.status!==this.activity.status||s.context.experiences.some(e=>!this.realExperiences.some(old=>old.identity.historyId===s.identity.historyId&&old.interpretation===e.interpretation&&old.uncertainty===e.uncertainty&&(!currentCognitionProfile(command)||c.requests.some(r=>r.request.requestId===old.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))))))reason='unadmitted_context';
   else if(s.context.sound!==null){const received=a.lastReceived;if(!received)reason='unreceived_sound';else{const {tick:ignoreTick,bodyHeading:ignoreBody,headYaw:ignoreHead,...sound}=received;void ignoreTick;void ignoreBody;void ignoreHead;if(received.tick>s.capturedTick||a.lastDecision?.observationId!==received.observationId||a.lastDecision.outcome==='ignored'||canonicalStringify({...sound,relation:received.tick===s.capturedTick?'same_capture':'before_image',ageBand:s.capturedTick-received.tick<=90?'recent':'earlier'})!==canonicalStringify(s.context.sound))reason='unreceived_sound';}}
@@ -693,6 +733,7 @@ export class CognitionSimulation extends SensorySimulation {
  private executeProposal(command:CognitionResultCommand,request:CognitionRequestCommand,events:DeterministicEvent[],sequence:number):CognitionActionOutcome {
   const tick=this.data.tick,c=this.cognition,s=request.selection,p=command.proposal!,a=p.action;
   const reject=(reason:string):CognitionActionOutcome=>({status:'rejected',reason,actionId:null,tick});
+  if(!this.capableOfAction())return reject('physiological_incapacity');
   if(tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)return reject('stale_action');
   if(c.requests.some(r=>r.requestedTick>(c.requests.find(r=>r.request.requestId===request.requestId)?.requestedTick??tick)))return reject('superseded_action');
   if(tick<c.actionCooldownUntilTick)return reject('action_cooldown');
@@ -754,5 +795,130 @@ export class CognitionSimulation extends SensorySimulation {
   }
   return events;
  }
- override checkpoint():CheckpointV5{return {...super.checkpoint(),schemaVersion:5,rulesVersion:COGNITION_RULES,cognition:structuredClone(this.cognition),realExperiences:structuredClone(this.realExperiences)};}
+ override checkpoint():C{return {...super.checkpoint(),schemaVersion:5,rulesVersion:COGNITION_RULES,cognition:structuredClone(this.cognition),realExperiences:structuredClone(this.realExperiences)} as C;}
+}
+
+/** Schema 6 is an active-world migration only. V1–V5 offline execution keeps its original class. */
+function physiologyCognitionPart(cp:CheckpointV6):CheckpointV5 {
+ const raw=structuredClone(cp) as unknown as Record<string,unknown>;
+ for(const key of ['body','interoception','physiology','internalExperiences'])delete raw[key];
+ raw.schemaVersion=5;raw.rulesVersion=COGNITION_RULES;
+ raw.pendingInputs=cp.pendingInputs.map(input=>({...input,command:input.command.type.startsWith('physiology_')?{type:'invalid',reason:'unknown_command'}:input.command}));
+ return validateCognitionCheckpoint(raw);
+}
+export function validatePhysiologyCheckpoint(value:unknown):CheckpointV6 {
+ const cp=value as CheckpointV6;
+ const keys=['schemaVersion','rulesVersion','config','tick','character','reflex','door','waypoint','pauseUntilTick','cooldownUntilTick','seed','prng','nextInputSequence','nextEventSequence','nextSoundId','pendingInputs','eventHash','subjective','activity','experiences','nextExperienceId','head','scene','attention','genericSoundCount','cognition','realExperiences','body','interoception','physiology','internalExperiences'];
+ object(cp,keys,'physiology root');if(cp.schemaVersion!==6||cp.rulesVersion!==PHYSIOLOGY_RULES)fail('physiology schema/rules');
+ physiologyCognitionPart(cp);validateBodyState(cp.body,cp.tick,cp.config.hz);validateInteroceptionState(cp.interoception,cp.tick,cp.config.hz,cp.body.config);
+ for(const i of cp.pendingInputs)validateCommand(i.command,true,true,true,true);
+ const p=cp.physiology;object(p,['origin','legacyImport','encodingEnabled','encodedNeedCrossings','interruptedActivity','safetyUntilTick','unconsciousWindows'],'physiology runtime');
+ const o=p.origin;object(o,['historyId','genesisPreset','rulesVersion','evidenceEligibility','taintedAtTick'],'physiology origin');
+ const imported=p.legacyImport;if(imported!==null){object(imported,['kind','sourceHistoryId','destinationHistoryId','importTick'],'legacy physiology import');if(cp.cognition.identity.mode!=='EXPERIMENT'||imported.kind!=='explicit-unverified-import-v1'||imported.sourceHistoryId!==o.historyId||imported.destinationHistoryId!==cp.cognition.identity.historyId||!integer(imported.importTick,cp.body.activationTick,cp.tick))fail('legacy physiology import ancestry');}
+ if(typeof o.historyId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(o.historyId)||o.historyId!==cp.cognition.identity.historyId&&imported===null||!['production-v1','acceptance-fast-v1'].includes(o.genesisPreset)||o.rulesVersion!==PHYSIOLOGY_RULES||!['eligible','debug-tainted'].includes(o.evidenceEligibility)||(o.evidenceEligibility==='eligible'?o.taintedAtTick!==null:!integer(o.taintedAtTick,cp.body.activationTick,cp.tick))||typeof p.encodingEnabled!=='boolean'||typeof p.interruptedActivity!=='boolean'||!integer(p.safetyUntilTick)||!Array.isArray(p.encodedNeedCrossings)||p.encodedNeedCrossings.length>128||!Array.isArray(p.unconsciousWindows)||p.unconsciousWindows.length>128||!Array.isArray(cp.internalExperiences)||cp.internalExperiences.length>128)fail('physiology runtime bounds');
+ let previousEnd=-1;for(const [i,w]of p.unconsciousWindows.entries()){object(w,['startTick','endTick'],'unconscious interval');if(!integer(w.startTick,Math.max(0,previousEnd),cp.tick)||!(w.endTick===null&&i===p.unconsciousWindows.length-1||integer(w.endTick,w.startTick,cp.tick)))fail('unconscious interval');previousEnd=w.endTick??cp.tick;}
+ const last=p.unconsciousWindows.at(-1);if(cp.body.active&&(last?.endTick===null)!==!bodyCapability(cp.body).canAttend)fail('unconscious state association');
+ const ids=new Set<string>(),needIds=new Set<string>();
+ for(const [i,e]of cp.internalExperiences.entries()){
+  object(e,['id','kind','provenance','encodingId','identity','sensation','subjectiveTime','audit','encodingPolicy'],'internal experience');validateCognitionIdentity(e.identity);validateInternalSensation(e.sensation);
+  object(e.subjectiveTime,['estimateSeconds','uncertaintySeconds'],'internal subjective time');if(!finite(e.subjectiveTime.estimateSeconds,0,Number.MAX_VALUE)||!finite(e.subjectiveTime.uncertaintySeconds,0,Number.MAX_VALUE))fail('internal subjective time');
+  const a=e.audit;object(a,['sensedTick','attentionTick','encodedTick','needCrossingTick'],'internal audit');
+  const needId=`${e.sensation.kind}_${a.needCrossingTick}`;if(needIds.has(needId))fail('duplicate internal need episode');needIds.add(needId);
+  const expected=`${e.identity.historyId}_${e.identity.branchId}_${e.sensation.observationId}_${e.sensation.attentionId}`;
+  if(Number(e.sensation.observationId.slice(21))>=cp.interoception.nextObservationId||Number(e.sensation.attentionId.slice(19))>=cp.interoception.nextAttentionId||e.id!==i+1||e.kind!=='internal'||e.provenance!=='ATTENDED_INTERNAL_SENSOR'||e.encodingPolicy!=='first-severe-per-need-v1'||e.sensation.band!=='severe'||e.encodingId!==expected||ids.has(e.encodingId)||e.identity.historyId!==o.historyId||cp.cognition.identity.mode==='LIVE'&&e.identity.mode!=='LIVE'||!integer(a.needCrossingTick,cp.body.activationTick,cp.tick)||!integer(a.sensedTick,a.needCrossingTick,cp.tick)||!integer(a.attentionTick,a.sensedTick,cp.tick)||!integer(a.encodedTick,a.attentionTick,cp.tick)||o.taintedAtTick!==null&&a.encodedTick>=o.taintedAtTick||imported!==null&&a.encodedTick>imported.importTick||!p.encodedNeedCrossings.some(c=>c.kind===e.sensation.kind&&c.crossingTick===a.needCrossingTick&&c.experienceId===e.id&&c.source==='actual_internal_sensor'&&c.observationId===e.sensation.observationId&&c.attentionId===e.sensation.attentionId&&c.sensedTick===a.sensedTick&&c.attentionTick===a.attentionTick&&c.encodingTick===a.encodedTick&&c.sensationHash===hashCanonical(e.sensation)&&c.identityHash===hashCanonical(e.identity)))fail('internal provenance');ids.add(e.encodingId);
+ }
+ if(p.encodedNeedCrossings.length!==cp.internalExperiences.length)fail('internal encoding associations');
+ for(const c of p.encodedNeedCrossings){object(c,['kind','crossingTick','experienceId','source','observationId','attentionId','sensedTick','attentionTick','encodingTick','sensationHash','identityHash'],'internal encoding');if(!['hunger','sleep','discomfort'].includes(c.kind)||!integer(c.crossingTick,cp.body.activationTick,cp.tick)||!integer(c.experienceId,1,cp.internalExperiences.length)||cp.internalExperiences[c.experienceId-1].sensation.kind!==c.kind||cp.internalExperiences[c.experienceId-1].audit.needCrossingTick!==c.crossingTick)fail('internal encoding association');}
+ return structuredClone(cp);
+}
+export class PhysiologySimulation extends CognitionSimulation<CheckpointV6> {
+ private body:BodyState;private interoception:InteroceptionState;private physiology:PhysiologyRuntimeState;private internalExperiences:InternalExperience[];
+ private intervalStart={x:0,z:0,cursor:0,yaw:0,pitch:0,capable:true};
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiology?:PhysiologyOptions}){
+  const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),cp=source?.schemaVersion===6?source:null;
+  if(options.physiology?.genesisPreset==='acceptance-fast-v1'&&source)throw new Error('Acceptance genesis requires a new disposable history');
+  super({...options,checkpoint:cp?physiologyCognitionPart(cp):source??undefined});
+  const tick=this.data.tick,hz=this.data.config.hz,preset=options.physiology?.genesisPreset??'production-v1';
+  this.body=cp?structuredClone(cp.body):createBody(tick,hz,options.physiology?.active??false);
+  this.interoception=cp?structuredClone(cp.interoception):createInteroception(tick);
+  this.physiology=cp?structuredClone(cp.physiology):{origin:{historyId:this.cognition.identity.historyId,genesisPreset:preset,rulesVersion:PHYSIOLOGY_RULES,evidenceEligibility:'eligible',taintedAtTick:null},legacyImport:null,encodingEnabled:options.physiology?.encodingEnabled??true,encodedNeedCrossings:[],interruptedActivity:false,safetyUntilTick:0,unconsciousWindows:[]};
+  this.internalExperiences=structuredClone(cp?.internalExperiences??[]);
+  if(!cp&&preset==='acceptance-fast-v1'){this.body.active=true;this.body.satiety=.081;this.body.config.satietyUsePerSecond=.001;}
+  if(cp)this.data.pendingInputs=structuredClone(cp.pendingInputs);
+  if(cp&&options.physiology?.active!==undefined&&options.physiology.active!==this.body.active){
+   if(options.physiology.active&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}}))throw new Error('Checkpoint capacity prevents physiology activation; existing state preserved');
+   this.body.active=options.physiology.active;const last=this.physiology.unconsciousWindows.at(-1);
+   if(this.capableOfAttention()&&last?.endTick===null)last.endTick=tick;
+   else if(!this.capableOfAttention()&&last?.endTick!==null){if(this.physiology.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');this.physiology.unconsciousWindows.push({startTick:tick,endTick:null});}
+  }
+ }
+ protected override supportsPhysiologyInputs():boolean{return true;}
+ protected override capableOfAction():boolean{return !this.body||bodyCapability(this.body).canAct;}
+ protected override capableOfAttention():boolean{return !this.body||bodyCapability(this.body).canAttend;}
+ protected override motorScale():number{return this.body?bodyImpairment(this.body).headScale:1;}
+ protected override ordinaryAttentionScale():number{return this.body?bodyImpairment(this.body).ordinaryAttentionScale:1;}
+ protected override cognitionInternalContextAllowed(context:CognitionRequestCommand['selection']['context']):boolean{return context.internalSensations===undefined||context.internalSensations.every(percept=>this.providerInternalSensations().some(actual=>canonicalStringify(percept)===canonicalStringify(actual)));}
+ protected override sensoryCaptureAllowed(tick:number):boolean{return !this.physiology||!this.physiology.unconsciousWindows.some(w=>tick>=w.startTick&&(w.endTick===null||tick<w.endTick));}
+ protected override shouldAdvanceActivity():boolean{return this.capableOfAction()&&super.shouldAdvanceActivity();}
+ protected override beforeMotorExecution():void{this.intervalStart.capable=this.capableOfAttention();}
+ protected override beforeInputs(events:DeterministicEvent[]):void{
+  this.physiology.unconsciousWindows=this.physiology.unconsciousWindows.filter(w=>w.endTick===null||w.endTick>=this.data.tick-COGNITION_LIMITS.resultMaxAgeTicks);
+  const c=this.data.character;this.intervalStart={x:c.x,z:c.z,cursor:this.activity.cursor,yaw:this.head.yaw,pitch:this.head.pitch,capable:this.capableOfAttention()};
+  this.enforceCapability(events);
+ }
+ private physiologyEvents(events:DeterministicEvent[],changes:PhysiologyEvent[]):void {
+  for(const e of changes){const data=Object.fromEntries(Object.entries(e.data).map(([k,v])=>[k,v===null?'none':v]));this.emit(events,e.type,e.type.startsWith('INTERNAL_')?'interoception':'physiology','observed',data);}
+ }
+ private enforceCapability(events:DeterministicEvent[]):void{
+  const p=this.physiology,capable=this.capableOfAction(),last=p.unconsciousWindows.at(-1);
+  if(!capable){
+   if(last?.endTick!==null){if(p.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');p.unconsciousWindows.push({startTick:this.data.tick,endTick:null});}
+   this.data.character.moving=false;
+   if(this.head.status!=='idle'){this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId:this.head.activeActionId!,reason:'physiological_incapacity'});this.head.status='idle';this.head.targetYaw=this.head.yaw;this.head.targetPitch=this.head.pitch;this.head.scan=null;this.head.activeActionId=null;this.head.observedAim=null;}
+   if(this.activity.status==='running'&&!p.interruptedActivity){p.interruptedActivity=true;this.emit(events,'ACTIVITY_PHYSIOLOGY_SUSPENDED','activity','suspended',{activityId:this.activity.activityId,cursor:this.activity.cursor});}
+  }else{
+   if(last?.endTick===null)last.endTick=this.data.tick;
+   if(p.interruptedActivity){p.interruptedActivity=false;this.emit(events,'ACTIVITY_PHYSIOLOGY_RESUMED','activity',this.activity.status==='running'?'resumed':'user_paused',{activityId:this.activity.activityId,cursor:this.activity.cursor});}
+  }
+ }
+ protected override afterMotors(events:DeterministicEvent[]):void{
+  const tick=this.data.tick,hz=this.data.config.hz,start=this.intervalStart,safetyPreempted=tick<this.physiology.safetyUntilTick;
+  const advanced=advanceBody(this.body,{tick,hz,executed:{distanceMetres:Math.hypot(this.data.character.x-start.x,this.data.character.z-start.z),taskProgress:this.activity.cursor-start.cursor,headRadians:Math.hypot(this.head.yaw-start.yaw,this.head.pitch-start.pitch)},safetyPreempted,capableAtIntervalStart:start.capable});
+  this.body=advanced.state;this.physiologyEvents(events,advanced.events);this.enforceCapability(events);
+  const a=this.attentionState();const sensed=advanceInteroception(this.interoception,this.body,{tick,hz,safetyPreempted,capableAtIntervalStart:start.capable,ordinaryAttentionAllowed:this.capableOfAttention()&&this.activity.status!=='running'&&tick>=a.commitmentUntilTick&&tick>=a.developerUntilTick&&advanced.impairment.ordinaryAttentionScale>=.7});
+  this.interoception=sensed.state;this.physiologyEvents(events,sensed.events);
+  // Present awareness already exists before this independent, fallible local encoding operation.
+  for(const sensation of sensed.attended)this.encodeInternal(sensation,events);
+ }
+ private encodeInternal(sensation:InternalSensation,events:DeterministicEvent[]):void{
+  const p=this.physiology,tick=this.data.tick,slot=this.interoception.slots.find(s=>s.kind===sensation.kind)!,transient=this.interoception.transient.find(t=>t.percept.attentionId===sensation.attentionId)!;
+  const crossing=slot.urgent?.crossingTick;
+  let reason=sensation.band!=='severe'||crossing===undefined?'selection_policy':p.encodedNeedCrossings.some(e=>e.kind===sensation.kind&&e.crossingTick===crossing)?'duplicate_need_episode':!p.encodingEnabled?'encoding_disabled':p.legacyImport!==null?'legacy_unverified':p.origin.evidenceEligibility!=='eligible'?'debug_tainted':this.internalExperiences.length>=128?'experience_capacity':null;
+  if(reason===null){
+   const identity=structuredClone(this.cognition.identity),e:InternalExperience={id:this.internalExperiences.length+1,kind:'internal',provenance:'ATTENDED_INTERNAL_SENSOR',encodingId:`${identity.historyId}_${identity.branchId}_${sensation.observationId}_${sensation.attentionId}`,identity,sensation:structuredClone(sensation),subjectiveTime:{estimateSeconds:super.checkpoint().subjective.estimateSeconds,uncertaintySeconds:super.checkpoint().subjective.uncertaintySeconds},audit:{sensedTick:transient.sensedTick,attentionTick:transient.attendedTick,encodedTick:tick,needCrossingTick:crossing!},encodingPolicy:'first-severe-per-need-v1'};
+   const evidence={kind:sensation.kind,crossingTick:crossing!,experienceId:e.id,source:'actual_internal_sensor' as const,observationId:sensation.observationId,attentionId:sensation.attentionId,sensedTick:transient.sensedTick,attentionTick:transient.attendedTick,encodingTick:tick,sensationHash:hashCanonical(sensation),identityHash:hashCanonical(identity)};
+   const projected=this.checkpoint();projected.internalExperiences.push(e);projected.physiology.encodedNeedCrossings.push(evidence);
+   if(!fitsCognitionStorage(projected))reason='checkpoint_capacity';else{this.internalExperiences.push(e);p.encodedNeedCrossings.push(evidence);}
+  }
+  this.emit(events,reason===null?'INTERNAL_EXPERIENCE_ENCODED':'INTERNAL_ENCODING','experience',reason===null?'admitted':'not_encoded',{observationId:sensation.observationId,attentionId:sensation.attentionId,kind:sensation.kind,band:sensation.band,reason:reason??'first_severe_per_need',encoded:reason===null,sensed:true,attended:true,source:'actual_internal_sensor',provenance:'ATTENDED_INTERNAL_SENSOR'});
+ }
+ protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean{
+  const c=input.command;
+  if(c.type==='physiology_fixture'){
+   if(c.effect.type==='activate'&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}})){this.emit(events,'BODY_EFFECT_REJECTED','physiology','rejected',{reason:'checkpoint_capacity'},input.sequence);return true;}
+   const applied=applyAcceptedBodyEffect(this.body,c.effect,this.data.tick);this.body=applied.state;this.physiology.origin.evidenceEligibility='debug-tainted';this.physiology.origin.taintedAtTick??=this.data.tick;this.physiologyEvents(events,applied.events);this.enforceCapability(events);return true;
+  }
+  if(c.type==='physiology_safety_fixture'){this.physiology.safetyUntilTick=this.data.tick+c.ticks;this.emit(events,'PHYSIOLOGY_SAFETY_FIXTURE','physiology','controlled_hazard',{untilTick:this.physiology.safetyUntilTick},input.sequence);return true;}
+  if(c.type==='physiology_encoding'){this.physiology.encodingEnabled=c.enabled;this.emit(events,'INTERNAL_ENCODING_POLICY','experience','configured',{enabled:c.enabled},input.sequence);return true;}
+  return super.applyExtendedInput(input,events);
+ }
+ override applyAction(action:ControlAction):DeterministicEvent[]{if(action.type==='activity-start'&&!this.capableOfAction())throw new Error('Physiological incapacity prevents starting activity');return super.applyAction(action);}
+ bodyState():BodyState{return structuredClone(this.body);}
+ interoceptionState():InteroceptionState{return structuredClone(this.interoception);}
+ presentInternalSensations():InternalSensation[]{return presentInternalSensations(this.interoception,this.body.active);}
+ providerInternalSensations():InternalSensationContext[]{return providerInternalSensations(this.interoception,this.body.active);}
+ admittedInternalExperiences():InternalExperience[]{return structuredClone(this.internalExperiences);}
+ override experienceRecords():Experience[]{return [...super.experienceRecords(),...this.admittedInternalExperiences()];}
+ override snapshot():WorldState{return {...super.snapshot(),physiologyActive:this.body?.active??false,capability:this.body?bodyCapability(this.body):{awake:true,canAttend:true,canAct:true,reason:'available'},presentInternalSensations:this.interoception?providerInternalSensations(this.interoception,this.body.active):[]};}
+ override checkpoint():CheckpointV6{return {...super.checkpoint(),schemaVersion:6,rulesVersion:PHYSIOLOGY_RULES,body:structuredClone(this.body),interoception:structuredClone(this.interoception),physiology:structuredClone(this.physiology),internalExperiences:structuredClone(this.internalExperiences)};}
 }

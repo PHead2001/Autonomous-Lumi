@@ -110,17 +110,17 @@ test('active attention-v1 upgrade preserves complete state and queued feedback, 
   const loaded=await RecoveryStore.open({directory});
   const active=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',directory,checkpoint:loaded.checkpoint,historyId:store.historyId});
   try{
-    const complete=active.checkpoint().simulation;assert.equal(complete.schemaVersion,5);const {cognition:ignoredCognition,realExperiences:ignoredReal,...baseFields}=complete as import('../server/simulation.js').CheckpointV5;void ignoredCognition;void ignoredReal;const upgraded={...baseFields,schemaVersion:4 as const,rulesVersion:'lumi-attention-v2' as const};
+    const complete=active.checkpoint().simulation;assert.equal(complete.schemaVersion,6);const baseFields=structuredClone(complete) as unknown as Record<string,unknown>;for(const key of ['cognition','realExperiences','body','interoception','physiology','internalExperiences'])delete baseFields[key];const upgraded={...baseFields,schemaVersion:4 as const,rulesVersion:'lumi-attention-v2' as const};
     assert.equal(upgraded.rulesVersion,'lumi-attention-v2');
     assert.deepEqual(upgraded,{...old,rulesVersion:'lumi-attention-v2',attention:{...old.attention,lastReceived:{...old.attention.lastReceived,directionUncertaintyDegrees:60,distanceBand:'middle',distanceUncertainty:.75}}});
     assert.deepEqual(upgraded.pendingInputs,old.pendingInputs);assert.doesNotThrow(()=>validateCheckpoint(upgraded));
-    const expected=new SensorySimulation({mode:'LIVE',checkpoint:upgraded});expected.step();active.simulation.step();const advanced=active.simulation.checkpoint() as import('../server/simulation.js').CheckpointV5;const {cognition:ignoredAdvancedCognition,realExperiences:ignoredAdvancedReal,...advancedBase}=advanced;void ignoredAdvancedCognition;void ignoredAdvancedReal;assert.deepEqual({...advancedBase,schemaVersion:4,rulesVersion:'lumi-attention-v2'},expected.checkpoint());
+    const expected=new SensorySimulation({mode:'LIVE',checkpoint:upgraded});expected.step();active.simulation.step();const advancedBase=active.simulation.checkpoint() as unknown as Record<string,unknown>;for(const key of ['cognition','realExperiences','body','interoception','physiology','internalExperiences'])delete advancedBase[key];assert.deepEqual({...advancedBase,schemaVersion:4,rulesVersion:'lumi-attention-v2'},expected.checkpoint());
     assert.equal((active.simulation as SensorySimulation).attentionState().lastCapture!.freshness,'applicable');
     for(let i=0;i<4;i++){active.simulation.step();await loaded.store.save(active.checkpoint());}
     const archive='pre-attention-rules-v1-'+manifest.latest.file;assert.ok((await readdir(store.directory)).includes(archive));
     const payload=JSON.parse(await readFile(join(store.directory,archive),'utf8'));assert.equal(hashRuntimeCheckpoint(payload.checkpoint),hashRuntimeCheckpoint(envelope));
     await active.recorder!.flush();const migrated=(await readRun(active.recorder!.runDirectory)).records.find(r=>r.event_type==='STATE_RULES_MIGRATED');
-    assert.equal(migrated?.data.fromRules,'lumi-attention-v1');assert.equal(migrated?.data.toRules,'lumi-cognition-v1');
+    assert.equal(migrated?.data.fromRules,'lumi-attention-v1');assert.equal(migrated?.data.toRules,'lumi-physiology-v1');
     assert.equal(replay(old,[],old.tick).checkpoint.rulesVersion,'lumi-attention-v1');
   }finally{await active.close();}
 });

@@ -23,6 +23,7 @@
     "vision:benchmark": "tsx server/vision/benchmark.ts",
     "vision:verify": "tsx --test tests/vision-renderer.real.ts",
     "vision:attention": "tsx --test tests/vision-attention.real.ts",
+    "physiology:lab": "tsx server/physiology-lab.ts",
     "cognition:verify": "tsx server/cognition/verify.ts"
   },
   "dependencies": {

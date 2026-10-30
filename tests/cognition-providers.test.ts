@@ -198,7 +198,7 @@ test('invalid/missing/private sensory input never dispatches, and disabled keys 
 });
 
 test('timeouts do not wait for ignored aborts, charge unknown usage and block later overspend', async () => {
-  let calls = 0; const fixture = await setup(async () => { calls++; return await new Promise<Response>(() => {}); }, { LUMI_COGNITION_DEADLINE_MS: '100', LUMI_COGNITION_BUDGET_USD: '0.15' });
+  let calls = 0; const fixture = await setup(async () => { calls++; return await new Promise<Response>(() => {}); }, { LUMI_COGNITION_DEADLINE_MS: '1000', LUMI_COGNITION_BUDGET_USD: '0.15' });
   try {
     const first = await fixture.providers.interpret(input()); assert.equal(first.status, 'timeout'); assert.equal(first.attempts, 1); assert.equal(first.costBasis, 'unknown');
     assert.equal((await fixture.budget.snapshot()).unknown, 1);
@@ -318,4 +318,21 @@ test('shared normalized parser distinguishes malformed JSON, schema, references 
  assert.throws(()=>validateCognitionProposalReferences({...proposal(),evidenceHandles:['invented']},context()),fails('unknown_handle'));
  assert.throws(()=>bindCognitionProposal({...remoteProposal(),frameHash:context().frameHash},context()),fails('schema'));
  assert.deepEqual(bindCognitionProposal(remoteProposal(),context()),proposal());
+});
+
+test('active provider wire contains only allowlisted present sensations and an independent sensor prompt',async()=>{
+ let sent:Record<string,unknown>|undefined;
+ const f=await setup(async(_url,init)=>{sent=JSON.parse(String(init.body));return new Response(JSON.stringify(envelope()),{status:200});});
+ try{
+  const c=context();c.internalSensations=[{kind:'hunger',band:'severe',description:'My stomach feels insistently empty.',uncertainty:'coarse_internal_signal'}];
+  const result=await f.providers.interpret({...input(),context:c});assert.equal(result.status,'ok');
+  const wire=sent as {messages:{content:string|{type:string;text?:string}[]}[]};
+  assert.match(String(wire.messages[0].content),/separate from the image/);
+  const user=wire.messages[1].content as {type:string;text?:string}[];const text=JSON.parse(user[0].text!);
+  assert.deepEqual(text.internalSensations,c.internalSensations);
+  assert.deepEqual(Object.keys(text.internalSensations[0]).sort(),['band','description','kind','uncertainty']);
+  for(const forbidden of ['satiety','reserves','sleepPressure','crossingTick','genesisPreset','observationId','frameHash'])assert.equal(user[0].text!.includes(forbidden),false,forbidden);
+  const invalid={...c,internalSensations:[{...c.internalSensations[0],satiety:.01}]};
+  assert.equal((await f.providers.interpret({...input('bad',30),context:invalid})).status,'invalid_input');
+ }finally{await f.close();}
 });
