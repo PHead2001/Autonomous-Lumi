@@ -885,11 +885,19 @@ export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|Checkpoint
   if(cp)this.data.pendingInputs=structuredClone(cp.pendingInputs);
   const explicitlyActivating=options.physiology?.active===true&&(!cp||!cp.body.active);
   if((explicitlyActivating||!cp&&this.body.active)&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}}))throw new Error('Checkpoint capacity prevents physiology activation; existing state preserved');
-  if(cp&&options.physiology?.active!==undefined&&options.physiology.active!==this.body.active){
-   this.body.active=options.physiology.active;const last=this.physiology.unconsciousWindows.at(-1);
-   if(this.capableOfAttention()&&last?.endTick===null)last.endTick=tick;
-   else if(!this.capableOfAttention()&&last?.endTick!==null){if(this.physiology.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');this.physiology.unconsciousWindows.push({startTick:tick,endTick:null});}
-  }
+  if(cp&&options.physiology?.active!==undefined)this.configurePhysiologyActivation(options.physiology.active);
+ }
+ /** Constructor configuration changes capability evidence without executing motors,
+  * cancelling actions, or inventing a retrospective unconscious interval. Call only
+  * after the caller's complete projected activation capacity preflight. */
+ protected configurePhysiologyActivation(active:boolean):void {
+  if(active===this.body.active)return;
+  const capable=bodyCapability({...this.body,active}).canAttend,last=this.physiology.unconsciousWindows.at(-1);
+  const openInterval=!capable&&last?.endTick!==null;
+  if(openInterval&&this.physiology.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');
+  this.body.active=active;
+  if(capable&&last?.endTick===null)last.endTick=this.data.tick;
+  else if(openInterval)this.physiology.unconsciousWindows.push({startTick:this.data.tick,endTick:null});
  }
  protected applyValidatedHomeEffect(effect:Omit<Extract<PhysiologyEffect,{type:'intake'}>,'sequence'>|{type:'rest'|'sleep'|'wake'},events:DeterministicEvent[]):number{const sequence=this.body.lastEffectSequence+1,result=applyAcceptedBodyEffect(this.body,{...effect,sequence},this.data.tick);this.body=result.state;this.physiologyEvents(events,result.events);return sequence;}
  protected override supportsPhysiologyInputs():boolean{return true;}
@@ -1009,7 +1017,7 @@ export class HomeSimulation extends PhysiologySimulation<CheckpointV8> {
   if(options.physiology?.active!==undefined)this.home.activationPolicy=options.physiology.active?'home-default':'owner-disabled';
   const nextActive=this.home.availability==='ready'&&active&&this.home.activationPolicy!=='owner-disabled';
   if(nextActive&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}}))throw new Error('Checkpoint capacity prevents home activation; existing state preserved');
-  this.body.active=nextActive;if(!nextActive&&homeTaskBusy(this.home)&&this.home.task!.status!=='failed'){this.home.task!.status='interrupted';this.home.task!.interruption='owner_disabled';}
+  this.configurePhysiologyActivation(nextActive);if(!nextActive&&homeTaskBusy(this.home)&&this.home.task!.status!=='failed'){this.home.task!.status='interrupted';this.home.task!.interruption='owner_disabled';}
  }
  protected override supportsHomeInputs():boolean{return true;}
  protected override motorScale():number{return this.home&&!this.body.active&&this.home.controller.searchActionId===this.head.activeActionId&&this.head.activeActionId!==null?0:super.motorScale();}
