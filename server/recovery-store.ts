@@ -3,7 +3,8 @@ import { readdir, mkdir, unlink } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { atomicJson, readBoundedJson, assertOwnedPath, recoveryCheckpointPayload } from './checkpoint-storage.js';
 import { validateRuntimeCheckpoint, hashRuntimeCheckpoint, validId, type RuntimeCheckpoint } from './branch-runtime.js';
-import { Simulation } from './simulation.js';
+import { Simulation, PhysiologySimulation, validatePhysiologyCheckpoint } from './simulation.js';
+import { fitsCognitionStorage } from './checkpoint-capacity.js';
 
 interface Generation {file:string;generation:number;tick:number;worldTime:number;savedAt:string;hash:string}
 interface Manifest {schemaVersion:1;historyId:string;latest:Generation;previous:Generation|null}
@@ -24,8 +25,21 @@ export class RecoveryStore {
     const base=resolve(options.directory),root=join(base,'.recovery');let entries:string[]=[];try{entries=await readdir(base);}catch(e){if(!missing(e))throw e;}
     // Explicit overrides start a new history; neither import nor reset modifies the old one.
     if(options.checkpoint!==undefined||options.newWorld){
+      let checkpoint=options.checkpoint;
       if(options.checkpoint!==undefined){const raw=options.checkpoint as {kind?:unknown;schemaVersion?:unknown};if(raw?.kind==='lumi-branch-runtime'){const cp=validateRuntimeCheckpoint(raw);if(cp.mode!=='LIVE')throw new Error('LUMI_CHECKPOINT override requires LIVE; experimental state cannot enter LIVE');}else if(raw?.schemaVersion!==1)throw new Error('LUMI_CHECKPOINT requires a LIVE runtime envelope or explicit legacy schema 1 checkpoint');else new Simulation({checkpoint:raw});}
-      const historyId=randomUUID(),store=new RecoveryStore(base,historyId,intervalMs,'override',options.listRecoveryFiles);await mkdir(base,{recursive:true});await assertOwnedPath(base,store.directory);await mkdir(store.directory,{recursive:true});return {store,checkpoint:options.checkpoint};
+      const historyId=randomUUID();
+      if(checkpoint&&typeof checkpoint==='object'&&(checkpoint as {kind?:unknown}).kind==='lumi-branch-runtime'){
+        const imported=validateRuntimeCheckpoint(checkpoint);
+        if(imported.simulation.schemaVersion===5||imported.simulation.schemaVersion===6){
+          const source=imported.simulation.schemaVersion===6?imported.simulation:new PhysiologySimulation({mode:'LIVE',checkpoint:imported.simulation,historical:true}).checkpoint();
+          if(source.physiology.legacyImport!==null)throw new Error('Unverified experiment ancestry cannot enter LIVE checkpoint import');
+          if(source.physiology.verifiedCheckpointImports.length>=8)throw new Error('Verified LIVE checkpoint import limit reached (8); source history preserved');
+          source.physiology.verifiedCheckpointImports.push({kind:'explicit-live-checkpoint-import-v1',sourceHistoryId:source.cognition.identity.historyId,destinationHistoryId:historyId,importTick:source.tick});
+          source.cognition.identity.historyId=historyId;validatePhysiologyCheckpoint(source);if(!fitsCognitionStorage(source))throw new Error('Checkpoint capacity prevents LIVE checkpoint import; source history preserved');
+          checkpoint={...imported,schemaVersion:5,simulation:source};validateRuntimeCheckpoint(checkpoint);
+        }
+      }
+      const store=new RecoveryStore(base,historyId,intervalMs,'override',options.listRecoveryFiles);await mkdir(base,{recursive:true});await assertOwnedPath(base,store.directory);await mkdir(store.directory,{recursive:true});return {store,checkpoint};
     }
     let active:unknown;try{active=await readBoundedJson(join(root,'active.json'),base);}catch(e){if(!missing(e))throw new Error('Cannot read recovery identity. Preserve files and use an explicit LIVE checkpoint import or LUMI_NEW_WORLD=1. '+message(e));
       if(entries.length)throw new Error('Existing Lumi data has no committed recovery identity. Import a known LIVE runtime checkpoint using LUMI_CHECKPOINT, or deliberately initialize a new history with LUMI_NEW_WORLD=1. Existing files are preserved.');

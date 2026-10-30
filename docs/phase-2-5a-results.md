@@ -1,6 +1,10 @@
 # Phase 2.5a verification results
 
-The body/interoception integration, prepared lab, scoped dashboard/browser walkthrough and one corrected actual-provider integration have evidence below. The current lab artifact and independent replay pass, with final lint/build and affected checks below. The initial full suite was **299/303**: three stale schema/gate assertions and one load-sensitive 100 ms provider fixture. Those four areas were corrected, and **54/54 affected tests**, final lint/build including TypeScript passed. The provider fixture budget changed to 1,000 ms with its assertions retained. This is not a fresh 303/303 full run. Logs: `diagnostics/physiology-final-{test,affected,lint,build}.txt`.
+[PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) hosted review found three actionable defects: validated LIVE checkpoint override history continuity, activation capacity on older-schema migration, and fractional absorption completion. All three are locally fixed: final `npm.cmd test` passed **308/308**, zero failures in **18.86 s**; lint/build passed, with the existing >500 kB chunk advisory only. Independent local re-reviews are clean. Logs: `diagnostics/physiology-pr9-final-{test,lint,build}.txt`. The regenerated current-chain lab is independently verified COMPLETE/replay PASS. Hosted threads await push/re-review; no clean hosted outcome is claimed. Earlier paid artifacts remain historical development-contract evidence.
+
+## Prior verification evidence
+
+The body/interoception integration, prepared lab, scoped dashboard/browser walkthrough and one corrected actual-provider integration have evidence below. The pre-hosted-fix lab artifact and independent replay passed, with final lint/build and affected checks below. The initial full suite was **299/303**: three stale schema/gate assertions and one load-sensitive 100 ms provider fixture. Those four areas were corrected, and **54/54 affected tests**, final lint/build including TypeScript passed. The provider fixture budget changed to 1,000 ms with its assertions retained. This is not a fresh 303/303 full run. Logs: `diagnostics/physiology-final-{test,affected,lint,build}.txt`.
 
 ## Actual focused and browser evidence
 
@@ -8,7 +12,8 @@ The body/interoception integration, prepared lab, scoped dashboard/browser walkt
 | --- | --- |
 | Host targeted checks | Earlier **48/48**; final actual-renderer/FAKE preflight + three cleanup-failure cases + eight verification checks **12/12 PASS**, `diagnostics/physiology-cleanup-final-check.log`; final lint/build |
 | Core corrections | **54/54 affected PASS**, final lint/build; initial full **299/303** retained honestly |
-| Independent boundary review | All P1/high-risk, legacy-import and sleep-attention fixes re-reviewed clean by Astra; ordinary cleanup targeted re-review clean |
+| Independent boundary review | All PR #9 boundary re-reviews clean; source complete locally, hosted re-review pending |
+| Final PR #9 full checks | **308/308 PASS**, lint/build PASS; existing chunk advisory only |
 | Actual renderer + FAKE-provider preflight | **1/1**, not a paid-provider substitute |
 | Attention demo | **1/1** |
 | Zero-viewer continuity/recovery | Actual autoscheduled host runs for 350 ms, advances at least three ticks with zero viewers, then RecoveryStore restart preserves active body, one internal episode and history |
@@ -26,21 +31,21 @@ npm.cmd run physiology:lab -- --out diagnostics/physiology-lab/hunger-during-tas
 npm.cmd run replay -- --bundle diagnostics/physiology-lab/hunger-during-task.zip
 ```
 
-The final current-schema lab at `diagnostics/physiology-lab/final-hunger.zip` and its `.summary.json` passed **9/9 computed assertions**, with COMPLETE evidence and independently matching current offline replay. It observed mild hunger during the running task at tick **20,000**, moderate at **40,000**, and severe crossing **49,091**→first attention **49,120**: **29 eligible world seconds**, zero exclusions and no breach, using 1 Hz production-rate genesis. Present severe hunger remained available with encoding disabled; activity continued until an explicitly supplied nutrition fixture relieved satiety and then absorbed reserves over 1,800 seconds. No meal acquisition/eating action or memory was asserted.
+The final current-contract lab at `diagnostics/physiology-lab/pr9-final-hunger.zip` and its `.summary.json` passed **9/9 computed assertions**, with COMPLETE evidence and independently matching replay against the final local contract. It observed mild hunger during the running task at tick **20,000**, moderate at **40,000**, and severe crossing **49,091**→first attention **49,120**: **29 eligible world seconds**, zero exclusions and no breach, using 1 Hz production-rate genesis. Present severe hunger remained available with encoding disabled; activity continued until an explicitly supplied nutrition fixture relieved satiety and then absorbed reserves over 1,800 seconds. No meal acquisition/eating action or memory was asserted.
 
-Independent inspection found **177,201 bytes**, **13 entries**, checkpoint **6** / runtime **5** with `legacyImport: null`, COMPLETE ticks **0–50,926**, **3,728 records**, **2 ordered inputs / 3,716 events**, zero gaps and zero drops. The documented CLI independently passed against the current code; log: `diagnostics/physiology-lab-independent-replay-current.log`.
+Independent inspection found **177,396 bytes**, **13 entries**, checkpoint **6** / runtime **5** with `legacyImport: null` and `verifiedCheckpointImports: []` in both simulation/runtime snapshots, COMPLETE ticks **0–50,926**, **3,728 records**, **2 ordered inputs / 3,716 events**, zero gaps and zero drops. The documented CLI independently passed against current code; log: `diagnostics/physiology-lab-independent-replay-pr9-final.log`. Privacy inspection found no credentials, raw prompts/responses, pixel/image payloads, contact data or private geometry.
 
 ```powershell
-npm.cmd run replay -- --bundle diagnostics/physiology-lab/final-hunger.zip
+npm.cmd run replay -- --bundle diagnostics/physiology-lab/pr9-final-hunger.zip
 ```
 
 | Canonical evidence | Hash |
 | --- | --- |
-| State | `eb6e3231050ec0d5524f44d3b9531f5118fe084b4e1c8eea2a35dbb69d38faa4` |
+| State | `06a24cf498a34246645b11d7c2eab71b7f1fce5c8faa703a2859c208344742b6` |
 | Events | `698b9346ff4f716b52ab4cf222920a8cdde6b8b977b180bea00a31dc401eaad4` |
-| Runtime | `10c54da48d4dc50bc4e6e57a85a7549d246e6729cd25786962d437d141f16546` |
+| Runtime | `3c33cd94395d19e1fee8984832868e261b25543c73c344d62f51a84bf3d55858` |
 
-The earlier pre-marker artifact is preserved as `final-hunger.pre-legacyImport.zip`; it is not substituted for current evidence.
+Earlier `final-hunger.zip` and `final-hunger.pre-legacyImport.zip` artifacts remain development history, not substitutes for this current-chain replay. The final evidence also records fixture intake/urgent resolution at tick 49,126 and absorption completion at 50,925; this remains a labelled fixture, not actual food acquisition/eating.
 
 ## Actual active-profile provider check
 
@@ -58,8 +63,15 @@ The two calls total **US$0.00013644**. The original application-wide ledger ceil
 
 ## Review and material limits
 
-All P1/high-risk and legacy-import/sleep-attention re-reviews are accepted. The cleanup-report correction retains response/input/budget evidence and any available COMPLETE replayable ZIP when initial close, restored close or restart listen fails; its three injected failure cases and the final 12-check group pass. Ordinary targeted cleanup re-review is clean with no further findings; all local reviews are resolved. No Phase 2.5a PR/hosted-review result is claimed before that workflow exists.
+Earlier P1/high-risk and legacy-import/sleep-attention re-reviews were accepted before the three hosted findings. The cleanup-report correction retains response/input/budget evidence and any available COMPLETE replayable ZIP when initial close, restored close or restart listen fails; its three injected failure cases and the final 12-check group pass. Ordinary targeted cleanup re-review was clean. All local PR #9 targeted re-reviews are now clean, including independent Astra boundary review. Hosted re-review remains pending; no clean hosted outcome is claimed.
 
 Checkpoint 6 now requires `physiology.legacyImport: null|{kind: explicit-unverified-import-v1, sourceHistoryId, destinationHistoryId, importTick}`. Only explicit bare legacy EXPERIMENT import creates a marker. Old origin/records/debug taint remain intact, same-tick old episodes are accepted, future internal encoding is permanently blocked as `legacy_unverified`, and secondary unverified imports reject. Awareness continues. The sleep-attention fix also prevents a first visual delivery while asleep from creating visual attention/baseline/cognition selection; already attended pre-sleep requests retain their separate late-result semantics.
+
+
+### Hosted correction contract (locally verified)
+
+An explicit validated LIVE `LUMI_CHECKPOINT` override creates a new history under the existing RecoveryStore policy. Schema 6 requires `physiology.verifiedCheckpointImports: []`, bounded to **eight** edges of `{kind: explicit-live-checkpoint-import-v1, sourceHistoryId, destinationHistoryId, importTick}`. Only the validated LIVE explicit-override boundary may append one; ordinary restore cannot infer authorization. Source origin, old memories and debug taint remain unchanged. Old-source episodes are bounded at or before the import tick; legitimate new destination episodes are strictly after it, and verified future encoding remains allowed. The chain carries into experiment forks. This is separate from the unverified EXPERIMENT `legacyImport` marker, whose permanent future-encoding restriction remains.
+
+Activation must preflight the complete capacity budget on every path, including old-schema migration. Fractional absorption must normalize completion instead of retaining a tiny residual/timer inconsistency. The reducer passed **21 tests** and clean ordinary review; core passed **52 targeted checks plus one composition regression**; host passed **10 context checks** and TypeScript. These cover named/bare LIVE override startup, old visual/internal preservation plus valid destination encoding, normal restart, experiment fork and unverified legacy composition, EXPERIMENT→LIVE rejection, eight-edge bounds and near-capacity schema-5 activation preflight. Maximum reserved-growth shape including all eight edges measured **338,421 bytes**, below 384 KiB by **54,795 bytes**. Independent Astra re-review accepted all affected boundaries.
 
 New/migrated owner LIVE physiology remains inactive unless explicitly enabled; restored schema-6 gates obey the documented process override. No day/night/home loop, sustainable food behavior, long-running desktop/power guarantee or new pixel-confidence work is included. See [Physiology and interoception](physiology.md) for the model, calibration, severe-need eligibility, provenance and checkpoint contracts.

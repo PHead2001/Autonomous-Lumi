@@ -43,9 +43,9 @@ export function cognitionStorageBytes(checkpoint:CheckpointV5|CheckpointV6):numb
   // once that result is queued. Do not double-count the same pending reply.
   const deliveryBytes=delivered.size?bytes-cognitionEnvelopeBytes({...future,pendingInputs:withoutDelivery}):0;
   const pendingBytes=pending.size*COGNITION_PENDING_BYTES-Math.min(delivered.size*COGNITION_TERMINAL_BYTES,deliveryBytes);
-  // Maximum-shape actual-envelope regression measures 335237 bytes. Reserve 384 KiB
+  // Maximum-shape actual-envelope regression measures 338421 bytes. Reserve 384 KiB
   // for all bounded physiology growth, including 128 maximum internal episodes,
-  // their encoding keys, incapacity intervals and 32 pending absorption effects.
+  // their encoding keys, incapacity intervals, 32 pending absorption effects and 8 verified import edges.
   // Actual existing records remain measured in the envelope, never trimmed.
   const physiologyGrowth=checkpoint.schemaVersion===6?(checkpoint.body.active?384*1024:8*1024):0;
   return bytes+COGNITION_MOTOR_SENSOR_BYTES+pendingBytes+physiologyGrowth;

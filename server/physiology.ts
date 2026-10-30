@@ -62,9 +62,17 @@ export function advanceBody(previous:BodyState,ctx:BodyStepContext,acceptedEffec
   for(const raw of acceptedEffects){const applied=applyAcceptedBodyEffect(state,raw);state=applied.state;events.push(...applied.events);}
   if(state.active) {
     for(const a of state.absorption) {
-      const portion=a.reservesRemaining*Math.min(1,dt/a.secondsRemaining);
-      state.reserves=clamp(state.reserves+portion);a.reservesRemaining=Math.max(0,a.reservesRemaining-portion);a.secondsRemaining=Math.max(0,a.secondsRemaining-dt);
-      if(a.secondsRemaining===0||a.reservesRemaining===0)emit('BODY_ABSORPTION_COMPLETED',{sequence:a.sequence});
+      // Repeated fractional subtraction can leave a sub-ULP tail at the final tick.
+      // Snap only within a billionth of this fixed step, or below the checkpoint's
+      // normalized-store resolution. Transfer the entire tail rather than dropping nutrition.
+      const completesByTime=a.secondsRemaining<=dt+dt*1e-9;
+      let portion=completesByTime?a.reservesRemaining:a.reservesRemaining*(dt/a.secondsRemaining);
+      const completed=completesByTime||a.reservesRemaining-portion<Number.EPSILON;
+      if(completed)portion=a.reservesRemaining;
+      state.reserves=clamp(state.reserves+portion);
+      a.reservesRemaining=completed?0:a.reservesRemaining-portion;
+      a.secondsRemaining=completed?0:a.secondsRemaining-dt;
+      if(completed)emit('BODY_ABSORPTION_COMPLETED',{sequence:a.sequence});
     }
     state.absorption=state.absorption.filter(a=>a.secondsRemaining>0&&a.reservesRemaining>0);
     const asleep=state.mode==='asleep'||state.mode==='incapacitated',resting=state.mode==='resting';

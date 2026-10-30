@@ -1,3 +1,6 @@
+import { CognitionSimulation, PhysiologySimulation, validateCheckpoint, type CheckpointV6 } from '../server/simulation.js';
+import { RecoveryStore } from '../server/recovery-store.js';
+import { eyePose } from '../shared/eye-pose.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp,rm } from 'node:fs/promises';
@@ -8,7 +11,7 @@ import { BranchRuntime } from '../server/branch-runtime.js';
 import { CaptureManager } from '../server/vision/capture-manager.js';
 import { AutomaticCaptureCoordinator } from '../server/vision/auto-capture.js';
 import { CognitionCoordinator,type CognitionProviderClient } from '../server/cognition/coordinator.js';
-import { assembleCognitionObservation } from '../server/cognition/observation.js';
+import { assembleCognitionObservation, providerExperiences } from '../server/cognition/observation.js';
 import { loadCognitionConfig,safeCognitionConfig,type CognitionConfig } from '../server/cognition/config.js';
 import type { InterpretationInput,ProviderResult } from '../server/cognition/providers.js';
 import type { FrameRenderer,RenderedFrame } from '../server/vision/renderer.js';
@@ -192,4 +195,35 @@ test('cognition status uses private loopback boundary, redacts keys and reports 
     for(const secret of ['satiety','reserves','sleepPressure','condition','fatigue','genesisPreset','crossingTick','attentionId','internal-observation','physiology'])assert.equal(wire.includes(secret),false,secret);
     assert.equal(f.runtime.simulation.checkpoint().schemaVersion,6);
   }finally{await f.close();}
+});
+
+test('provider context preserves verified imported LIVE ancestors verbatim and rejects foreign epochs or experiment records',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'lumi-provider-ancestor-'));
+ const initial=new CognitionSimulation({mode:'LIVE',worldId:'lumi',branchId:'live',historyId:'provider-source-history',runId:'source-run'}).checkpoint();
+ initial.pauseUntilTick=10000;initial.character.moving=false;initial.attention.pending={id:1,createdTick:0,expiresTick:300,reasons:['activity_outcome'],triggers:[{reason:'activity_outcome',tick:0,parentSequence:null}],parentSequence:null,status:'pending',captureId:null,requestedTick:null};initial.attention.nextIntentId=2;
+ // Explicit normalized sensor fixture: this test checks history admission, with
+ // no renderer, provider transport, owner history or paid work.
+ const source=new CognitionSimulation({mode:'LIVE',checkpoint:initial,historical:true}),eye=eyePose(source.snapshot()),pose={x:eye.position[0],y:eye.position[1],z:eye.position[2],bodyHeading:eye.bodyHeading,headYaw:eye.headYaw,headPitch:eye.headPitch},frameHash='a'.repeat(64),identity=initial.cognition.identity;
+ source.enqueue({type:'sensor_feedback',intentId:1,stage:'admitted',captureId:'source-frame',capturedTick:0,sceneRevision:0,pose,outcome:'success',signature:null,frameHash:null});source.step();
+ source.enqueue({type:'sensor_feedback',intentId:1,stage:'result',captureId:'source-frame',capturedTick:0,sceneRevision:0,pose,outcome:'success',signature:Array(48).fill(10),frameHash});source.step();
+ source.enqueue({type:'cognition_request',purpose:'interpretation',requestId:'source-memory',selection:{identity,captureId:'source-frame',observationId:'source-observation',frameHash,intentId:1,capturedTick:0,attentionTick:2,pose,source:'actual_renderer',context:{observationId:'source-observation',frameHash,shapes:[],sound:null,activity:{status:'idle'},experiences:[]}},provider:'fixture',model:'offline',promptRevision:'lumi-vision-prompt-v3',schemaRevision:'lumi-interpretation-v1'});source.step();
+ source.enqueue({type:'cognition_result',requestId:'source-memory',identity,outcome:'success',proposal:{observationId:'source-observation',frameHash,interpretation:'I see a dim room, but cannot identify the shape.',uncertainty:.7,evidenceHandles:[],action:{type:'continue'}},metrics:{latencyMs:0,attempts:1,inputTokens:null,outputTokens:null,costUsd:null,costBasis:'unknown',modelRevision:null}});source.step();
+ const migrated=new PhysiologySimulation({mode:'LIVE',checkpoint:source.checkpoint(),historical:true}).checkpoint(),base=new BranchRuntime({worldId:'lumi',branchId:'live',historyId:identity.historyId,mode:'LIVE',offline:true}),envelope={...base.checkpoint(),simulation:migrated};await base.close();
+ assert.equal(migrated.realExperiences.length,1);const original=structuredClone(migrated.realExperiences[0]);
+ const opened=await RecoveryStore.open({directory,checkpoint:envelope});
+ const app=createWorldServer({checkpoint:opened.checkpoint,recoveryStore:opened.store,diagnosticsDirectory:directory,autoSchedule:false,automaticCaptures:false,cognition:{config:config(false)}});
+ try{
+  await app.listen(0);const cp=app.registry.live.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Schema6 required');
+  assert.doesNotThrow(()=>validateCheckpoint(cp));assert.notEqual(cp.cognition.identity.historyId,original.identity.historyId);assert.deepEqual(cp.realExperiences[0],original);
+  const expected=[{interpretation:original.interpretation,uncertainty:original.uncertainty}];assert.deepEqual(providerExperiences(cp,cp.cognition.identity),expected);
+  assert.deepEqual(providerExperiences(cp,{...cp.cognition.identity,historyId:original.identity.historyId}),[],'a mismatched selection identity cannot borrow the ancestry');
+  for(const mutate of [
+   (x:typeof cp)=>{x.realExperiences[0].identity.historyId='unverified-history';},
+   (x:typeof cp)=>{x.realExperiences[0].encodedTick=cp.physiology.verifiedCheckpointImports[0].importTick+1;},
+   (x:typeof cp)=>{x.realExperiences[0].identity.mode='EXPERIMENT';},
+   (x:typeof cp)=>{x.realExperiences[0].identity.worldId='another-world';},
+   (x:typeof cp)=>{x.cognition.requests[0].request.promptRevision='lumi-vision-prompt-v2';},
+  ]){const adversarial:CheckpointV6=structuredClone(cp);mutate(adversarial);assert.deepEqual(providerExperiences(adversarial,cp.cognition.identity),[]);}
+  assert.deepEqual(cp.realExperiences[0],original,'selection never rewrites admitted source records');
+ }finally{await app.close();await rm(directory,{recursive:true,force:true});}
 });

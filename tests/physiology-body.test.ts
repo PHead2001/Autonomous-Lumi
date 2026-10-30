@@ -38,6 +38,28 @@ test('intake promptly relieves satiety, gradually absorbs once, and restore pres
   assert.throws(()=>step(state,[{...intake,sequence:3}]),/Nonconsecutive/);
 });
 
+test('fractional fixed-step absorption completes once with valid checkpoints at every 30 Hz and 120 Hz boundary',()=>{
+  for(const {hz,absorptionSeconds} of [{hz:30,absorptionSeconds:1},{hz:120,absorptionSeconds:1},{hz:30,absorptionSeconds:1.000001}]) {
+    let state=createBody(0,hz,true);state.reserves=.4;
+    const intake:PhysiologyEffect={sequence:1,type:'intake',satiety:.1,reserves:.2,absorptionSeconds};
+    const completionTick=Math.ceil(absorptionSeconds*hz);
+    let completed=0;
+    for(let tick=1;tick<=completionTick+2;tick++) {
+      const restored=validateBodyState(JSON.parse(JSON.stringify(state)),state.lastIntegratedTick,hz);
+      const effects=tick===1?[intake]:[];
+      const next=step(state,effects),resumed=step(restored,effects);
+      assert.deepEqual(resumed,next,`restored continuation at ${hz} Hz tick ${tick}`);
+      completed+=next.events.filter(e=>e.type==='BODY_ABSORPTION_COMPLETED').length;
+      state=validateBodyState(JSON.parse(JSON.stringify(next.state)),tick,hz);
+      assert.equal(state.absorption.length,tick<completionTick?1:0,`${hz} Hz absorption boundary tick ${tick}`);
+    }
+    assert.equal(completed,1);assert.ok(Math.abs(state.reserves-(.6-state.config.reserveUsePerSecond*(completionTick+2)/hz))<1e-13,'all accepted nutrition is absorbed before normal expenditure');
+    const control=step(state),duplicate=step(state,[intake]);
+    assert.deepEqual(duplicate.state,control.state);assert.equal(duplicate.events.filter(e=>e.type==='BODY_ABSORPTION_COMPLETED').length,0);
+    assert.equal(duplicate.events.filter(e=>e.type==='BODY_EFFECT_DUPLICATE').length,1);
+  }
+});
+
 test('rest and sleep differ, forced sleep recovers and wakes, and depletion remains recoverable',()=>{
   let tired=hours(createBody(0,1,true),24);
   const rested=hours(step(tired,[{sequence:1,type:'rest'}]).state,2);

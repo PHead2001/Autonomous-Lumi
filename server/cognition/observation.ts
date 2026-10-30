@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
-import type { CheckpointV5, CheckpointV6 } from '../simulation.js';
+import { experienceHistoryAdmitted, type CheckpointV5, type CheckpointV6 } from '../simulation.js';
 import type { BranchRuntime } from '../branch-runtime.js';
 import { hashCanonical } from '../canonical.js';
 import type { CaptureManager } from '../vision/capture-manager.js';
@@ -13,7 +13,7 @@ export interface ImmutableCognitionObservation {
   evidence:Omit<ReturnType<CaptureManager['observation']>,'png'>;
 }
 /** Legacy geometry-aided prose remains on disk, but never becomes future provider context. */
-export function providerExperiences(cp:CheckpointV5|CheckpointV6,identity:CognitionIdentity):CognitionContext['experiences'] {return cp.realExperiences.filter(e=>cp.cognition.requests.some(r=>r.request.requestId===e.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))&&e.identity.worldId===identity.worldId&&e.identity.historyId===identity.historyId&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).slice(-8).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));}
+export function providerExperiences(cp:CheckpointV5|CheckpointV6,identity:CognitionIdentity):CognitionContext['experiences'] {if(identity.historyId!==cp.cognition.identity.historyId)return [];return cp.realExperiences.filter(e=>cp.cognition.requests.some(r=>r.request.requestId===e.requestId&&r.request.purpose==='interpretation'&&currentCognitionProfile(r.request))&&e.identity.worldId===identity.worldId&&experienceHistoryAdmitted(cp,e.identity.historyId,e.encodedTick)&&e.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')).slice(-8).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));}
 /** This allowlist is the only world-to-provider assembly path. Private pose and
  * correlation timing remain in selection, separately from the provider DTO. */
 export function assembleCognitionObservation(runtime:BranchRuntime,manager:CaptureManager,captureId:string,identity:CognitionIdentity,maxImageBytes:number,maxContextBytes:number):ImmutableCognitionObservation {

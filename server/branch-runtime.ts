@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hashCanonical, canonicalStringify } from './canonical.js';
-import { LabSimulation, VisionSimulation, SensorySimulation, CognitionSimulation, PhysiologySimulation, type PhysiologyOptions, validateCheckpoint, validateCommand, hashCheckpoint, type CheckpointV2, type CheckpointV3, type CheckpointV4, type CheckpointV5, type CheckpointV6, type OrderedInput, type NormalizedCommand, type DeterministicEvent } from './simulation.js';
+import { LabSimulation, VisionSimulation, SensorySimulation, CognitionSimulation, PhysiologySimulation, type PhysiologyOptions, experienceHistoryAdmitted, validateCheckpoint, validateCommand, hashCheckpoint, type CheckpointV2, type CheckpointV3, type CheckpointV4, type CheckpointV5, type CheckpointV6, type OrderedInput, type NormalizedCommand, type DeterministicEvent } from './simulation.js';
 import { currentCognitionProfile, validateCognitionCommand, type CognitionObservationRequestCommand, type CognitionRequestCommand, type CognitionResultCommand } from '../shared/cognition-protocol.js';
 import type { CaptureMetadata, VisualObservation } from '../shared/capture-protocol.js';
 import {validateSensoryCommand,type SensorFeedbackCommand} from '../shared/attention-protocol.js';
@@ -42,7 +42,7 @@ export function validateRuntimeCheckpoint(value:unknown):RuntimeCheckpoint {
   if((sim.schemaVersion===5||sim.schemaVersion===6)&&sim.cognition.identity.mode!==c.mode)throw new Error('Cognition ancestry mode mismatch');
   const r=c.control;
   if(!exact(r,['paused','speed','fastForwardRemaining','nextOperationSequence','loggingMode','compressClosed'])||typeof r.paused!=='boolean'||typeof r.speed!=='number'||!Number.isFinite(r.speed)||r.speed<1||r.speed>60||!int(r.fastForwardRemaining,0,100000)||!int(r.nextOperationSequence,1,Number.MAX_SAFE_INTEGER)||!['off','default','verbose'].includes(r.loggingMode)||typeof r.compressClosed!=='boolean'||(r.fastForwardRemaining>0&&!r.paused))throw new Error('Invalid runtime controls');
-  if(c.mode==='LIVE'&&(r.paused||r.speed!==1||r.fastForwardRemaining!==0||sim.experiences.length||(sim.schemaVersion===5||sim.schemaVersion===6)&&(sim.cognition.identity.mode!=='LIVE'||sim.realExperiences.some(e=>e.identity.mode!=='LIVE'||e.identity.historyId!==sim.cognition.identity.historyId))))throw new Error('Invalid LIVE state or experience promotion');
+  if(c.mode==='LIVE'&&(r.paused||r.speed!==1||r.fastForwardRemaining!==0||sim.experiences.length||(sim.schemaVersion===5||sim.schemaVersion===6)&&(sim.cognition.identity.mode!=='LIVE'||sim.realExperiences.some(e=>e.identity.mode!=='LIVE'||!experienceHistoryAdmitted(sim,e.identity.historyId,e.encodedTick)))))throw new Error('Invalid LIVE state or experience promotion');
   if(!exact(c.scheduler,['config','backlogMs'])||!exact(c.scheduler.config,['hz','maxStepsPerPump','maxBacklogSteps','suspendThresholdMs'])||c.scheduler.config.hz!==sim.config.hz)throw new Error('Invalid scheduler snapshot');
   const scheduler=new FixedScheduler(()=>{},()=>{},undefined,c.scheduler.config);scheduler.rebase(c.scheduler.backlogMs);
   if(r.paused&&c.scheduler.backlogMs!==0)throw new Error('Paused runtime cannot retain scheduler backlog');
