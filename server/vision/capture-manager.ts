@@ -1,3 +1,4 @@
+import { recognizeCapturedHome } from '../home-observation.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { hashCanonical } from '../canonical.js';
 import type { BranchRuntime } from '../branch-runtime.js';
@@ -129,6 +130,7 @@ export class CaptureManager {
     if (!entry || scopeKey(entry.metadata) !== scopeKey(target) || entry.metadata.status !== 'success' || !entry.bytes) throw new Error('Frame is unavailable for the selected run');
     return entry.bytes.slice();
   }
+  homeObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedHome({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
   /** ID-bound filtered evidence for cognition. Never substitutes the latest frame.
    * The caller owns the copied pixels before it enters any provider queue. */
   observation(target: ActiveTarget, captureId: string): { metadata: CaptureMetadata; observation: VisualObservation; png: Uint8Array; sensorSource: 'actual_renderer'|'mock_renderer' } {

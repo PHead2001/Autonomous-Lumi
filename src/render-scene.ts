@@ -1,3 +1,4 @@
+import { homePoseTransform } from '../shared/home-geometry';
 import * as THREE from 'three';
 import type { WorldState } from '../shared/protocol';
 import { assertCameraClearance, eyePose } from '../shared/eye-pose';
@@ -35,7 +36,7 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
     hemisphere.intensity = physical.illumination * 2.5; sun.intensity = physical.illumination * 4;
     // A dark room has a dark exterior background as well; no fake ambient/emissive cue remains.
     (scene.background as THREE.Color).set(physical.illumination === 0 ? '#000000' : '#d9ded3');
-    if (placeAvatar) { avatar.root.position.set(state.character.x, 0, state.character.z); avatar.root.rotation.y = state.character.heading; }
+    if (placeAvatar) { const pose=homePoseTransform(state);avatar.root.position.set(...pose.position);avatar.root.quaternion.set(...pose.quaternion); }
     avatar.update(state, time, state.character.gait);
     const pose = eyePose(state, options.width, options.height);
     camera.fov = pose.verticalFovDegrees; camera.aspect = pose.width / pose.height; camera.near = pose.near; camera.far = pose.far;

@@ -1,3 +1,4 @@
+import { homeFixtureBoxes } from './home-geometry.js';
 import type { WorldState } from './protocol.js';
 import { CHARACTER_CLEARANCE_RADIUS } from './avatar-rig.js';
 
@@ -112,7 +113,8 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
     // A second target beyond the actual doorway establishes open/shut door geometry.
     box('fixture-beyond-door', [0.6, 0.65, 0.5], [2.97, 1.9, -4.3], '#b23bce', { observable: true });
   }
-  return { revision: PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision, illumination: s.illumination, boxes };
+  if(state.home?.layout)boxes.push(...homeFixtureBoxes(state.home.layout,state.home.pantryFoodVisible));
+  return { revision: PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
 }
 /** Conservative keepout for the entire ordinary slam sweep, not an invisible occluder. */
 function animatedDoorKeepout(): PhysicalBox {
@@ -165,7 +167,7 @@ export function canMoveCharacter(scene: PhysicalSceneState, fromX: number, fromZ
 }
 /** Strict interior segment test. A tangent or endpoint merely touching the
  * expanded collider is allowed; crossing even a thin interior is not. */
-function segmentEntersRectangle(ax:number,az:number,bx:number,bz:number,hx:number,hz:number):boolean {
+export function segmentEntersRectangle(ax:number,az:number,bx:number,bz:number,hx:number,hz:number):boolean {
   if(hx<=0||hz<=0)return false;
   let enter=0,leave=1;
   for(const [start,end,half] of [[ax,bx,hx],[az,bz,hz]]) {

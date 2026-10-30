@@ -90,12 +90,12 @@ test('pre-retirement observers see the replacement and write before old recorder
 test('active schema2 upgrade preserves history/tick/existing state and archives recovery source beyond rotation',async t=>{
   const directory=await temp(t),legacy=historical(),{store}=await RecoveryStore.open({directory});await store.save(legacy);const oldManifest=JSON.parse(await readFile(join(store.directory,'committed.json'),'utf8'));
   const recovery=await RecoveryStore.open({directory}),runtime=new BranchRuntime({worldId:'lumi',branchId:'live',mode:'LIVE',checkpoint:recovery.checkpoint,historyId:recovery.store.historyId,directory});
-  try{const cp=runtime.checkpoint();assert.equal(cp.schemaVersion,6);assert.equal(cp.simulation.schemaVersion,7);assert.equal(runtime.summary().historyId,store.historyId);assert.equal(cp.simulation.tick,legacy.simulation.tick);
-    const oldState=structuredClone(cp.simulation) as unknown as Record<string,unknown>;delete oldState.head;delete oldState.scene;delete oldState.attention;delete oldState.genericSoundCount;delete oldState.cognition;delete oldState.realExperiences;delete oldState.body;delete oldState.interoception;delete oldState.physiology;delete oldState.internalExperiences;assert.deepEqual({...oldState,schemaVersion:2,rulesVersion:'lumi-lab-v1'},legacy.simulation);
+  try{const cp=runtime.checkpoint();assert.equal(cp.schemaVersion,7);assert.equal(cp.simulation.schemaVersion,8);assert.equal(runtime.summary().historyId,store.historyId);assert.equal(cp.simulation.tick,legacy.simulation.tick);
+    const oldState=structuredClone(cp.simulation) as unknown as Record<string,unknown>;delete oldState.head;delete oldState.scene;delete oldState.attention;delete oldState.genericSoundCount;delete oldState.cognition;delete oldState.realExperiences;delete oldState.body;delete oldState.interoception;delete oldState.physiology;delete oldState.internalExperiences;delete oldState.home;assert.deepEqual({...oldState,schemaVersion:2,rulesVersion:'lumi-lab-v1'},legacy.simulation);
     for(let i=0;i<4;i++){runtime.simulation.step();await recovery.store.save(runtime.checkpoint());}
     const archive='pre-vision-schema2-'+oldManifest.latest.file;assert.ok((await readdir(store.directory)).includes(archive));const payload=JSON.parse(await readFile(join(store.directory,archive),'utf8'));assert.equal(hashRuntimeCheckpoint(payload.checkpoint),hashRuntimeCheckpoint(legacy));
-    const again=await RecoveryStore.open({directory});assert.equal(again.store.historyId,store.historyId);assert.equal((again.checkpoint as RuntimeCheckpoint).simulation.schemaVersion,7);
-    await runtime.recorder!.flush();runtime.capture();const records=(await runtime.recorder!.snapshotForExport()).records;assert.ok(records.some(r=>r.event_type==='STATE_SCHEMA_MIGRATED'&&r.data.fromSchema===2&&r.data.toSchema===7));
+    const again=await RecoveryStore.open({directory});assert.equal(again.store.historyId,store.historyId);assert.equal((again.checkpoint as RuntimeCheckpoint).simulation.schemaVersion,8);
+    await runtime.recorder!.flush();runtime.capture();const records=(await runtime.recorder!.snapshotForExport()).records;assert.ok(records.some(r=>r.event_type==='STATE_SCHEMA_MIGRATED'&&r.data.fromSchema===2&&r.data.toSchema===8));
   }finally{await runtime.close();}
 });
 
