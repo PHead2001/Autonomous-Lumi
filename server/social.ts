@@ -29,5 +29,5 @@ export function socialProviderExperiences(cp:CheckpointV11,identity:CognitionIde
  if(cp.cognition.identity.worldId!==identity.worldId||cp.cognition.identity.branchId!==identity.branchId||cp.cognition.identity.historyId!==identity.historyId||cp.cognition.identity.mode!==identity.mode||cp.physiology.origin.evidenceEligibility!=='eligible'||cp.physiology.legacyImport)return [];
  const imports=cp.physiology.verifiedCheckpointImports,origin=cp.physiology.origin.historyId;
  const admitted=(e:SocialExperience)=>{let history=origin,after=-1;for(const i of imports){if(e.identity.historyId===history&&e.encodedTick>after&&e.encodedTick<=i.importTick)return true;history=i.destinationHistoryId;after=i.importTick;}return e.identity.historyId===history&&e.encodedTick>after&&e.encodedTick<=cp.tick;};
- return cp.social.experiences.filter(e=>e.source==='actual_renderer'&&e.identity.mode===identity.mode&&admitted(e)).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));
+ return cp.social.experiences.filter(e=>e.source==='actual_renderer'&&(identity.mode==='EXPERIMENT'||e.identity.mode==='LIVE')&&admitted(e)).map(e=>({interpretation:e.interpretation,uncertainty:e.uncertainty}));
 }
