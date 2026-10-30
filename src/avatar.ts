@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { earFlick, type WorldState } from '../shared/protocol';
 import { bodyBob } from '../shared/eye-pose';
 import { AVATAR_RIG } from '../shared/avatar-rig';
+import { homePoseTransform } from '../shared/home-geometry';
 
 const material = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true });
 const fur = material('#d98349'), cream = material('#ffe4c2'), hair = material('#a54e32'), outfit = material('#366b68');
@@ -57,6 +58,11 @@ export function createAvatar(options: { firstPerson?: boolean } = {}) {
     ellipsoid(arm, cream, [side * 0.065, -0.69, 0.02], [0.09, 0.12, 0.07]);
     arm.rotation.z = side * 0.08; arms.push(arm);
   }
+  // One visible serving belongs to the server-held item, never the animation clock.
+  const serving = pivot(arms[1], [0.065, -0.68, 0.07]);
+  mesh(new THREE.CylinderGeometry(0.15, 0.13, 0.025, 10), white, serving, [0, 0, 0]);
+  ellipsoid(serving, fur, [0, 0.07, 0], [0.11, 0.07, 0.09]);
+  serving.visible = false;
   const tail = pivot(body, [0, 1.02, -0.19]);
   ellipsoid(tail, fur, [0, 0.12, -0.44], [0.25, 0.3, 0.58]).rotation.x = 0.4;
   ellipsoid(tail, fur, [0, 0.38, -0.9], [0.34, 0.36, 0.5]).rotation.x = 0.5;
@@ -70,14 +76,30 @@ export function createAvatar(options: { firstPerson?: boolean } = {}) {
     for (const geometry of ownedGeometries) geometry.dispose();
     ownedGeometries.clear();
   }, update(state: WorldState, time: number, gait: number) {
-    const walking = state.character.moving;
+    const home = state.home, activity = home?.activity;
+    const walking = state.character.moving && (!home || home.posture.kind === 'upright');
     const swing = walking ? Math.sin(gait) * 0.43 : 0;
     legs[0].rotation.x = swing; legs[1].rotation.x = -swing;
     arms[0].rotation.x = -swing * 0.65; arms[1].rotation.x = swing * 0.65;
+    arms[0].rotation.z = -.08; arms[1].rotation.z = .08;
+    serving.visible = home?.heldItem === 'basic-serving';
+    if (serving.visible) {
+      arms[0].rotation.x = -1.15; arms[1].rotation.x = -1.25;
+      arms[0].rotation.z = .32; arms[1].rotation.z = -.32;
+      if (activity?.status === 'started' && activity.stage === 'eat') {
+        const lift = Math.sin(Math.PI * Math.min(1, Math.max(0, activity.progress)));
+        arms[0].rotation.x -= lift * .55; arms[1].rotation.x -= lift * .55;
+      }
+    } else if (activity?.status === 'started' && activity.stage === 'reach') {
+      arms[1].rotation.x = -1.1;
+    }
+    if (home && home.posture.kind !== 'upright') { legs[0].rotation.x = 0; legs[1].rotation.x = 0; }
     body.position.y = bodyBob(state, time, gait);
     head.rotation.y = state.head?.yaw ?? 0;
     head.rotation.x = -(state.head?.pitch ?? 0);
-    tail.rotation.y = Math.sin(time * 2.4) * 0.16;
+    const recline = homePoseTransform(state).progress;
+    tail.rotation.x = Math.PI * .58 * recline;
+    tail.rotation.y = .75 * recline + Math.sin(time * 2.4) * .16 * (1 - recline);
     const flick = earFlick(time, state.reflex);
     ears[0].rotation.z = 0.16 + flick * 1.15;
     ears[1].rotation.z = -0.16 - flick * 0.9;

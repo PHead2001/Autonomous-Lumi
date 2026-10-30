@@ -141,7 +141,7 @@ test('2c near-capacity admission measures actual pretty recovery/named envelopes
  let checkpoint:CheckpointV5|null=null,low=1,high=255;
  while(low<=high){
   const count=Math.floor((low+high)/2),cp=capacityHistory(count),projected=structuredClone(cp);projected.cognition.requests.push({request:candidate,requestedTick:cp.tick+1,status:'pending',resultTick:null,result:null,action:null,encoding:null});
-  if(fitsCognitionStorage(projected)){checkpoint=cp;low=count+1;}else high=count-1;
+  if(fitsCognitionStorage(projected)&&cognitionStorageBytes(projected)+80*1024<=MAX_CHECKPOINT_BYTES){checkpoint=cp;low=count+1;}else high=count-1;
  }
  assert.ok(checkpoint);assert.ok(checkpoint.cognition.requests.length>100);assert.doesNotThrow(()=>validateCheckpoint(checkpoint));
  const sim=new CognitionSimulation({mode:'LIVE',checkpoint,historical:true});assert.equal(sim.enqueue(candidate).input.admission,'queued');sim.step();assert.equal(sim.cognitionState().requests.at(-1)?.status,'pending');
@@ -157,11 +157,11 @@ test('2c near-capacity admission measures actual pretty recovery/named envelopes
  await store.save(runtime(encoded));await atomicJson(join(directory,'near-capacity-named.json'),named);const loaded=await RecoveryStore.open({directory});assert.deepEqual((loaded.checkpoint as import('../server/branch-runtime.js').RuntimeCheckpoint).simulation,encoded);
  const rejected=structuredClone(candidate);rejected.requestId='too-large-request';rejected.selection.context.experiences=Array.from({length:8},()=>({interpretation:'\ud800'.repeat(1200),uncertainty:.6}));rejected.selection.context.shapes=Array.from({length:32},(_,index)=>({...candidate.selection.context.shapes[0],handle:'shape-'+index}));
  const before=sim.cognitionState().requests.length,admission=sim.enqueue(rejected);assert.equal(admission.input.admission,'queue_full');assert.ok(admission.events.some(event=>event.type==='INPUT_ADMITTED'&&event.data.reason==='checkpoint_capacity'));assert.equal(sim.cognitionState().requests.length,before);await store.save(runtime(sim.checkpoint()));
- const {BranchRegistry}=await import('../server/branch-registry.js');const registry=new BranchRegistry({directory:join(directory,'fork'),checkpoint:runtime(encoded),historyId:'history'});
+ const {BranchRegistry}=await import('../server/branch-registry.js');const registry=new BranchRegistry({directory:join(directory,'fork'),checkpoint:runtime(encoded),historyId:'history',physiology:{active:false}});
  try {
   const saved=await registry.checkpoint(registry.live.target),experiment=await registry.fork(registry.live.target,saved.id,'near-capacity');
   for(let index=0;index<256;index++)experiment.applyControl({type:'synthetic-clock',sensed:true,attended:true,encoded:true,observedSeconds:1.2345678901234567e-100,uncertaintySeconds:1.2345678901234567e-100});
-  const full=experiment.checkpoint();full.simulation.tick=100000;if(full.simulation.schemaVersion===7){full.simulation.body.lastIntegratedTick=100000;full.simulation.interoception.lastIntegratedTick=100000;full.simulation.physiology.taskCreditActivityId=1;}full.simulation.activity={status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:Array.from({length:10000},(_,index)=>(index+1)*10),completionCount:1,activityId:1};
+  const full=experiment.checkpoint();full.simulation.tick=100000;if(full.simulation.schemaVersion===7||full.simulation.schemaVersion===8){full.simulation.body.lastIntegratedTick=100000;full.simulation.interoception.lastIntegratedTick=100000;full.simulation.physiology.taskCreditActivityId=1;}full.simulation.activity={status:'complete',cursor:100000,totalTicks:100000,appliedMilestones:Array.from({length:10000},(_,index)=>(index+1)*10),completionCount:1,activityId:1};
   assert.doesNotThrow(()=>validateRuntimeCheckpoint(full));const namedFull=namedCheckpointPayload(full,{worldId:'lumi',branchId:'near-capacity',historyId:'history',mode:'EXPERIMENT',createdAt:new Date().toISOString()});assert.ok(checkpointBytes(namedFull)<=MAX_CHECKPOINT_BYTES);await atomicJson(join(directory,'full-fork-named.json'),namedFull);await registry.checkpoint(experiment.target);
   t.diagnostic(JSON.stringify({forkSyntheticCount:full.simulation.experiences.length,fullActivityMilestones:full.simulation.activity.appliedMilestones.length,forkBytes:checkpointBytes(namedFull)}));
  } finally {await registry.close();}

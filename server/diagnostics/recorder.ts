@@ -57,6 +57,7 @@ const ranks: Record<Severity, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 const compress = promisify(gzip);
 const safeId = (value: string) => /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const dataKeys = new Set([
+ 'handle','resourceId','recognition','routeCursor','points','expanded','distance','replans','servingId','effectSequence','layoutRevision','stage',
   'active','firstAttendedTick','deadlineEligibleTicks','excludedSafetyTicks','excludedIncapacityTicks','excludedInactiveTicks',
   'attentionId','band','from','to','satiety','reserves','absorptionSeconds','crossingTick','eligibleTicks','elapsedWorldSeconds','eligibleSeconds','excludedSafetySeconds','excludedIncapacitySeconds','excludedInactiveSeconds','forced','genesisPreset','evidenceEligibility',
   'requestId','provider','model','promptRevision','schemaRevision','attentionTick','interpretationTick','encodedTick','source','interpretation','uncertainty','latencyMs','attempts','costUsd','costBasis','inputTokens','outputTokens',
@@ -205,7 +206,7 @@ export class FlightRecorder {
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
     try {
-    const command = validateCommand(input.command,true,true,true,true);
+    const command = validateCommand(input.command,true,true,true,true,true);
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
       schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
@@ -218,7 +219,7 @@ export class FlightRecorder {
   }
   recordEvent(event: DeterministicEvent): void {
     const experienceEligible=event.type==='INTERNAL_EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_INTERNAL_SENSOR'&&event.data.source==='actual_internal_sensor'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
-    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||event.type.startsWith('INTERNAL_')||['hearing','attention','cognition','interoception'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
+    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||event.type.startsWith('INTERNAL_')||['hearing','attention','cognition','interoception','home_sensor'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
       eventType: event.type, component: event.component, outcome: event.outcome, eventSequence: event.sequence,
       inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true,experienceEligible);
   }

@@ -1,3 +1,4 @@
+import { homePoseTransform } from './home-geometry.js';
 import type { WorldState } from './protocol.js';
 import { physicalSceneSnapshot, type Vector3Tuple } from './physical-scene.js';
 import { AVATAR_RIG, cameraNearRadius } from './avatar-rig.js';
@@ -10,6 +11,7 @@ export interface EyePose {
 }
 /** The same offset drives the avatar body and the head-mounted eye position. */
 export function bodyBob(state: WorldState, time = state.time, gait = state.character.gait): number {
+  if(state.home&&state.home.posture.kind!=='upright')return 0;
   return state.character.moving ? Math.abs(Math.sin(gait)) * 0.045 : Math.sin(time * 2) * 0.015;
 }
 /** +Z is forward, Y is up, positive yaw turns toward +X, positive pitch looks up. */
@@ -21,7 +23,7 @@ export function eyePose(state: WorldState, width = state.head?.camera.width ?? 5
   const eyeY = AVATAR_RIG.eyeOffset[1] * Math.cos(headPitch) + AVATAR_RIG.eyeOffset[2] * Math.sin(headPitch);
   const eyeZ = -AVATAR_RIG.eyeOffset[1] * Math.sin(headPitch) + AVATAR_RIG.eyeOffset[2] * Math.cos(headPitch);
   const localX = eyeZ * Math.sin(headYaw), localZ = AVATAR_RIG.headPivot[2] + eyeZ * Math.cos(headYaw);
-  return {
+  const upright={
     position: [state.character.x + localX * Math.cos(bodyHeading) + localZ * Math.sin(bodyHeading), AVATAR_RIG.headPivot[1] + bodyBob(state) + eyeY, state.character.z - localX * Math.sin(bodyHeading) + localZ * Math.cos(bodyHeading)],
     direction: [Math.sin(heading) * Math.cos(headPitch), Math.sin(headPitch), Math.cos(heading) * Math.cos(headPitch)],
     up: [-Math.sin(heading) * Math.sin(headPitch), Math.cos(headPitch), -Math.cos(heading) * Math.sin(headPitch)],
@@ -29,6 +31,11 @@ export function eyePose(state: WorldState, width = state.head?.camera.width ?? 5
     verticalFovDegrees: 2 * Math.atan(Math.tan(horizontalFovDegrees * Math.PI / 360) / (width / height)) * 180 / Math.PI,
     width, height, near: state.head?.camera.near ?? 0.05, far: state.head?.camera.far ?? 40,
   };
+  if(!state.home||state.home.posture.kind==='upright')return upright as EyePose;
+  const pose=homePoseTransform(state);
+  const localEye:Vector3Tuple=[localX,AVATAR_RIG.headPivot[1]+eyeY,localZ];
+  const direction:Vector3Tuple=[Math.sin(headYaw)*Math.cos(headPitch),Math.sin(headPitch),Math.cos(headYaw)*Math.cos(headPitch)],up:Vector3Tuple=[-Math.sin(headYaw)*Math.sin(headPitch),Math.cos(headPitch),-Math.cos(headYaw)*Math.sin(headPitch)];
+  return {...upright,position:pose.transformPoint(localEye),direction:pose.transformVector(direction),up:pose.transformVector(up)} as EyePose;
 }
 /** Fail closed when an invalid external pose or unusual lens could clip through a wall.
  * The sphere conservatively encloses the eye-to-near-plane volume. Actual snapshot

@@ -1,3 +1,7 @@
+import {HOME_RULES,HOME_LIMITS,validateHomeState,validateHomeObservation,type HomeState,type HomeObservationCommand,type HomeLayout} from '../shared/home-protocol.js';
+import {createHomeState,homeTimeline,replenishHomeResources,chooseReactiveHomeGoal,beginHomeTask,homeTaskBusy,homePublicView,HOME_ACTION_SECONDS,BASIC_SERVING} from './home.js';
+import {planHomeRoute} from './home-navigation.js';
+import {chooseSafeHomeLayout,canOccupyHomeCharacter,canSweepHomeCharacter,canUseHomePosture,canSweepHomePosture} from '../shared/home-geometry.js';
 import { CURRENT_PHYSIOLOGY_RULES, type InteroceptionStateV2, validateInteroceptionStateV2, interoceptionV1Projection } from '../shared/physiology-protocol.js';
 import { advanceInteroceptionV2, upgradeInteroceptionV2 } from './physiology.js';
 import { PHYSIOLOGY_RULES, validateBodyState, validateInteroceptionState, validatePhysiologyEffect, validateInternalSensation, type BodyState, type InteroceptionState, type PhysiologyEffect, type InternalSensation, type InternalSensationContext, type PhysiologyEvent } from '../shared/physiology-protocol.js';
@@ -22,7 +26,8 @@ export type SimulationConfig = typeof DEFAULT_CONFIG;
 export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_command';
 export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
 export type PhysiologyCommand = {type:'physiology_fixture';effect:PhysiologyEffect}|{type:'physiology_safety_fixture';ticks:number}|{type:'physiology_encoding';enabled:boolean};
-export type NormalizedCommand = PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
+export type HomeCommand=HomeObservationCommand|{type:'doorbell'}|{type:'home_layout_fixture';layout:HomeLayout};
+export type NormalizedCommand = HomeCommand | PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -46,9 +51,12 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false, home=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
+  if(home&&c.type==='home_observation')return validateHomeObservation(value);
+  if(home&&c.type==='doorbell'&&Object.keys(c).length===1)return {type:'doorbell'};
+  if(home&&c.type==='home_layout_fixture'&&Object.keys(c).length===2){const layout=c.layout as HomeLayout;const probe=createHomeState(0,30,layout);validateHomeState(probe,0,30);return {type:'home_layout_fixture',layout:structuredClone(layout)};}
   if(physiology&&c.type==='physiology_fixture'&&Object.keys(c).length===2)return {type:'physiology_fixture',effect:validatePhysiologyEffect(c.effect)};
   if(physiology&&c.type==='physiology_safety_fixture'&&Object.keys(c).length===2&&integer(c.ticks,1,36000))return {type:'physiology_safety_fixture',ticks:c.ticks};
   if(physiology&&c.type==='physiology_encoding'&&Object.keys(c).length===2&&typeof c.enabled==='boolean')return {type:'physiology_encoding',enabled:c.enabled};
@@ -100,13 +108,20 @@ export class Simulation {
   readonly random: SeededRandom;
   readonly worldId: string; readonly runId: string;
   protected supportsPhysiologyInputs():boolean{return false;}
+  protected supportsHomeInputs():boolean{return false;}
+  protected cognitionActionAllowed():boolean{return true;}
+  protected movementPermitted():boolean{return true;}
+  protected movementPauseActive():boolean{return this.data.tick<this.data.pauseUntilTick;}
+  protected movementDestination():[number,number]{return waypoints[this.data.waypoint] as [number,number];}
+  protected movementArrived(events:DeterministicEvent[]):void{const d=this.data;d.waypoint=(d.waypoint+1)%waypoints.length;d.pauseUntilTick=d.tick+d.config.pauseTicks;d.character.moving=false;this.emit(events,'WAYPOINT_REACHED','movement','idle',{nextWaypoint:d.waypoint,pauseUntilTick:d.pauseUntilTick});}
+  protected movementBlocked(events:DeterministicEvent[]):void{const d=this.data;d.waypoint=(d.waypoint+1)%waypoints.length;d.pauseUntilTick=d.tick+d.config.pauseTicks;d.character.moving=false;this.emit(events,'MOVEMENT_BLOCKED','movement','idle',{nextWaypoint:d.waypoint,pauseUntilTick:d.pauseUntilTick});}
   protected capableOfAction():boolean{return true;}
   protected capableOfAttention():boolean{return true;}
   protected movementScale():number{return 1;}
   protected motorScale():number{return 1;}
   protected ordinaryAttentionScale():number{return 1;}
   protected beforeInputs(events:DeterministicEvent[]):void{void events;}
-  protected beforeMotorExecution():void{}
+  protected beforeMotorExecution(events:DeterministicEvent[]):void{void events;}
   protected afterMotors(events:DeterministicEvent[]):void{void events;}
   protected supportsVisionInputs():boolean{return false;}
   protected supportsSensoryInputs():boolean{return false;}
@@ -136,7 +151,7 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs()), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
     const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
     if(capacityReason!==null)input.admission='queue_full';
@@ -164,21 +179,20 @@ export class Simulation {
       const acoustic = this.emit(events, 'ACOUSTIC_EVENT', 'sound', 'emitted', {...sound}, input.sequence, action.sequence);
       this.hear(sound, events, input.sequence, acoustic.sequence);
     }
-    this.beforeMotorExecution();
-    const c = d.character, wasMoving = c.moving; c.moving = d.tick >= d.pauseUntilTick;
+    this.beforeMotorExecution(events);
+    const c = d.character, wasMoving = c.moving; c.moving = !this.movementPauseActive()&&this.movementPermitted();
     if (!this.capableOfAction())c.moving=false;
     if (!c.moving) return events;
     if (!wasMoving) this.emit(events, 'WALK_RESUMED', 'movement', 'walking', { waypoint: d.waypoint });
-    const [x,z] = waypoints[d.waypoint], dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx,dz);
+    const [x,z] = this.movementDestination(), dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx,dz);
     const step = Math.min(distance, d.config.speed*this.movementScale() / d.config.hz);
     if (distance > 0.001) {
       c.heading = Math.atan2(dx,dz);const nextX=Math.max(-ROOM.walkX,Math.min(ROOM.walkX,c.x+dx/distance*step)),nextZ=Math.max(-ROOM.walkZ,Math.min(ROOM.walkZ,c.z+dz/distance*step));
-      if(!this.canMove(nextX,nextZ)){d.waypoint=(d.waypoint+1)%waypoints.length;d.pauseUntilTick=d.tick+d.config.pauseTicks;c.moving=false;this.emit(events,'MOVEMENT_BLOCKED','movement','idle',{nextWaypoint:d.waypoint,pauseUntilTick:d.pauseUntilTick});return events;}
+      if(!this.canMove(nextX,nextZ)){this.movementBlocked(events);return events;}
       c.x=nextX;c.z=nextZ;c.gait+=step*8;
     }
     if (distance <= step + 0.001) {
-      d.waypoint = (d.waypoint + 1) % waypoints.length; d.pauseUntilTick = d.tick + d.config.pauseTicks; c.moving = false;
-      this.emit(events, 'WAYPOINT_REACHED', 'movement', 'idle', { nextWaypoint: d.waypoint, pauseUntilTick: d.pauseUntilTick });
+      this.movementArrived(events);
     }
     return events;
   }
@@ -228,7 +242,8 @@ export interface PhysiologyRuntimeState {
 }
 export interface CheckpointV6 extends Omit<CheckpointV5,'schemaVersion'|'rulesVersion'> {schemaVersion:6;rulesVersion:typeof PHYSIOLOGY_RULES;body:BodyState;interoception:InteroceptionState;physiology:PhysiologyRuntimeState;internalExperiences:InternalExperience[]}
 export interface CheckpointV7 extends Omit<CheckpointV6,'schemaVersion'|'rulesVersion'|'interoception'|'physiology'> {schemaVersion:7;rulesVersion:typeof CURRENT_PHYSIOLOGY_RULES;interoception:InteroceptionStateV2;physiology:PhysiologyRuntimeState&{taskCredit:number;taskCreditActivityId:number}}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7;
+export interface CheckpointV8 extends Omit<CheckpointV7,'schemaVersion'|'rulesVersion'> {schemaVersion:8;rulesVersion:typeof HOME_RULES;home:HomeState}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -245,6 +260,7 @@ export function upgradeCheckpoint(value: unknown): CheckpointV2 {
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===8)return validateHomeCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===7)return validatePhysiologyCheckpointV2(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===6)return validatePhysiologyCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===5)return validateCognitionCheckpoint(value);
@@ -318,7 +334,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -353,7 +369,7 @@ export class VisionSimulation extends LabSimulation {
     super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
   }
   override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
-    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs());
+    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs());
     if(normalized.type==='look_at'&&normalized.evidence) {
       if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
       if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
@@ -364,7 +380,7 @@ export class VisionSimulation extends LabSimulation {
   protected override onDoorChanged():void{this.scene.revision++;}
   protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
+    const command=input.command;if(command.type==='home_observation'||command.type==='home_layout_fixture'||command.type==='doorbell')return false;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
     if(command.type==='configure_scene') {
       if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
@@ -427,7 +443,7 @@ export class VisionSimulation extends LabSimulation {
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return;
   }
-  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -467,7 +483,7 @@ const poseDifference=(a:SensorPose,b:SensorPose)=>({distance:Math.hypot(a.x-b.x,
 
 /** Local sensing never encodes experiences. All future-affecting sensor feedback is an ordered input. */
 export class SensorySimulation extends VisionSimulation {
-  private attention:AttentionState;private genericSoundCount:number;private readonly attentionRules:CheckpointV4['rulesVersion'];
+  private attention:AttentionState;protected genericSoundCount:number;private readonly attentionRules:CheckpointV4['rulesVersion'];
   constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;mode:WorldMode;historical?:boolean}) {
     const source=options.checkpoint??new Simulation({seed:options.seed}).checkpoint();
     const cp=options.historical&&(source as {schemaVersion?:number}).schemaVersion===4?validateSensoryCheckpoint(source):upgradeSensoryCheckpoint(source);
@@ -659,7 +675,7 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }
 function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
@@ -687,9 +703,9 @@ export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
 }
 function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
 /** External callbacks supply only complete ordered commands; this class owns all consequences. */
-export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7 = CheckpointV5> extends SensorySimulation {
+export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8 = CheckpointV5> extends SensorySimulation {
  protected cognition:CognitionState;private realExperiences:RealExperience[];private experienceAncestry:{historyId:string;afterTick:number;throughTick:number}[]|null=null;
- constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7}){
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7|CheckpointV8}){
   const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
   const cp=source.schemaVersion===5?source:null;
   super({...options,checkpoint:cp?cognitionSensoryPart(cp):source,historical:false});
@@ -697,7 +713,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
   this.cognition=cp?structuredClone(cp.cognition):{identity,requests:[],nextRequestTick:0,actionCooldownUntilTick:0,responses:0,firstRequestTick:null,lastResponseTick:null,observationRequestedTick:null,captureUpgrade:null};
   this.realExperiences=structuredClone(cp?.realExperiences??[]);
   if(cp){this.data.pendingInputs=structuredClone(cp.pendingInputs);if(!options.historical)this.cognition.identity=identity;}
-  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
+  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7|CheckpointV8;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
   if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||!this.admitsExperienceHistory(e.identity.historyId,e.encodedTick))||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
  }
  protected admitsExperienceHistory(historyId:string,encodedTick:number):boolean{return this.experienceAncestry?this.experienceAncestry.some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick):historyId===this.cognition.identity.historyId;}
@@ -742,6 +758,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
   const tick=this.data.tick,c=this.cognition,s=request.selection,p=command.proposal!,a=p.action;
   const reject=(reason:string):CognitionActionOutcome=>({status:'rejected',reason,actionId:null,tick});
   if(!this.capableOfAction())return reject('physiological_incapacity');
+  if(!this.cognitionActionAllowed())return reject('home_action_committed');
   if(tick-s.capturedTick>COGNITION_LIMITS.resultMaxAgeTicks)return reject('stale_action');
   if(c.requests.some(r=>r.requestedTick>(c.requests.find(r=>r.request.requestId===request.requestId)?.requestedTick??tick)))return reject('superseded_action');
   if(tick<c.actionCooldownUntilTick)return reject('action_cooldown');
@@ -807,7 +824,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
 }
 
 /** Schema 6 is an active-world migration only. V1–V5 offline execution keeps its original class. */
-function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7):CheckpointV5 {
+function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7|CheckpointV8):CheckpointV5 {
  const raw=structuredClone(cp) as unknown as Record<string,unknown>;
  for(const key of ['body','interoception','physiology','internalExperiences'])delete raw[key];
  raw.schemaVersion=5;raw.rulesVersion=COGNITION_RULES;
@@ -844,14 +861,14 @@ export function validatePhysiologyCheckpoint(value:unknown):CheckpointV6 {
  return structuredClone(cp);
 }
 /** Derived solely from the persisted, validated ancestry; no history wildcard. */
-function experienceEpochs(cp:CheckpointV6|CheckpointV7):{historyId:string;afterTick:number;throughTick:number}[]{
+function experienceEpochs(cp:CheckpointV6|CheckpointV7|CheckpointV8):{historyId:string;afterTick:number;throughTick:number}[]{
  const epochs:{historyId:string;afterTick:number;throughTick:number}[]=[];let historyId=cp.physiology.origin.historyId,afterTick=-1;
  for(const edge of cp.physiology.verifiedCheckpointImports){epochs.push({historyId,afterTick,throughTick:edge.importTick});historyId=edge.destinationHistoryId;afterTick=edge.importTick;}
  epochs.push({historyId,afterTick,throughTick:cp.physiology.legacyImport?.importTick??Number.MAX_SAFE_INTEGER});if(cp.physiology.legacyImport)epochs.push({historyId:cp.physiology.legacyImport.destinationHistoryId,afterTick:cp.physiology.legacyImport.importTick,throughTick:Number.MAX_SAFE_INTEGER});return epochs;
 }
-export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
-export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7=CheckpointV7> extends CognitionSimulation<C> {
- private body:BodyState;private interoception:InteroceptionState|InteroceptionStateV2;private physiology:PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};private physiologyVersion:6|7;private internalExperiences:InternalExperience[];
+export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
+export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|CheckpointV8=CheckpointV7> extends CognitionSimulation<C> {
+ protected body:BodyState;private interoception:InteroceptionState|InteroceptionStateV2;private physiology:PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};private physiologyVersion:6|7;private internalExperiences:InternalExperience[];
  private intervalStart={x:0,z:0,cursor:0,yaw:0,pitch:0,capable:true};
  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiology?:PhysiologyOptions}){
   const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),cp=source&&(source.schemaVersion===6||source.schemaVersion===7)?source:null;
@@ -868,12 +885,21 @@ export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7=Checkpoint
   if(cp)this.data.pendingInputs=structuredClone(cp.pendingInputs);
   const explicitlyActivating=options.physiology?.active===true&&(!cp||!cp.body.active);
   if((explicitlyActivating||!cp&&this.body.active)&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}}))throw new Error('Checkpoint capacity prevents physiology activation; existing state preserved');
-  if(cp&&options.physiology?.active!==undefined&&options.physiology.active!==this.body.active){
-   this.body.active=options.physiology.active;const last=this.physiology.unconsciousWindows.at(-1);
-   if(this.capableOfAttention()&&last?.endTick===null)last.endTick=tick;
-   else if(!this.capableOfAttention()&&last?.endTick!==null){if(this.physiology.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');this.physiology.unconsciousWindows.push({startTick:tick,endTick:null});}
-  }
+  if(cp&&options.physiology?.active!==undefined)this.configurePhysiologyActivation(options.physiology.active);
  }
+ /** Constructor configuration changes capability evidence without executing motors,
+  * cancelling actions, or inventing a retrospective unconscious interval. Call only
+  * after the caller's complete projected activation capacity preflight. */
+ protected configurePhysiologyActivation(active:boolean):void {
+  if(active===this.body.active)return;
+  const capable=bodyCapability({...this.body,active}).canAttend,last=this.physiology.unconsciousWindows.at(-1);
+  const openInterval=!capable&&last?.endTick!==null;
+  if(openInterval&&this.physiology.unconsciousWindows.length>=128)throw new Error('Unconscious interval evidence capacity exceeded');
+  this.body.active=active;
+  if(capable&&last?.endTick===null)last.endTick=this.data.tick;
+  else if(openInterval)this.physiology.unconsciousWindows.push({startTick:this.data.tick,endTick:null});
+ }
+ protected applyValidatedHomeEffect(effect:Omit<Extract<PhysiologyEffect,{type:'intake'}>,'sequence'>|{type:'rest'|'sleep'|'wake'},events:DeterministicEvent[]):number{const sequence=this.body.lastEffectSequence+1,result=applyAcceptedBodyEffect(this.body,{...effect,sequence},this.data.tick);this.body=result.state;this.physiologyEvents(events,result.events);return sequence;}
  protected override supportsPhysiologyInputs():boolean{return true;}
  protected override capableOfAction():boolean{return !this.body||bodyCapability(this.body).canAct;}
  protected override capableOfAttention():boolean{return !this.body||bodyCapability(this.body).canAttend;}
@@ -888,13 +914,13 @@ export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7=Checkpoint
   if(this.physiology.taskCreditActivityId!==this.activity.activityId){this.physiology.taskCredit=0;this.physiology.taskCreditActivityId=this.activity.activityId;}
   const credit=(this.physiology.taskCredit??0)+bodyImpairment(this.body).taskScale;if(credit<1){this.physiology.taskCredit=credit;return false;}this.physiology.taskCredit=credit-1;return true;
  }
- protected override beforeMotorExecution():void{this.intervalStart.capable=this.capableOfAttention();}
+ protected override beforeMotorExecution(events:DeterministicEvent[]):void{void events;this.intervalStart.capable=this.capableOfAttention();}
  protected override beforeInputs(events:DeterministicEvent[]):void{
   this.physiology.unconsciousWindows=this.physiology.unconsciousWindows.filter(w=>w.endTick===null||w.endTick>=this.data.tick-COGNITION_LIMITS.resultMaxAgeTicks);
   const c=this.data.character;this.intervalStart={x:c.x,z:c.z,cursor:this.activity.cursor,yaw:this.head.yaw,pitch:this.head.pitch,capable:this.capableOfAttention()};
   this.enforceCapability(events);
  }
- private physiologyEvents(events:DeterministicEvent[],changes:PhysiologyEvent[]):void {
+ protected physiologyEvents(events:DeterministicEvent[],changes:PhysiologyEvent[]):void {
   for(const e of changes){const data=Object.fromEntries(Object.entries(e.data).map(([k,v])=>[k,v===null?'none':v]));this.emit(events,e.type,e.type.startsWith('INTERNAL_')?'interoception':'physiology','observed',data);}
  }
  private enforceCapability(events:DeterministicEvent[]):void{
@@ -964,4 +990,113 @@ export function validatePhysiologyCheckpointV2(value:unknown):CheckpointV7 {
 }
 export class HistoricalPhysiologySimulation extends PhysiologySimulation<CheckpointV6>{
  constructor(options:ConstructorParameters<typeof PhysiologySimulation>[0]){if(validateCheckpoint(options.checkpoint).schemaVersion!==6)throw new Error('Historical physiology requires schema 6');super({...options,historical:true});}
+}
+/** CP8 installs home state only after shared physical clearance accepts a layout. */
+export function homePhysiologyPart(cp:CheckpointV8):CheckpointV7 {
+ const raw=structuredClone(cp) as unknown as Record<string,unknown>;delete raw.home;raw.schemaVersion=7;raw.rulesVersion=CURRENT_PHYSIOLOGY_RULES;
+ raw.pendingInputs=cp.pendingInputs.map(input=>({...input,command:input.command.type==='home_observation'||input.command.type==='home_layout_fixture'||input.command.type==='doorbell'?{type:'invalid',reason:'unknown_command'}:input.command}));
+ return validatePhysiologyCheckpointV2(raw);
+}
+export function validateHomeCheckpoint(value:unknown):CheckpointV8 {
+ const cp=value as CheckpointV8;if(cp?.schemaVersion!==8||cp.rulesVersion!==HOME_RULES)fail('home schema/rules');
+ const base=homePhysiologyPart(cp);object(cp,[...Object.keys(base).filter(k=>k!=='schemaVersion'&&k!=='rulesVersion'),'schemaVersion','rulesVersion','home'],'home root');
+ validateHomeState(cp.home,cp.tick,cp.config.hz);if(cp.home.controller.searchActionId!==null&&cp.home.controller.searchActionId>=cp.head.nextActionId)fail('home search head action association');for(const input of cp.pendingInputs)validateCommand(input.command,true,true,true,true,true);
+ const view={worldId:cp.cognition.identity.worldId,runId:cp.cognition.identity.runId,time:cp.tick/cp.config.hz,tick:cp.tick,character:cp.character,head:cp.head,scene:cp.scene,door:{lastSlam:cp.door.lastSlamTick/cp.config.hz,slamCount:cp.door.slamCount},reflex:{start:cp.reflex.startTick/cp.config.hz,strength:cp.reflex.strength,duration:REFLEX_DURATION},home:homePublicView(cp.home,cp.config.hz)};
+ if(cp.home.layout&&(cp.home.posture.kind==='upright'?!canOccupyHomeCharacter(view,cp.character.x,cp.character.z):!canUseHomePosture(view)))fail('home character clearance/posture');
+ if(cp.home.task?.committedEffectSequence!==null&&cp.home.task?.committedEffectSequence!==undefined&&cp.home.task.committedEffectSequence>cp.body.lastEffectSequence)fail('home committed effect cursor');
+ return structuredClone(cp);
+}
+export class HomeSimulation extends PhysiologySimulation<CheckpointV8> {
+ private home!:HomeState;
+ constructor(options:ConstructorParameters<typeof PhysiologySimulation>[0]) {
+  const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===8?source:null;
+  super({...options,checkpoint:saved?homePhysiologyPart(saved):source??undefined,physiology:options.physiology?{...options.physiology,active:undefined}:undefined});
+  this.home=saved?structuredClone(saved.home):createHomeState(this.data.tick,this.data.config.hz,chooseSafeHomeLayout(super.snapshot()),options.physiology?.active===false);
+  if(saved)this.data.pendingInputs=structuredClone(saved.pendingInputs);
+  const active=options.physiology?.active??(saved?saved.body.active:this.home.availability==='ready');
+  if(options.physiology?.active!==undefined)this.home.activationPolicy=options.physiology.active?'home-default':'owner-disabled';
+  const nextActive=this.home.availability==='ready'&&active&&this.home.activationPolicy!=='owner-disabled';
+  if(nextActive&&!fitsCognitionStorage({...this.checkpoint(),body:{...this.body,active:true}}))throw new Error('Checkpoint capacity prevents home activation; existing state preserved');
+  this.configurePhysiologyActivation(nextActive);if(!nextActive&&homeTaskBusy(this.home)&&this.home.task!.status!=='failed'){this.home.task!.status='interrupted';this.home.task!.interruption='owner_disabled';}
+ }
+ protected override supportsHomeInputs():boolean{return true;}
+ protected override motorScale():number{return this.home&&!this.body.active&&this.home.controller.searchActionId===this.head.activeActionId&&this.head.activeActionId!==null?0:super.motorScale();}
+ protected override cognitionActionAllowed():boolean{return !this.home||!homeTaskBusy(this.home);}
+ protected override shouldAdvanceActivity():boolean{return (!this.home||!homeTaskBusy(this.home))&&super.shouldAdvanceActivity();}
+ protected override canMove(x:number,z:number):boolean{return !this.home?.layout?super.canMove(x,z):canSweepHomeCharacter(this.snapshot(),this.data.character.x,this.data.character.z,x,z);}
+ protected override movementPauseActive():boolean {const t=this.home?.task;return t?.status==='started'&&t.stage==='route'?false:super.movementPauseActive();}
+ protected override movementPermitted():boolean {if(!this.home||!homeTaskBusy(this.home))return !this.home||this.home.posture.kind==='upright'&&(!this.body.active||this.home.controller.searchPhase==='idle'&&this.home.controller.searchOriginHeading===null);if(!this.body.active)return false;const t=this.home.task!;return t.status==='started'&&t.stage==='route'&&t.routeCursor<t.route.length;}
+ protected override movementDestination():[number,number]{const t=this.home?.task;if(t&&homeTaskBusy(this.home)&&t.stage==='route'&&t.routeCursor<t.route.length){const p=t.route[t.routeCursor];return [p.x,p.z];}return super.movementDestination();}
+ protected override movementArrived(events:DeterministicEvent[]):void {const t=this.home?.task;if(t&&homeTaskBusy(this.home)&&t.stage==='route'){t.routeCursor++;this.emit(events,'HOME_ROUTE_POINT','home_navigation','reached',{actionId:t.id,routeCursor:t.routeCursor});if(t.routeCursor===t.route.length)this.data.character.moving=false;return;}super.movementArrived(events);}
+ protected override movementBlocked(events:DeterministicEvent[]):void {const t=this.home?.task;if(t&&homeTaskBusy(this.home)&&t.stage==='route'){this.data.character.moving=false;t.route=[];t.routeCursor=0;t.status='interrupted';t.interruption='route_blocked';t.nextReplanTick=this.data.tick+this.data.config.hz;homeTimeline(this.home,this.data.tick,'blocked','Path blocked; replanning');this.emit(events,'HOME_ROUTE_BLOCKED','home_navigation','blocked',{actionId:t.id,replans:t.replans});return;}super.movementBlocked(events);}
+ protected override beforeInputs(events:DeterministicEvent[]):void {super.beforeInputs(events);if(this.home?.availability==='ready')replenishHomeResources(this.home,this.data.tick,this.data.config.hz);}
+ private homeFail(reason:string,events:DeterministicEvent[]):void {const t=this.home.task!;t.status='failed';t.interruption=reason;this.home.controller.nextDecisionTick=this.data.tick+30*this.data.config.hz;homeTimeline(this.home,this.data.tick,'failed',reason==='target_moved'?'Target moved':reason==='food_unavailable'?'No food available':'Path blocked');this.emit(events,'HOME_ACTION_FAILED','home_action','failed',{actionId:t.id,reason,stage:t.stage});}
+ private homeInterrupt(reason:string,events:DeterministicEvent[]):void {const t=this.home.task!;if(t.status!=='interrupted'||t.interruption!==reason){t.status='interrupted';t.interruption=reason;if(reason==='bed_clearance')t.nextReplanTick=this.data.tick+5*this.data.config.hz;homeTimeline(this.home,this.data.tick,'interrupted',reason==='physiological_incapacity'?'Action interrupted by sleep':'Action interrupted');this.emit(events,'HOME_ACTION_INTERRUPTED','home_action','interrupted',{actionId:t.id,reason,stage:t.stage});}}
+ private currentHomeTarget():HomeLayout['bed']|null {const t=this.home.task!,l=this.home.layout;if(!l)return null;const f=t.target.kind==='bed'?l.bed:l.pantry;return f.id===t.target.resourceId?f:null;}
+ private targetReachReason():string|null {const t=this.home.task!,f=this.currentHomeTarget();if(!f)return 'target_unavailable';if(Math.hypot(f.anchor.x-t.target.anchor.x,f.anchor.z-t.target.anchor.z)>.15)return 'target_moved';if(Math.hypot(this.data.character.x-f.anchor.x,this.data.character.z-f.anchor.z)>.2)return 'out_of_reach';return null;}
+ private planHome(events:DeterministicEvent[]):boolean {const t=this.home.task!,world=this.snapshot(),plan=planHomeRoute(this.data.character,t.target.anchor,{canOccupy:p=>canOccupyHomeCharacter(world,p.x,p.z),canSweep:(a,b)=>canSweepHomeCharacter(world,a.x,a.z,b.x,b.z)});t.replans++;t.nextReplanTick=this.data.tick+this.data.config.hz;if(plan.status==='blocked'){if(t.replans>=HOME_LIMITS.replans)this.homeFail('route_unreachable',events);else this.homeInterrupt('route_blocked',events);return false;}t.route=plan.points;t.routeCursor=0;t.status='started';t.interruption=null;homeTimeline(this.home,this.data.tick,'started',t.kind==='eat'?'Getting food':'Walking to bed');this.emit(events,'HOME_ROUTE_PLANNED','home_navigation','reachable',{actionId:t.id,points:t.route.length,expanded:plan.expanded,distance:plan.distance,replans:t.replans});return true;}
+ private stageHome(stage:HomeState['task'] extends infer T?T extends {stage:infer S}?S:never:never):void {const t=this.home.task!;t.stage=stage;t.stageTicks=0;t.stageStartedTick=this.data.tick;}
+ private advanceBedTransition(events:DeterministicEvent[]):void {const t=this.home.task!,bed=this.currentHomeTarget();if(!bed||!t.entryOrigin){this.homeFail('target_unavailable',events);return;}const duration=HOME_ACTION_SECONDS[t.stage==='enter'?'enter':'exit']*this.data.config.hz;const progress=t.stage==='enter'?Math.min(1,(t.stageTicks+1)/duration):Math.max(0,this.home.posture.progress-1/duration<1e-10?0:this.home.posture.progress-1/duration);const candidate=this.snapshot();candidate.character={...candidate.character,x:t.entryOrigin.x+(bed.position.x-t.entryOrigin.x)*progress,z:t.entryOrigin.z+(bed.position.z-t.entryOrigin.z)*progress,heading:bed.yaw,moving:false};candidate.home={...candidate.home!,posture:{kind:t.stage==='enter'?'entering':'exiting',bedId:bed.id,progress}};
+  if(!canSweepHomePosture(this.snapshot(),candidate)){t.transitionFailures++;t.nextReplanTick=this.data.tick+5*this.data.config.hz;if(t.transitionFailures>=3){if(t.stage==='enter'&&this.home.posture.kind!=='upright'&&this.home.posture.progress>0){t.abortReason='bed_entry_blocked';t.transitionFailures=0;this.stageHome('exit');this.homeInterrupt('bed_clearance',events);}else this.homeFail(t.abortReason??(t.stage==='exit'?'bed_exit_blocked':'bed_entry_blocked'),events);}else this.homeInterrupt('bed_clearance',events);return;}this.data.character={...candidate.character};this.home.posture=candidate.home.posture;if(t.status==='interrupted'){t.status='started';t.interruption=null;homeTimeline(this.home,this.data.tick,'started','Action resumed');}t.stageTicks++;
+  if(t.stage==='enter'&&progress===1){this.home.posture.kind='reclined';t.committedEffectSequence=this.applyValidatedHomeEffect({type:'rest'},events);this.stageHome('rest');homeTimeline(this.home,this.data.tick,'resting','Resting in bed');this.emit(events,'HOME_BED_ENTERED','home_action','resting',{actionId:t.id});}
+  else if(t.stage==='exit'&&progress===0){this.home.posture={kind:'upright',bedId:null,progress:0};if(t.abortReason){this.homeFail(t.abortReason,events);return;}t.status='completed';this.data.pauseUntilTick=this.data.tick+this.data.config.pauseTicks;this.stageHome('done');homeTimeline(this.home,this.data.tick,'completed','Finished resting');this.emit(events,'HOME_ACTION_COMPLETE','home_action','completed',{actionId:t.id,kind:t.kind});}
+ }
+ private advanceHomeAction(events:DeterministicEvent[]):void {
+  const t=this.home.task!,tick=this.data.tick,hz=this.data.config.hz,capable=this.capableOfAction();if(t.status==='failed')return;
+  if(t.stage==='sleep'){if(this.body.mode==='asleep'||this.body.mode==='incapacitated')return;t.status='started';this.stageHome('wake');homeTimeline(this.home,tick,'waking','Waking');return;}
+  if(!capable){this.homeInterrupt('physiological_incapacity',events);return;}
+  const attention=this.attentionState();if(tick<attention.commitmentUntilTick||tick<attention.developerUntilTick){this.homeInterrupt('attention_committed',events);return;}
+  if(t.status==='interrupted'&&tick<t.nextReplanTick)return;
+  if(t.stage==='route'&&!t.route.length){if(t.replans>=HOME_LIMITS.replans){this.homeFail('route_unreachable',events);return;}if(!this.planHome(events))return;}
+  if(t.status==='interrupted'&&t.interruption!=='bed_clearance'){t.status='started';t.interruption=null;homeTimeline(this.home,tick,'started','Action resumed');}
+  if(t.stage==='route'){if(t.routeCursor<t.route.length)return;const reason=this.targetReachReason();if(reason){this.homeFail(reason,events);return;}if(t.kind==='eat')this.stageHome(this.home.resources.held?'eat':'reach');else{t.entryOrigin={x:this.data.character.x,z:this.data.character.z};this.stageHome('enter');}return;}
+  if(t.stage==='enter'||t.stage==='exit'){this.advanceBedTransition(events);return;}
+  t.stageTicks++;
+  if(t.stage==='reach'&&t.stageTicks>=HOME_ACTION_SECONDS.reach*hz){const reason=this.targetReachReason();if(reason){this.homeFail(reason,events);return;}if(!this.home.resources.stock){this.homeFail('food_unavailable',events);return;}if(this.home.resources.held){this.homeFail('already_holding_food',events);return;}this.home.resources.stock--;this.home.resources.held={id:this.home.resources.nextServingId++,kind:'basic-serving',acquiredByAction:t.id};this.stageHome('holding');homeTimeline(this.home,tick,'acquired','Acquired food');this.emit(events,'HOME_FOOD_ACQUIRED','home_action','acquired',{actionId:t.id,servingId:this.home.resources.held.id});}
+  else if(t.stage==='holding'&&t.stageTicks>=HOME_ACTION_SECONDS.holding*hz)this.stageHome('eat');
+  else if(t.stage==='eat'&&t.stageTicks>=HOME_ACTION_SECONDS.eat*hz){const held=this.home.resources.held;if(!held){this.homeFail('held_item_missing',events);return;}if(this.body.absorption.length>=32){this.homeFail('absorption_capacity',events);return;}const sequence=this.applyValidatedHomeEffect({type:'intake',...BASIC_SERVING},events);t.committedEffectSequence=sequence;this.home.resources.held=null;this.home.controller.mealCooldownUntilTick=tick+HOME_LIMITS.mealCooldownSeconds*hz;t.status='completed';this.data.pauseUntilTick=this.data.tick+this.data.config.pauseTicks;this.stageHome('done');homeTimeline(this.home,tick,'consumed','Consumed food');homeTimeline(this.home,tick,'completed','Finished eating');this.emit(events,'HOME_FOOD_CONSUMED','home_action','committed',{actionId:t.id,servingId:held.id,effectSequence:sequence});}
+  else if(t.stage==='rest'&&t.need==='sleep'&&t.stageTicks>=2*hz){t.committedEffectSequence=this.applyValidatedHomeEffect({type:'sleep'},events);this.stageHome('sleep');homeTimeline(this.home,tick,'sleeping','Sleeping in bed');this.emit(events,'HOME_SLEEP_STARTED','home_action','sleeping',{actionId:t.id});}
+  else if(t.stage==='rest'&&t.stageTicks>=HOME_ACTION_SECONDS.rest*hz){t.committedEffectSequence=this.applyValidatedHomeEffect({type:'wake'},events);this.stageHome('wake');homeTimeline(this.home,tick,'waking','Getting up');}
+  else if(t.stage==='wake'&&t.stageTicks>=HOME_ACTION_SECONDS.wake*hz)this.stageHome('exit');
+ }
+ private cancelHomeSearch(events:DeterministicEvent[],resetSession=false):void {const c=this.home.controller;if(c.searchActionId!==null&&this.head.activeActionId===c.searchActionId){this.emit(events,'HEAD_INTERRUPTED','head','cancelled',{actionId:c.searchActionId,reason:'home_goal_selected'});this.head.status='idle';this.head.scan=null;this.head.activeActionId=null;this.head.observedAim=null;this.head.targetYaw=this.head.yaw;this.head.targetPitch=this.head.pitch;}c.searchPhase='idle';c.searchBodyTarget=null;c.searchActionId=null;if(resetSession){c.searchOriginHeading=null;c.searchOrientation=0;c.searchPose=0;}}
+ private advanceHomeSearch(events:DeterministicEvent[]):void {const c=this.home.controller,tick=this.data.tick,hz=this.data.config.hz,a=this.attentionState();if(!this.capableOfAttention()||tick<a.developerUntilTick||tick<a.commitmentUntilTick){this.cancelHomeSearch(events);c.searchNextTick=tick+5*hz;return;}
+  const needSearch=!this.home.known.some(k=>k.kind==='bed')||!this.home.known.some(k=>k.kind==='pantry')||this.home.task?.status==='failed';if(!needSearch){this.cancelHomeSearch(events,true);return;}
+  if(c.searchPhase==='idle'){if(tick<c.searchNextTick||this.head.status!=='idle')return;if(c.searchOriginHeading===null){c.searchOriginHeading=this.data.character.heading;c.searchOrientation=0;c.searchPose=0;}const required=Math.atan2(Math.sin(c.searchOriginHeading+c.searchOrientation*Math.PI/2),Math.cos(c.searchOriginHeading+c.searchOrientation*Math.PI/2));if(Math.abs(angleDifference(required,this.data.character.heading))>.001){c.searchBodyTarget=required;c.searchPhase='body-turn';return;}const angles=[-.75,0,.75,-1.25,1.25],yaw=angles[c.searchPose],actionId=this.head.nextActionId;this.applyHeadInput({sequence:Math.max(1,this.data.nextInputSequence-1),receivedTick:tick,applyTick:tick,admission:'queued',command:{type:'look_at',yaw,pitch:-.12,sceneRevision:this.scene.revision}},events,'cognition');if(this.head.nextActionId===actionId)return;c.searchActionId=actionId;c.searchPhase='turning';c.searchTurns++;c.searchDeadlineTick=tick+45*hz;return;}
+  if(c.searchPhase==='body-turn'){const delta=angleDifference(c.searchBodyTarget!,this.data.character.heading),step=Math.min(Math.abs(delta),Math.PI/2/hz),candidate=this.snapshot();candidate.character.heading=Math.atan2(Math.sin(this.data.character.heading+Math.sign(delta)*step),Math.cos(this.data.character.heading+Math.sign(delta)*step));if(!canUseHomePosture(candidate)){this.cancelHomeSearch(events);c.searchNextTick=tick+5*hz;return;}this.data.character.heading=candidate.character.heading;if(Math.abs(delta)<=step+1e-10){c.searchPhase='idle';c.searchBodyTarget=null;c.searchNextTick=tick;}return;}
+  if(c.searchActionId!==null&&(this.head.status!=='idle'&&this.head.activeActionId!==c.searchActionId||this.head.nextActionId>c.searchActionId+1)){this.cancelHomeSearch(events);c.searchNextTick=tick+5*hz;return;}
+  if(c.searchPhase==='turning'&&this.head.status==='idle'){c.searchPhase='holding';c.searchCaptureAfterTick=tick-1;c.searchDeadlineTick=tick+45*hz;c.searchNextTick=tick;}
+  if(c.searchPhase==='holding'){
+   const last=a.lastCapture;
+   // Ordered success at the boundary is actual evidence, not a timeout.
+   if(last?.outcome==='success'&&last.freshness==='applicable'&&last.capturedTick>=c.searchCaptureAfterTick){c.searchPhase='idle';c.searchActionId=null;c.searchPose++;c.searchNextTick=tick+hz;if(c.searchPose>=5){c.searchPose=0;if(c.searchOrientation<3)c.searchOrientation++;else{c.searchOriginHeading=null;c.searchOrientation=0;c.searchNextTick=tick+5*hz;}}return;}
+   if(last?.outcome==='quota'&&last.receivedTick>=c.searchCaptureAfterTick)c.searchDeadlineTick=Math.max(c.searchDeadlineTick,Math.min(c.searchCaptureAfterTick+120*hz,a.retryAfterTick+5*hz));
+   const pending=a.pending;
+   if(pending&&(pending.status==='pending'||pending.requestedTick!==null&&pending.requestedTick>=c.searchCaptureAfterTick))c.searchDeadlineTick=Math.max(c.searchDeadlineTick,Math.min(c.searchCaptureAfterTick+120*hz,pending.expiresTick+1));
+   if(tick>=c.searchDeadlineTick||last&&last.receivedTick>=c.searchCaptureAfterTick&&['unavailable','failed','timeout','interrupted'].includes(last.outcome)){this.cancelHomeSearch(events,true);c.searchNextTick=tick+30*hz;return;}
+   if(tick>=c.searchNextTick){this.requestCapture('uncertainty_probe',events);c.searchNextTick=tick+5*hz;}
+  }
+ }
+ protected override beforeMotorExecution(events:DeterministicEvent[]):void {
+  if(this.home?.availability==='ready'&&this.body.active){const tick=this.data.tick,hz=this.data.config.hz;
+   if(homeTaskBusy(this.home))this.advanceHomeAction(events);
+   else if(this.home.posture.kind==='upright'&&this.capableOfAction()&&tick>=this.home.controller.nextDecisionTick){this.home.controller.nextDecisionTick=tick+HOME_LIMITS.reconsiderSeconds*hz;const choice=chooseReactiveHomeGoal({sensations:this.presentInternalSensations(),known:this.home.known,handledAttentionIds:this.home.controller.handledAttentionIds,tick,mealCooldownUntilTick:this.home.controller.mealCooldownUntilTick,genericActivityRunning:this.activity.status==='running'});if(choice){beginHomeTask(this.home,choice,tick,hz);this.emit(events,'HOME_GOAL_SELECTED','home_controller','selected',{actionId:this.home.task!.id,kind:choice.kind,attentionId:choice.attentionId,recognition:choice.target.recognition});} }
+   if(!homeTaskBusy(this.home))this.advanceHomeSearch(events);else this.cancelHomeSearch(events,true);
+   if(this.home.posture.kind!=='upright'){this.head.status='idle';this.head.scan=null;this.head.activeActionId=null;this.head.observedAim=null;this.head.targetYaw=this.head.yaw=0;this.head.targetPitch=this.head.pitch=0;}
+  }
+  super.beforeMotorExecution(events);
+ }
+ protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
+  const c=input.command,tick=this.data.tick;
+  if(c.type==='physiology_fixture'&&(c.effect.type==='activate'||c.effect.type==='deactivate')){if(c.effect.type==='activate'&&this.home.availability!=='ready'){this.emit(events,'BODY_EFFECT_REJECTED','physiology','rejected',{reason:'home_layout_unavailable'},input.sequence);return true;}const handled=super.applyExtendedInput(input,events);this.home.activationPolicy=this.body.active?'home-default':'owner-disabled';if(!this.body.active&&homeTaskBusy(this.home)&&this.home.task!.status!=='failed')this.homeInterrupt('owner_disabled',events);return handled;}
+  if(c.type==='home_observation'){const a=this.attentionState(),last=a.lastCapture,reason=!this.capableOfAttention()?'physiological_incapacity':this.mode==='LIVE'&&c.sensorSource!=='actual_renderer'?'untrusted_sensor_source':!last||last.outcome!=='success'||last.freshness!=='applicable'||last.captureId!==c.captureId||last.capturedTick!==c.capturedTick||last.receivedTick!==c.attentionTick||a.baseline?.frameHash!==c.frameHash?'unattended_capture':!this.sensoryCaptureAllowed(c.capturedTick)?'unconscious_capture':null;if(reason){this.emit(events,'HOME_OBSERVATION','home_sensor','rejected',{reason,captureId:c.captureId},input.sequence);return true;}
+   for(const o of c.observations){const known={resourceId:o.resourceId,kind:o.kind,anchor:structuredClone(o.observedAnchor),handle:o.handle,captureId:c.captureId,frameHash:c.frameHash,capturedTick:c.capturedTick,attentionTick:c.attentionTick,recognition:o.recognition};const prior=this.home.known.findIndex(k=>k.resourceId===o.resourceId);if(prior>=0)this.home.known[prior]=known;else if(this.home.known.length<HOME_LIMITS.known)this.home.known.push(known);else continue;this.emit(events,'HOME_AFFORDANCE_ATTENDED','home_sensor','known',{resourceId:o.resourceId,kind:o.kind,captureId:c.captureId,frameHash:c.frameHash,capturedTick:c.capturedTick,attentionTick:c.attentionTick,handle:o.handle,recognition:o.recognition,x:o.observedAnchor.x,z:o.observedAnchor.z},input.sequence);}return true;
+  }
+  if(c.type==='home_layout_fixture'){if(this.mode!=='EXPERIMENT'){this.emit(events,'HOME_LAYOUT','home','rejected',{reason:'experiment_only'},input.sequence);return true;}const candidate=this.snapshot();candidate.home={...candidate.home!,layout:c.layout};if(!canOccupyHomeCharacter(candidate,this.data.character.x,this.data.character.z)||this.home.posture.kind!=='upright'){this.emit(events,'HOME_LAYOUT','home','rejected',{reason:'occupied_clearance'},input.sequence);return true;}this.home.layout=structuredClone(c.layout);this.home.availability='ready';this.scene.revision++;this.emit(events,'HOME_LAYOUT','home','changed',{layoutRevision:c.layout.revision},input.sequence);return true;}
+  if(c.type==='doorbell'){if(tick<this.home.doorbellCooldownUntilTick){this.emit(events,'HOME_DOORBELL','home','rejected',{reason:'shared_cooldown'},input.sequence);return true;}this.home.doorbellCooldownUntilTick=tick+10*this.data.config.hz;this.home.doorbellCount++;const sound={kind:'doorbell' as const,id:this.data.nextSoundId++,time:tick/this.data.config.hz,x:2.97,z:-3.25,intensity:.7,suddenness:.85};this.genericSoundCount++;const emitted=this.emit(events,'ACOUSTIC_EVENT','sound','emitted',{...sound,y:1.4,sourceId:'home-doorbell',provenance:'WORLD_ACTION'},input.sequence);this.hear(sound,events,input.sequence,emitted.sequence);return true;}
+  return super.applyExtendedInput(input,events);
+ }
+ homeState():HomeState{return structuredClone(this.home);}
+ override snapshot():WorldState{return {...super.snapshot(),...(this.home?{home:homePublicView(this.home,this.data.config.hz)}:{})};}
+ override checkpoint():CheckpointV8 {const base=super.checkpoint();return this.home?{...base,schemaVersion:8,rulesVersion:HOME_RULES,home:structuredClone(this.home)}:base;}
 }

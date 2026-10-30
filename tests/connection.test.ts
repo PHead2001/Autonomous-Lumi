@@ -26,7 +26,7 @@ async function viewer(port: number) {
   return { socket, state: (JSON.parse(data.toString()) as ServerMessage).state };
 }
 test('real timer advances with zero viewers; reconnect receives same current world', { timeout: 5000 }, async () => {
-  const app = await testServer(), port = await app.listen(0);
+  const app = await testServer({physiology:{active:false}}), port = await app.listen(0);
   try {
     const first = await viewer(port), before = first.state;
     const serverSocket = [...app.sockets.clients][0], serverClosed = once(serverSocket, 'close');

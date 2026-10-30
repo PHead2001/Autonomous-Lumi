@@ -19,7 +19,7 @@ export interface AutomaticCaptureHostView {
 }
 function captureState(runtime: BranchRuntime) {
   const cp = runtime.simulation.checkpoint();
-  return cp.schemaVersion === 4 || cp.schemaVersion === 5 || (cp.schemaVersion === 6 || cp.schemaVersion === 7) ? cp : null;
+  return cp.schemaVersion === 4 || cp.schemaVersion === 5 || (cp.schemaVersion === 6 || cp.schemaVersion === 7 || cp.schemaVersion === 8) ? cp : null;
 }
 function pose(runtime: BranchRuntime): SensorPose {
   const p = eyePose(runtime.viewerState(), AUTO_CAPTURE_HOST_LIMITS.width, AUTO_CAPTURE_HOST_LIMITS.height);
@@ -32,6 +32,7 @@ function snapshotFields(metadata: CaptureMetadata) {
 /** One global automatic job leaves three existing queue slots for developer use.
  * LIVE and experiment opportunities alternate while both wait; experiments rotate. */
 export class AutomaticCaptureCoordinator {
+  private readonly homeSeen=new Map<string,string>();
   private readonly runs = new Map<string,HostRun>();
   private active: ActiveWork | null = null;
   private lastGlobalMs = -Infinity;
@@ -63,6 +64,7 @@ export class AutomaticCaptureCoordinator {
       const scope = key(runtime.target); currentKeys.add(scope);
       if (!this.current(runtime.target)) continue;
       const checkpoint = captureState(runtime), intent = checkpoint?.attention.pending;
+      if(checkpoint?.schemaVersion===8&&runtime.viewerState().capability?.canAttend!==false){const capture=checkpoint.attention.lastCapture;if(capture?.captureId&&capture.outcome==='success'&&capture.freshness==='applicable'&&this.homeSeen.get(scope)!==capture.captureId&&!checkpoint.pendingInputs.some(i=>i.command.type==='home_observation')){const selected=this.manager.homeObservation(runtime.target,capture.captureId,capture.receivedTick);if(selected){try{if(runtime.enqueueHomeObservation(selected.command,selected.proof).input.admission==='queued')this.homeSeen.set(scope,capture.captureId);}catch{/* Admission remains private and capability/association checked. */}}else this.homeSeen.set(scope,capture.captureId);}}
       if (!intent) continue;
       const summary = runtime.captureAvailability();
       // Paused/fast-forward experiments never release accumulated renderer work.
@@ -82,6 +84,7 @@ export class AutomaticCaptureCoordinator {
       }
       if (intent.status === 'pending' && state?.lastIntentId !== intent.id) candidates.push({runtime,intent});
     }
+    for(const scope of this.homeSeen.keys())if(!currentKeys.has(scope))this.homeSeen.delete(scope);
     for (const scope of this.runs.keys()) if (!currentKeys.has(scope)) this.runs.delete(scope);
     if (this.active || !candidates.length) return;
     const live = candidates.find(c => c.runtime.mode === 'LIVE');
@@ -131,6 +134,6 @@ export class AutomaticCaptureCoordinator {
     const state=this.runs.get(key(scope)),now=this.monotonicMs();
     return {inFlight:this.active && key(this.active.runtime.target)===key(scope)?{intentId:this.active.intentId,captureId:this.active.captureId}:null,lastIntentId:state?.lastIntentId??null,lastOutcome:state?.lastOutcome??null,captureId:state?.captureId??null,nextHostOpportunityMs:Math.max(0,AUTO_CAPTURE_HOST_LIMITS.globalIntervalMs-(now-this.lastGlobalMs),AUTO_CAPTURE_HOST_LIMITS.perRunIntervalMs-(now-(state?.lastAttemptMs??-Infinity))),limits:AUTO_CAPTURE_HOST_LIMITS};
   }
-  retire(scope:ActiveTarget):void { this.runs.delete(key(scope)); }
-  close():void { this.closed=true;this.runs.clear(); }
+  retire(scope:ActiveTarget):void { this.runs.delete(key(scope));this.homeSeen.delete(key(scope)); }
+  close():void { this.closed=true;this.runs.clear();this.homeSeen.clear(); }
 }

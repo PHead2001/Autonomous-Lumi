@@ -7,6 +7,17 @@ export class SlamAudio {
       return this.context.state === 'running';
     } catch { return false; }
   }
+  playBell(): void {
+    const context = this.context;
+    if (!context || context.state !== 'running') return;
+    const now = context.currentTime;
+    for (const [offset, frequency] of [[0, 784], [.2, 622]] as const) {
+      const tone = context.createOscillator(), gain = context.createGain();
+      tone.type = 'sine'; tone.frequency.value = frequency;
+      gain.gain.setValueAtTime(.0001, now + offset); gain.gain.exponentialRampToValueAtTime(.18, now + offset + .015); gain.gain.exponentialRampToValueAtTime(.0001, now + offset + .7);
+      tone.connect(gain); gain.connect(context.destination); tone.start(now + offset); tone.stop(now + offset + .72);
+    }
+  }
   play(): void {
     const context = this.context;
     if (!context || context.state !== 'running') return;
