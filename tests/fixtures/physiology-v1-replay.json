@@ -1,0 +1,615 @@
+{
+  "source": "Frozen CP6/v1 from original unmodified checkout at 9d9f257; no runtime/owner data or providers",
+  "start": {
+    "schemaVersion": 6,
+    "rulesVersion": "lumi-physiology-v1",
+    "config": {
+      "hz": 30,
+      "speed": 0.75,
+      "pauseTicks": 36,
+      "cooldownTicks": 27,
+      "maxPendingInputs": 256
+    },
+    "tick": 10,
+    "character": {
+      "x": -1.6767506949806896,
+      "z": 1.5620728455598616,
+      "heading": -2.82955053202726,
+      "moving": true,
+      "gait": 1.9999999999999998
+    },
+    "reflex": {
+      "startTick": -3000,
+      "strength": 0
+    },
+    "door": {
+      "lastSlamTick": -3000,
+      "slamCount": 0
+    },
+    "waypoint": 0,
+    "pauseUntilTick": 0,
+    "cooldownUntilTick": 0,
+    "seed": 33,
+    "prng": {
+      "algorithm": "xorshift32-v1",
+      "state": 33
+    },
+    "nextInputSequence": 1,
+    "nextEventSequence": 8,
+    "nextSoundId": 1,
+    "pendingInputs": [],
+    "eventHash": "e55c34d0f72473081b0f56516b952890cb0e3c18ee1f77b995011b7dd7da2825",
+    "subjective": {
+      "estimateSeconds": 0.33373333333333344,
+      "uncertaintySeconds": 5.006666666666666,
+      "lastCalibrationTick": null,
+      "driftPpm": 1200,
+      "uncertaintyGrowthPerSecond": 0.02
+    },
+    "activity": {
+      "status": "running",
+      "cursor": 10,
+      "totalTicks": 100,
+      "appliedMilestones": [
+        10
+      ],
+      "completionCount": 0,
+      "activityId": 1
+    },
+    "experiences": [],
+    "nextExperienceId": 1,
+    "head": {
+      "yaw": 0,
+      "pitch": 0,
+      "targetYaw": 0,
+      "targetPitch": 0,
+      "status": "idle",
+      "scan": null,
+      "camera": {
+        "horizontalFovDegrees": 80,
+        "width": 512,
+        "height": 512,
+        "near": 0.05,
+        "far": 40
+      },
+      "nextActionId": 1,
+      "activeActionId": null,
+      "observedAim": null
+    },
+    "scene": {
+      "revision": 0,
+      "illumination": 1,
+      "fixture": "none",
+      "fixtureColor": "#ed6050",
+      "doorOpenRadians": null
+    },
+    "attention": {
+      "config": {
+        "distanceFalloff": 0.035,
+        "wallTransmission": 0.22,
+        "doorTransmission": 0.42,
+        "objectTransmission": 0.65,
+        "hearingFloor": 0.015,
+        "reflexIntensity": 0.34,
+        "reflexSuddenness": 0.65,
+        "glanceThreshold": 0.52,
+        "investigateThreshold": 0.83,
+        "habituationPenalty": 0.24,
+        "exposureRecoveryTicks": 900,
+        "attentionCooldownTicks": 90,
+        "commitmentTicks": 45,
+        "developerPriorityTicks": 90,
+        "captureCooldownTicks": 90,
+        "probeIntervalTicks": 900,
+        "intentionLifetimeTicks": 300,
+        "captureWindowTicks": 1800,
+        "maxCapturesPerWindow": 6,
+        "resultMaxAgeTicks": 600,
+        "retryBackoffTicks": 150,
+        "maxRetryBackoffTicks": 1800,
+        "visualChangeThreshold": 0.01,
+        "viewpointDistance": 1,
+        "viewpointRadians": 0.7853981633974483
+      },
+      "nextObservationId": 1,
+      "nextIntentId": 1,
+      "exposures": [],
+      "lastReceived": null,
+      "lastDecision": null,
+      "commitmentUntilTick": 0,
+      "cooldownUntilTick": 0,
+      "developerUntilTick": 0,
+      "automaticActionId": null,
+      "automaticObservationId": null,
+      "resumeActivity": false,
+      "pending": null,
+      "deferred": null,
+      "baseline": null,
+      "nextProbeTick": 900,
+      "captureCooldownUntilTick": 0,
+      "captureWindowStartTick": 0,
+      "capturesInWindow": 0,
+      "failureCount": 0,
+      "retryAfterTick": 0,
+      "lastAcceptedCaptureTick": -1,
+      "lastSuppression": null,
+      "lastCapture": null
+    },
+    "genericSoundCount": 0,
+    "cognition": {
+      "identity": {
+        "worldId": "historical-world",
+        "runId": "historical-run",
+        "branchId": "historical-branch",
+        "historyId": "historical-history",
+        "mode": "EXPERIMENT"
+      },
+      "requests": [],
+      "nextRequestTick": 0,
+      "actionCooldownUntilTick": 0,
+      "responses": 0,
+      "firstRequestTick": null,
+      "lastResponseTick": null,
+      "observationRequestedTick": null,
+      "captureUpgrade": null
+    },
+    "realExperiences": [],
+    "body": {
+      "schemaVersion": 1,
+      "rulesVersion": "lumi-physiology-v1",
+      "config": {
+        "version": "experimental-body-v1",
+        "satietyUsePerSecond": 0.000015277777777777777,
+        "reserveUsePerSecond": 0.000003888888888888889,
+        "reserveUsePerMetre": 0.000006,
+        "reserveUsePerTaskUnit": 4e-8,
+        "reserveUsePerHeadRadian": 2e-7,
+        "awakePressurePerSecond": 0.000008333333333333334,
+        "restPressureRecoveryPerSecond": 0.000002222222222222222,
+        "sleepPressureRecoveryPerSecond": 0.000030555555555555554,
+        "fatigueRecoveryPerSecond": 0.000001388888888888889,
+        "restFatigueRecoveryPerSecond": 0.000015277777777777777,
+        "sleepFatigueRecoveryPerSecond": 0.00002777777777777778,
+        "lowReserveFatiguePerSecond": 0.00001388888888888889,
+        "sleepDebtFatiguePerSecond": 0.000009722222222222223,
+        "conditionLossPerSecond": 0.0000049999999999999996,
+        "conditionRecoveryPerSecond": 0.000009722222222222223,
+        "forcedSleepPressure": 0.97,
+        "wakePressure": 0.2,
+        "incapacityCondition": 0.2,
+        "recoveryCondition": 0.35,
+        "urgentAttentionSeconds": 30,
+        "cueCooldownSeconds": 300,
+        "transientSeconds": 120,
+        "circadianPeriodSeconds": 86400
+      },
+      "hz": 30,
+      "active": true,
+      "activationTick": 0,
+      "lastIntegratedTick": 10,
+      "circadianAnchorTick": 0,
+      "satiety": 0.8499949074074079,
+      "reserves": 0.8999968037037046,
+      "sleepPressure": 0.7400027777777778,
+      "condition": 1,
+      "fatigue": 0.9500003703845163,
+      "mode": "awake",
+      "modeSinceTick": 0,
+      "lastEffectSequence": 0,
+      "absorption": []
+    },
+    "interoception": {
+      "schemaVersion": 1,
+      "rulesVersion": "lumi-physiology-v1",
+      "lastIntegratedTick": 10,
+      "nextObservationId": 3,
+      "nextAttentionId": 1,
+      "slots": [
+        {
+          "kind": "hunger",
+          "band": null,
+          "lastSensedTick": null,
+          "candidate": null,
+          "urgent": null
+        },
+        {
+          "kind": "sleep",
+          "band": "moderate",
+          "lastSensedTick": 1,
+          "candidate": {
+            "observationId": "internal-observation-1",
+            "kind": "sleep",
+            "band": "moderate",
+            "sensedTick": 1
+          },
+          "urgent": null
+        },
+        {
+          "kind": "discomfort",
+          "band": "severe",
+          "lastSensedTick": 1,
+          "candidate": {
+            "observationId": "internal-observation-2",
+            "kind": "discomfort",
+            "band": "severe",
+            "sensedTick": 1
+          },
+          "urgent": {
+            "crossingTick": 1,
+            "firstAttendedTick": null,
+            "eligibleTicks": 9,
+            "excludedSafetyTicks": 0,
+            "excludedIncapacityTicks": 0,
+            "excludedInactiveTicks": 0,
+            "retries": 1,
+            "lastAttemptTick": 1,
+            "breachTick": null
+          }
+        }
+      ],
+      "transient": []
+    },
+    "physiology": {
+      "origin": {
+        "historyId": "historical-history",
+        "genesisPreset": "production-v1",
+        "rulesVersion": "lumi-physiology-v1",
+        "evidenceEligibility": "eligible",
+        "taintedAtTick": null
+      },
+      "verifiedCheckpointImports": [],
+      "legacyImport": null,
+      "encodingEnabled": true,
+      "encodedNeedCrossings": [],
+      "interruptedActivity": false,
+      "safetyUntilTick": 0,
+      "unconsciousWindows": []
+    },
+    "internalExperiences": []
+  },
+  "inputs": [
+    {
+      "sequence": 1,
+      "receivedTick": 10,
+      "applyTick": 11,
+      "command": {
+        "type": "turn_head",
+        "yawDelta": 0.5,
+        "pitchDelta": 0.2,
+        "sceneRevision": 0
+      },
+      "admission": "queued"
+    },
+    {
+      "sequence": 2,
+      "receivedTick": 17,
+      "applyTick": 18,
+      "command": {
+        "type": "physiology_fixture",
+        "effect": {
+          "sequence": 1,
+          "type": "rest"
+        }
+      },
+      "admission": "queued"
+    },
+    {
+      "sequence": 3,
+      "receivedTick": 30,
+      "applyTick": 31,
+      "command": {
+        "type": "physiology_fixture",
+        "effect": {
+          "sequence": 2,
+          "type": "intake",
+          "satiety": 0.1,
+          "reserves": 0.02,
+          "absorptionSeconds": 30
+        }
+      },
+      "admission": "queued"
+    }
+  ],
+  "endTick": 90,
+  "stateHash": "a64d0176ee5f24b28323ad17a499804bc22aac3874976e54880b6feb8f952965",
+  "eventHash": "4ef786adeee7f4af72d4cf67868cefc933241fe9f3201d43682d6d2653dfcc7f",
+  "expected": {
+    "schemaVersion": 6,
+    "rulesVersion": "lumi-physiology-v1",
+    "config": {
+      "hz": 30,
+      "speed": 0.75,
+      "pauseTicks": 36,
+      "cooldownTicks": 27,
+      "maxPendingInputs": 256
+    },
+    "tick": 90,
+    "character": {
+      "x": -2.290756254826206,
+      "z": -0.34134438996124117,
+      "heading": -2.829550532027259,
+      "moving": true,
+      "gait": 17.999999999999968
+    },
+    "reflex": {
+      "startTick": -3000,
+      "strength": 0
+    },
+    "door": {
+      "lastSlamTick": -3000,
+      "slamCount": 0
+    },
+    "waypoint": 0,
+    "pauseUntilTick": 0,
+    "cooldownUntilTick": 0,
+    "seed": 33,
+    "prng": {
+      "algorithm": "xorshift32-v1",
+      "state": 33
+    },
+    "nextInputSequence": 4,
+    "nextEventSequence": 27,
+    "nextSoundId": 1,
+    "pendingInputs": [],
+    "eventHash": "4ef786adeee7f4af72d4cf67868cefc933241fe9f3201d43682d6d2653dfcc7f",
+    "subjective": {
+      "estimateSeconds": 3.0036000000000027,
+      "uncertaintySeconds": 5.059999999999993,
+      "lastCalibrationTick": null,
+      "driftPpm": 1200,
+      "uncertaintyGrowthPerSecond": 0.02
+    },
+    "activity": {
+      "status": "running",
+      "cursor": 90,
+      "totalTicks": 100,
+      "appliedMilestones": [
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90
+      ],
+      "completionCount": 0,
+      "activityId": 1
+    },
+    "experiences": [],
+    "nextExperienceId": 1,
+    "head": {
+      "yaw": 0.5,
+      "pitch": 0.2,
+      "targetYaw": 0.5,
+      "targetPitch": 0.2,
+      "status": "idle",
+      "scan": null,
+      "camera": {
+        "horizontalFovDegrees": 80,
+        "width": 512,
+        "height": 512,
+        "near": 0.05,
+        "far": 40
+      },
+      "nextActionId": 2,
+      "activeActionId": null,
+      "observedAim": null
+    },
+    "scene": {
+      "revision": 0,
+      "illumination": 1,
+      "fixture": "none",
+      "fixtureColor": "#ed6050",
+      "doorOpenRadians": null
+    },
+    "attention": {
+      "config": {
+        "distanceFalloff": 0.035,
+        "wallTransmission": 0.22,
+        "doorTransmission": 0.42,
+        "objectTransmission": 0.65,
+        "hearingFloor": 0.015,
+        "reflexIntensity": 0.34,
+        "reflexSuddenness": 0.65,
+        "glanceThreshold": 0.52,
+        "investigateThreshold": 0.83,
+        "habituationPenalty": 0.24,
+        "exposureRecoveryTicks": 900,
+        "attentionCooldownTicks": 90,
+        "commitmentTicks": 45,
+        "developerPriorityTicks": 90,
+        "captureCooldownTicks": 90,
+        "probeIntervalTicks": 900,
+        "intentionLifetimeTicks": 300,
+        "captureWindowTicks": 1800,
+        "maxCapturesPerWindow": 6,
+        "resultMaxAgeTicks": 600,
+        "retryBackoffTicks": 150,
+        "maxRetryBackoffTicks": 1800,
+        "visualChangeThreshold": 0.01,
+        "viewpointDistance": 1,
+        "viewpointRadians": 0.7853981633974483
+      },
+      "nextObservationId": 1,
+      "nextIntentId": 2,
+      "exposures": [],
+      "lastReceived": null,
+      "lastDecision": null,
+      "commitmentUntilTick": 0,
+      "cooldownUntilTick": 0,
+      "developerUntilTick": 101,
+      "automaticActionId": null,
+      "automaticObservationId": null,
+      "resumeActivity": false,
+      "pending": {
+        "id": 1,
+        "createdTick": 27,
+        "expiresTick": 327,
+        "reasons": [
+          "head_milestone"
+        ],
+        "triggers": [
+          {
+            "reason": "head_milestone",
+            "tick": 27,
+            "parentSequence": 15
+          }
+        ],
+        "parentSequence": 15,
+        "status": "pending",
+        "captureId": null,
+        "requestedTick": null
+      },
+      "deferred": null,
+      "baseline": null,
+      "nextProbeTick": 900,
+      "captureCooldownUntilTick": 117,
+      "captureWindowStartTick": 0,
+      "capturesInWindow": 1,
+      "failureCount": 0,
+      "retryAfterTick": 0,
+      "lastAcceptedCaptureTick": -1,
+      "lastSuppression": null,
+      "lastCapture": null
+    },
+    "genericSoundCount": 0,
+    "cognition": {
+      "identity": {
+        "worldId": "historical-world",
+        "runId": "historical-run",
+        "branchId": "historical-branch",
+        "historyId": "historical-history",
+        "mode": "EXPERIMENT"
+      },
+      "requests": [],
+      "nextRequestTick": 0,
+      "actionCooldownUntilTick": 0,
+      "responses": 0,
+      "firstRequestTick": null,
+      "lastResponseTick": null,
+      "observationRequestedTick": null,
+      "captureUpgrade": null
+    },
+    "realExperiences": [],
+    "body": {
+      "schemaVersion": 1,
+      "rulesVersion": "lumi-physiology-v1",
+      "config": {
+        "version": "experimental-body-v1",
+        "satietyUsePerSecond": 0.000015277777777777777,
+        "reserveUsePerSecond": 0.000003888888888888889,
+        "reserveUsePerMetre": 0.000006,
+        "reserveUsePerTaskUnit": 4e-8,
+        "reserveUsePerHeadRadian": 2e-7,
+        "awakePressurePerSecond": 0.000008333333333333334,
+        "restPressureRecoveryPerSecond": 0.000002222222222222222,
+        "sleepPressureRecoveryPerSecond": 0.000030555555555555554,
+        "fatigueRecoveryPerSecond": 0.000001388888888888889,
+        "restFatigueRecoveryPerSecond": 0.000015277777777777777,
+        "sleepFatigueRecoveryPerSecond": 0.00002777777777777778,
+        "lowReserveFatiguePerSecond": 0.00001388888888888889,
+        "sleepDebtFatiguePerSecond": 0.000009722222222222223,
+        "conditionLossPerSecond": 0.0000049999999999999996,
+        "conditionRecoveryPerSecond": 0.000009722222222222223,
+        "forcedSleepPressure": 0.97,
+        "wakePressure": 0.2,
+        "incapacityCondition": 0.2,
+        "recoveryCondition": 0.35,
+        "urgentAttentionSeconds": 30,
+        "cueCooldownSeconds": 300,
+        "transientSeconds": 120,
+        "circadianPeriodSeconds": 86400
+      },
+      "hz": 30,
+      "active": true,
+      "activationTick": 0,
+      "lastIntegratedTick": 90,
+      "circadianAnchorTick": 0,
+      "satiety": 0.9499541666666713,
+      "reserves": 0.9013058784078208,
+      "sleepPressure": 0.7399993148148132,
+      "condition": 1,
+      "fatigue": 0.9499695372103224,
+      "mode": "resting",
+      "modeSinceTick": 18,
+      "lastEffectSequence": 2,
+      "absorption": [
+        {
+          "sequence": 2,
+          "reservesRemaining": 0.018666666666666675,
+          "secondsRemaining": 27.9999999999999
+        }
+      ]
+    },
+    "interoception": {
+      "schemaVersion": 1,
+      "rulesVersion": "lumi-physiology-v1",
+      "lastIntegratedTick": 90,
+      "nextObservationId": 3,
+      "nextAttentionId": 1,
+      "slots": [
+        {
+          "kind": "hunger",
+          "band": null,
+          "lastSensedTick": null,
+          "candidate": null,
+          "urgent": null
+        },
+        {
+          "kind": "sleep",
+          "band": "moderate",
+          "lastSensedTick": 1,
+          "candidate": {
+            "observationId": "internal-observation-1",
+            "kind": "sleep",
+            "band": "moderate",
+            "sensedTick": 1
+          },
+          "urgent": null
+        },
+        {
+          "kind": "discomfort",
+          "band": "severe",
+          "lastSensedTick": 1,
+          "candidate": {
+            "observationId": "internal-observation-2",
+            "kind": "discomfort",
+            "band": "severe",
+            "sensedTick": 1
+          },
+          "urgent": {
+            "crossingTick": 1,
+            "firstAttendedTick": null,
+            "eligibleTicks": 89,
+            "excludedSafetyTicks": 0,
+            "excludedIncapacityTicks": 0,
+            "excludedInactiveTicks": 0,
+            "retries": 3,
+            "lastAttemptTick": 61,
+            "breachTick": null
+          }
+        }
+      ],
+      "transient": []
+    },
+    "physiology": {
+      "origin": {
+        "historyId": "historical-history",
+        "genesisPreset": "production-v1",
+        "rulesVersion": "lumi-physiology-v1",
+        "evidenceEligibility": "debug-tainted",
+        "taintedAtTick": 18
+      },
+      "verifiedCheckpointImports": [],
+      "legacyImport": null,
+      "encodingEnabled": true,
+      "encodedNeedCrossings": [],
+      "interruptedActivity": false,
+      "safetyUntilTick": 0,
+      "unconsciousWindows": []
+    },
+    "internalExperiences": []
+  }
+}

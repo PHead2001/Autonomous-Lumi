@@ -8,6 +8,7 @@ export interface WorldState {
   reflex: { start: number; strength: number; duration: number };
   door: { lastSlam: number; slamCount: number };
   /** Absent only in historical V1/V2 replay snapshots. Current authoritative worlds always provide these. */
+  physiologyActive?:boolean;capability?:import('./physiology-protocol.js').BodyCapability;presentInternalSensations?:import('./physiology-protocol.js').InternalSensationContext[];
   head?: HeadState; scene?: PhysicalSceneState;
 }
 export type ServerMessage = { type: 'state'; state: WorldState } | { type: 'sound'; event: AcousticEvent; state: WorldState };

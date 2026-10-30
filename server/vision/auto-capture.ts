@@ -19,7 +19,7 @@ export interface AutomaticCaptureHostView {
 }
 function captureState(runtime: BranchRuntime) {
   const cp = runtime.simulation.checkpoint();
-  return cp.schemaVersion === 4 || cp.schemaVersion === 5 ? cp : null;
+  return cp.schemaVersion === 4 || cp.schemaVersion === 5 || (cp.schemaVersion === 6 || cp.schemaVersion === 7) ? cp : null;
 }
 function pose(runtime: BranchRuntime): SensorPose {
   const p = eyePose(runtime.viewerState(), AUTO_CAPTURE_HOST_LIMITS.width, AUTO_CAPTURE_HOST_LIMITS.height);

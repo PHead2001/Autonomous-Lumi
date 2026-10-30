@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadCognitionConfig, safeCognitionConfig } from '../server/cognition/config';
 import { DurableBudget, BudgetError } from '../server/cognition/budget';
+import { acquireLocalLease } from '../server/local-lease';
 import { COGNITION_PROMPT_REVISION, CognitionProviders, type ProviderTransport } from '../server/cognition/providers';
 import { INTERPRETATION_JSON_SCHEMA, type CognitionContext, type CognitionProposal, bindCognitionProposal, parseCognitionProposal, validateCognitionProposalReferences, CognitionValidationError } from '../shared/cognition-protocol';
 
@@ -80,6 +81,26 @@ test('existing missing/corrupt ledger fails closed and cross-instance reservatio
     await assert.rejects(first.snapshot(), fails('budget_unavailable'));
     assert.equal((await readFile(join(directory, 'ledger.json'), 'utf8')).includes('bad'), true);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('provider fails closed without dispatch while another owner holds the isolated budget lease', async () => {
+  let calls = 0;
+  const fixture = await setup(async () => { calls++; return Response.json(envelope()); });
+  try {
+    await fixture.budget.snapshot();
+    const lease = await acquireLocalLease(fixture.config.budget.directory);
+    try {
+      const blocked = await fixture.providers.interpret(input('lease_busy'));
+      assert.equal(blocked.status, 'budget_unavailable');
+      assert.equal(blocked.attempts, 0);
+      assert.equal(calls, 0);
+    } finally { await lease.close(); }
+
+    const admitted = await fixture.providers.interpret(input('lease_released'));
+    assert.equal(admitted.status, 'ok');
+    assert.equal(calls, 1);
+    assert.equal((await fixture.budget.snapshot()).accountedUsd, admitted.costUsd);
+  } finally { await fixture.close(); }
 });
 
 test('reported debt above the admission bound persists and late overages cannot be refunded', async () => {
@@ -198,7 +219,7 @@ test('invalid/missing/private sensory input never dispatches, and disabled keys 
 });
 
 test('timeouts do not wait for ignored aborts, charge unknown usage and block later overspend', async () => {
-  let calls = 0; const fixture = await setup(async () => { calls++; return await new Promise<Response>(() => {}); }, { LUMI_COGNITION_DEADLINE_MS: '100', LUMI_COGNITION_BUDGET_USD: '0.15' });
+  let calls = 0; const fixture = await setup(async () => { calls++; return await new Promise<Response>(() => {}); }, { LUMI_COGNITION_DEADLINE_MS: '1000', LUMI_COGNITION_BUDGET_USD: '0.15' });
   try {
     const first = await fixture.providers.interpret(input()); assert.equal(first.status, 'timeout'); assert.equal(first.attempts, 1); assert.equal(first.costBasis, 'unknown');
     assert.equal((await fixture.budget.snapshot()).unknown, 1);
@@ -318,4 +339,21 @@ test('shared normalized parser distinguishes malformed JSON, schema, references 
  assert.throws(()=>validateCognitionProposalReferences({...proposal(),evidenceHandles:['invented']},context()),fails('unknown_handle'));
  assert.throws(()=>bindCognitionProposal({...remoteProposal(),frameHash:context().frameHash},context()),fails('schema'));
  assert.deepEqual(bindCognitionProposal(remoteProposal(),context()),proposal());
+});
+
+test('active provider wire contains only allowlisted present sensations and an independent sensor prompt',async()=>{
+ let sent:Record<string,unknown>|undefined;
+ const f=await setup(async(_url,init)=>{sent=JSON.parse(String(init.body));return new Response(JSON.stringify(envelope()),{status:200});});
+ try{
+  const c=context();c.internalSensations=[{kind:'hunger',band:'severe',description:'My stomach feels insistently empty.',uncertainty:'coarse_internal_signal'}];
+  const result=await f.providers.interpret({...input(),context:c});assert.equal(result.status,'ok');
+  const wire=sent as {messages:{content:string|{type:string;text?:string}[]}[]};
+  assert.match(String(wire.messages[0].content),/separate from the image/);
+  const user=wire.messages[1].content as {type:string;text?:string}[];const text=JSON.parse(user[0].text!);
+  assert.deepEqual(text.internalSensations,c.internalSensations);
+  assert.deepEqual(Object.keys(text.internalSensations[0]).sort(),['band','description','kind','uncertainty']);
+  for(const forbidden of ['satiety','reserves','sleepPressure','crossingTick','genesisPreset','observationId','frameHash'])assert.equal(user[0].text!.includes(forbidden),false,forbidden);
+  const invalid={...c,internalSensations:[{...c.internalSensations[0],satiety:.01}]};
+  assert.equal((await f.providers.interpret({...input('bad',30),context:invalid})).status,'invalid_input');
+ }finally{await f.close();}
 });

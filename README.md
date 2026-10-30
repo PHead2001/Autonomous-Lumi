@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173** in a current desktop Chrome, Edge, or Firefox with WebGL enabled. The world listens on loopback port **3001**; Vite serves the viewer on **5173** and proxies its WebSocket. Keep the terminal running. `Ctrl+C` stops both processes. If 5173 is occupied, use Vite's printed viewer URL.
+Open **http://127.0.0.1:5173** in a current desktop Chrome, Edge, or Firefox with WebGL enabled. The world listens on loopback port **3001**; Vite serves the viewer on **5173** and proxies its WebSocket. Keep the terminal running. `Ctrl+C` stops both processes. Vite uses strict port 5173: if it is occupied, startup fails visibly rather than moving to 5174/5175. Verify the existing app and stop an obsolete duplicate deliberately; keep the normal app on these fixed ports.
 
 For a built viewer served by the same Node process:
 
@@ -21,7 +21,15 @@ npm run build
 npm start
 ```
 
-Open **http://127.0.0.1:3001**. `PORT` overrides the server port; the development proxy assumes 3001.
+Open **http://127.0.0.1:3001**. The normal world port is 3001; the development proxy targets that same port. Keep one normal app/data owner rather than launching another copy on a new port.
+
+## Development updates and runtime check
+
+`npm run dev` watches `server/` and `shared/`: an edit requests graceful save-and-exit, then starts a new server child and recovers the same `LUMI_DATA_DIRECTORY` (default `diagnostics/runs`). Vite handles viewer `src/` updates through HMR/reload on the same port 5173. Keep the working directory and data directory stable. Checkpoint format changes require an explicit compatible migration or a visible failure; they do not authorize a fresh world or another port.
+
+Edits made in an isolated worktree are watched only by an app launched from that worktree. Editing or pushing there does not reload the server launched from `E:\Coding_Projects\Autonomous Lumi`. Integrate the tested commit into that canonical checkout first, keeping its existing data directory and fixed ports, then verify its watcher/recovery/viewer. Isolation during format changes avoids exposing the running app to half-written migrations.
+
+A Git push publishes commits; it does not itself change local files or restart an app. The watcher normally loaded edits when they were saved before the push. After pushing, verify the current runtime: inspect the watcher's latest child-ready/recovery output, check `/health` for the intended same history/current run and advancing tick, and confirm the viewer reflects the change. If the running process is stale, use one controlled graceful restart on the same ports/data directory, then repeat those checks. [Continuity and recovery](docs/continuity.md) describes the save boundary and failure behavior.
 
 ## Try Phase 1
 
@@ -41,6 +49,20 @@ npm run build
 ```
 
 The build includes TypeScript checking.
+
+## Phase 2.5a: experimental body and internal senses
+
+The deterministic body model adds satiety, reserves, sleep pressure, fatigue and condition, plus coarse hunger/sleep/discomfort perceptions. The current review correction introduces checkpoint 7 / runtime 6 (`lumi-physiology-v2`): actual movement/task slowdown and bounded seeded ordinary internal-sensor noise/attention lapses, preserving the severe-need awareness guard. Final isolated verification passed 316/316 with clean local reviews and exact diagnostic replay; owner-runtime integration and hosted review are not yet claimed. Checkpoint-6/v1 evidence remains historical. New and migrated LIVE worlds start **inactive**. Existing physiology restores preserve their saved activation gate unless an explicit process setting overrides it. This is an experimental game model, not human physiology; no day/night routine or autonomous food/recovery loop is included.
+
+```powershell
+# Prepared isolated lab: no owner history, paid calls or renderer needed.
+npm.cmd run physiology:lab -- --out diagnostics/physiology-lab/hunger-during-task.zip
+npm.cmd run replay -- --bundle diagnostics/physiology-lab/hunger-during-task.zip
+```
+
+The lab emits a sanitized ZIP and `.summary.json` containing actual PASS/FAIL/INCONCLUSIVE assertions and a timeline. **Physiology & present sensations** in the dashboard separates current attended perceptions from private body numbers and encoded episodes. Its prepared lab card gives the CLI command; it is not an interactive launcher. Supplied nutrition is explicitly a test fixture, not proof Lumi found or ate food.
+
+To deliberately activate a local server, set the process variable `$env:LUMI_PHYSIOLOGY_ACTIVE = 'true'` before `npm run dev` or `npm start`. Explicit `'false'` freezes body integration while preserving state/history; removing the variable preserves a restored physiology gate and defaults inactive for a new/older history. This gate is a process setting, not a `.env` file setting. Activation checks checkpoint capacity first; no dashboard/model action silently enables it. See [Physiology and interoception](docs/physiology.md) for rates, fixed-step order, severe-need eligibility, provenance and replay. [Phase 2.5a results](docs/phase-2-5a-results.md) records focused/browser checks and historical provider/lab evidence. [PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) review found three defects that are now locally fixed: explicit LIVE import-history continuity, migration activation-capacity preflight and fractional absorption completion. Final tests passed 308/308, lint/build and independent local re-reviews are clean. Regenerated current-schema lab inspection/replay passed; hosted re-review is pending; previous artifact results are historical.
 
 ## Phase 2c: interpretation and experience
 
@@ -88,7 +110,7 @@ The simulation advances one integer tick per `Simulation.step()` at 30 ticks/sec
 
 The host scheduler runs at most 8 LIVE steps per pump with 16 steps of backlog; experiment budgets are 48/96 so default 6× can handle ordinary jitter. Discarded catch-up is diagnosed. A monotonic or UTC gap of at least 5 seconds is detected before acceleration, freezes local world time across that gap and emits `HOST_SUSPEND`/`HOST_RESUME` diagnostics with observed downtime and skipped ticks. Paused experiments accumulate no catch-up. A gap can represent host sleep, a stall or a clock discontinuity; it is not simulated lived experience. Tests inject these clocks without sleeping the PC.
 
-The complete private checkpoint contains the route cursor, pause/cooldown deadlines, PRNG seed/state, counters, pending inputs and rolling event hash. Schema 2 adds subjective time, synthetic experiences and generic activity; schema 3 adds head/scene state; schema 4 adds hearing/attention and ordered sensor feedback. Current schema 5 adds cognition request/result associations, deduplication, normalized proposals and admitted real experiences. The runtime envelope saves control/scheduler state. Host timers rebase on restore, interrupted requests are reconciled without uncontrolled paid resends, and historical schema/rule replay preserves its original semantics. Active upgrades preserve LIVE history/tick/state; invalid checkpoints fail explicitly. Retired results cannot mutate a replacement run.
+The complete private checkpoint contains the route cursor, pause/cooldown deadlines, PRNG seed/state, counters, pending inputs and rolling event hash. Schema 2 adds subjective time, synthetic experiences and generic activity; schema 3 adds head/scene state; schema 4 adds hearing/attention and ordered sensor feedback. Schema 5 adds cognition request/result associations, deduplication, normalized proposals and admitted real experiences. Schema 6 / runtime envelope 5 adds complete body, absorption, internal attention/encoding and capability-interruption state. Current schema 7 / runtime envelope 6 adds restorable ordinary sensor sampling and fractional task credit; active schema-6 migration preserves its existing history/body/cues/episodes and initializes only new state at the current tick; old schemas replay under their original rules. The runtime envelope saves control/scheduler state. Host timers rebase on restore, interrupted requests are reconciled without uncontrolled paid resends, and historical schema/rule replay preserves its original semantics. Active upgrades preserve LIVE history/tick/state; invalid checkpoints fail explicitly. Retired results cannot mutate a replacement run.
 
 Current rules use the posed door leaf as the slam emitter and validate swept movement against physical colliders, including large supported fixed steps. Older-rule replay retains its recorded source and collision semantics. See the [hearing and compatibility details](docs/spatial-attention.md).
 
@@ -121,4 +143,4 @@ npm.cmd run replay -- --bundle diagnostics/door-invalid-incident.zip
 - `shared/physical-scene.ts`, `shared/eye-pose.ts`, `src/render-scene.ts`, `server/vision/`: shared physical room, deterministic eye pose, isolated first-person capture, filtered grounding and renderer benchmark/CLI.
 - `src/`: Three.js room/avatar, interpolated presentation, Web Audio impact, connection controls.
 
-LIVE continues with zero viewers and automatically recovers its last committed complete checkpoint after restart. Graceful shutdown commits final state; abrupt termination may lose progress since the last successful save (30 real seconds by default, longer after save failures). Startup fails visibly if existing history cannot be recovered; it never silently replaces it with a fresh world. See [Continuity and recovery](docs/continuity.md) for the precise loss boundary. This remains local process recovery, without always-on hosting. Phase 2.5 physiology and Phase 3 learning remain deferred. Geometry/audio is original code; dependencies retain their licenses. System fonts work if Google Fonts is unavailable.
+LIVE continues with zero viewers and automatically recovers its last committed complete checkpoint after restart. Graceful shutdown commits final state; abrupt termination may lose progress since the last successful save (30 real seconds by default, longer after save failures). Startup fails visibly if existing history cannot be recovered; it never silently replaces it with a fresh world. See [Continuity and recovery](docs/continuity.md) for the precise loss boundary. This remains local process recovery, without always-on hosting. Phase 2.5a is limited to the experimental body/internal-sense foundation; a day/night or home recovery loop and Phase 3 learning remain deferred. Geometry/audio is original code; dependencies retain their licenses. System fonts work if Google Fonts is unavailable.

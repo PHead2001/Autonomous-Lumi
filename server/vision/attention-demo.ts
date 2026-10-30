@@ -34,10 +34,10 @@ export async function startAttentionDemo(port = 0) {
   try {
     const listeningPort = await world.listen(port);
     const checkpoint = world.registry.live.checkpoint();
-    if (checkpoint.simulation.schemaVersion !== 5) throw new Error('Attention demo requires the current cognition schema');
+    if (checkpoint.simulation.schemaVersion !== 5 && checkpoint.simulation.schemaVersion !== 6 && checkpoint.simulation.schemaVersion !== 7) throw new Error('Attention demo requires the current cognition schema');
     const visual = createVisibilityFixture(), simulation = checkpoint.simulation;
     checkpoint.mode = 'EXPERIMENT'; checkpoint.control.paused = true; checkpoint.control.speed = 1; checkpoint.control.fastForwardRemaining = 0;
-    if (simulation.schemaVersion === 5) simulation.cognition.identity.mode = 'EXPERIMENT';
+    if ((simulation.schemaVersion === 5 || simulation.schemaVersion === 6 || simulation.schemaVersion === 7)) simulation.cognition.identity.mode = 'EXPERIMENT';
     checkpoint.scheduler.backlogMs = 0; checkpoint.scheduler.config.maxStepsPerPump = 48; checkpoint.scheduler.config.maxBacklogSteps = 96;
     simulation.character = visual.character; simulation.head = visual.head!; simulation.scene = visual.scene!;
     simulation.pauseUntilTick = simulation.tick + 100000;

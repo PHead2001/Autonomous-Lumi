@@ -43,7 +43,7 @@ function connect() {
     if (latestWorld !== identity) { latestWorld = identity; lastSound = 0; }
     scene?.setState(state);
     element('world-time').textContent = `World time ${Math.floor(state.time / 60)}:${Math.floor(state.time % 60).toString().padStart(2, '0')}`;
-    element('activity').textContent = state.character.moving ? 'Lumi is wandering' : 'Lumi is taking a breath';
+    element('activity').textContent = state.physiologyActive && state.capability?.reason === 'asleep' ? 'Lumi is asleep' : state.physiologyActive && state.capability?.reason === 'incapacitated' ? 'Lumi is resting with serious weakness' : state.character.moving ? 'Lumi is wandering' : 'Lumi is awake and still';
     if (message.type === 'sound' && message.event.id > lastSound) { lastSound = message.event.id; audio.play(); }
   };
   current.onclose = () => {
