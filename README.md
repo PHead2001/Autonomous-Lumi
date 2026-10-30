@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173** in a current desktop Chrome, Edge, or Firefox with WebGL enabled. The world listens on loopback port **3001**; Vite serves the viewer on **5173** and proxies its WebSocket. Keep the terminal running. `Ctrl+C` stops both processes. If 5173 is occupied, use Vite's printed viewer URL.
+Open **http://127.0.0.1:5173** in a current desktop Chrome, Edge, or Firefox with WebGL enabled. The world listens on loopback port **3001**; Vite serves the viewer on **5173** and proxies its WebSocket. Keep the terminal running. `Ctrl+C` stops both processes. Vite uses strict port 5173: if it is occupied, startup fails visibly rather than moving to 5174/5175. Verify the existing app and stop an obsolete duplicate deliberately; keep the normal app on these fixed ports.
 
 For a built viewer served by the same Node process:
 
@@ -21,7 +21,13 @@ npm run build
 npm start
 ```
 
-Open **http://127.0.0.1:3001**. `PORT` overrides the server port; the development proxy assumes 3001.
+Open **http://127.0.0.1:3001**. The normal world port is 3001; the development proxy targets that same port. Keep one normal app/data owner rather than launching another copy on a new port.
+
+## Development updates and runtime check
+
+`npm run dev` watches `server/` and `shared/`: an edit requests graceful save-and-exit, then starts a new server child and recovers the same `LUMI_DATA_DIRECTORY` (default `diagnostics/runs`). Vite handles viewer `src/` updates through HMR/reload on the same port 5173. Keep the working directory and data directory stable. Checkpoint format changes require an explicit compatible migration or a visible failure; they do not authorize a fresh world or another port.
+
+A Git push publishes commits; it does not itself change local files or restart an app. The watcher normally loaded edits when they were saved before the push. After pushing, verify the current runtime: inspect the watcher's latest child-ready/recovery output, check `/health` for the intended same history/current run and advancing tick, and confirm the viewer reflects the change. If the running process is stale, use one controlled graceful restart on the same ports/data directory, then repeat those checks. [Continuity and recovery](docs/continuity.md) describes the save boundary and failure behavior.
 
 ## Try Phase 1
 

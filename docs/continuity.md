@@ -44,6 +44,16 @@ You can instead set `LUMI_DATA_DIRECTORY` to a new empty directory. Reset/import
 
 The development supervisor uses local IPC to request save-and-exit before replacing the Node child, including on Windows where process termination signals may be abrupt. It waits up to five seconds, then reports termination and the last-commit recovery boundary. This is local process recovery, not power-failure certification or always-on hosting.
 
+## One development app, fixed ports and updates
+
+The normal command is `npm run dev` from the project folder. The server supervisor recursively watches **`server/` and `shared/`**, requests save-and-exit over IPC, waits for the child to finish, then recovers a new child from the same data directory. Viewer `src/` edits use Vite HMR/reload. Keep the same canonical `LUMI_DATA_DIRECTORY` (normally `diagnostics/runs`) across updates; changing folders must not accidentally select an empty data root.
+
+The normal local world is **127.0.0.1:3001** and viewer **127.0.0.1:5173**. Vite's explicit `port: 5173, strictPort: true` makes an occupied viewer port a startup error; it never silently advances to 5174/5175. Verify an already running app before deliberately replacing an obsolete process. Another port/data directory is not an update or recovery strategy.
+
+Saving source files triggers the watcher; **Git push itself does not change local files** and does not provide runtime proof. After a push, the agent checks the existing watcher/child's latest ready and recovery output, `/health` identity/current run and advancing tick, and the normal viewer's behavior. A server edit should have a new child/run with the same recovered history. A viewer-only edit can update through HMR without a new server run. If those checks show a stale runtime, perform one controlled graceful stop/restart in the same folder, ports and data namespace, then verify recovery and the viewer again.
+
+If an update changes checkpoint format, implement an explicit compatible migration and verify it, or fail startup visibly while preserving saved files. Never substitute a new world, reset/import variable, data directory or extra port to hide incompatibility. The five-second development shutdown bound and last-commit fallback described above still apply; a process restart does not strengthen the power-failure guarantee.
+
 ## Reopen saved experiments
 
 Named checkpoints continue to use `<data>/<world>/<branch>/checkpoints/`. Each new file has a unique ID, ownership/mode/history metadata and a complete runtime envelope. A successful catalog entry appears only after the file is persisted. Startup reuses existing same-history LIVE named checkpoints rather than adding one per restart.
