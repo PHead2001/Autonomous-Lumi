@@ -100,3 +100,24 @@ export function validateInteroceptionState(value:unknown,tick:number,hz:number,c
   for(const t of s.transient){if(!exact(t,['percept','sensedTick','attendedTick','expiresTick'])||!integer(t.sensedTick,0,tick)||!integer(t.attendedTick,t.sensedTick,tick)||!integer(t.expiresTick,tick+1,tick+Math.ceil(config.transientSeconds*hz))||t.expiresTick!==t.attendedTick+Math.ceil(config.transientSeconds*hz)||kinds.has(t.percept?.kind))throw new Error('Invalid internal transient');validateInternalSensation(t.percept);if(Number(t.percept.observationId.slice(21))>=s.nextObservationId||Number(t.percept.attentionId.slice(19))>=s.nextAttentionId)throw new Error('Invalid internal evidence cursor');kinds.add(t.percept.kind);}
   return structuredClone(s);
 }
+
+
+export const CURRENT_PHYSIOLOGY_RULES='lumi-physiology-v2' as const;
+export const INTEROCEPTION_V2_CONFIG={cadenceSeconds:5,noiseAmplitude:.04} as const;
+export interface InteroceptionStateV2 extends Omit<InteroceptionState,'schemaVersion'|'rulesVersion'|'slots'> {
+ schemaVersion:2;rulesVersion:typeof CURRENT_PHYSIOLOGY_RULES;
+ slots:(InternalCueSlot&{sampledBand:'mild'|'moderate'|null})[];
+ sampling:{algorithm:'xorshift32-v1';state:number;nextSampleTick:number;cadenceSeconds:5;noiseAmplitude:.04};
+}
+/** V1 projection is common-field validation only; noisy candidate bands are not private truth. */
+export function interoceptionV1Projection(value:InteroceptionStateV2):InteroceptionState {
+ return {schemaVersion:1,rulesVersion:PHYSIOLOGY_RULES,lastIntegratedTick:value.lastIntegratedTick,nextObservationId:value.nextObservationId,nextAttentionId:value.nextAttentionId,
+ slots:value.slots.map(({sampledBand,...slot})=>{void sampledBand;return {...slot,band:slot.urgent?'severe':slot.candidate?.band??slot.band};}),transient:structuredClone(value.transient)};
+}
+export function validateInteroceptionStateV2(value:unknown,tick:number,hz:number,config:PhysiologyConfig=DEFAULT_PHYSIOLOGY_CONFIG):InteroceptionStateV2 {
+ const s=value as InteroceptionStateV2;
+ if(!exact(s,['schemaVersion','rulesVersion','lastIntegratedTick','nextObservationId','nextAttentionId','slots','transient','sampling'])||s.schemaVersion!==2||s.rulesVersion!==CURRENT_PHYSIOLOGY_RULES||!Array.isArray(s.slots)||s.slots.length!==3)throw new Error('Invalid V2 interoception state');
+ const p=s.sampling;if(!exact(p,['algorithm','state','nextSampleTick','cadenceSeconds','noiseAmplitude'])||p.algorithm!=='xorshift32-v1'||!integer(p.state,1,0xffffffff)||!integer(p.nextSampleTick,0,tick+5*hz)||p.cadenceSeconds!==5||p.noiseAmplitude!==.04)throw new Error('Invalid V2 internal sampling');
+ for(const slot of s.slots){if(!exact(slot,['kind','band','lastSensedTick','candidate','urgent','sampledBand'])||slot.band!==null&&!band(slot.band)||slot.sampledBand!==null&&!['mild','moderate'].includes(slot.sampledBand)||slot.urgent!==null&&slot.band!=='severe'||slot.candidate&&slot.candidate.band==='severe'&&slot.urgent===null)throw new Error('Invalid V2 internal cue');}
+ validateInteroceptionState(interoceptionV1Projection(s),tick,hz,config);return structuredClone(s);
+}

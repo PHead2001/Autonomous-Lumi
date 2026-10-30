@@ -1,3 +1,4 @@
+import { BranchRuntime } from '../server/branch-runtime.js';
 import { runPhysiologyVerification, verificationOptions } from '../server/cognition/verify.js';
 import { CognitionProviders } from '../server/cognition/providers.js';
 import test from 'node:test';
@@ -10,20 +11,21 @@ import { ChromiumRenderer } from '../server/vision/renderer.js';
 import { loadCognitionConfig, safeCognitionConfig } from '../server/cognition/config.js';
 import type { CognitionProviderClient } from '../server/cognition/coordinator.js';
 import type { InterpretationInput } from '../server/cognition/providers.js';
-const waitFor=(predicate:()=>boolean)=>new Promise<void>((done,reject)=>{const deadline=setTimeout(()=>{clearInterval(timer);reject(new Error('Preflight timeout'));},10000),timer=setInterval(()=>{if(predicate()){clearTimeout(deadline);clearInterval(timer);done();}},20);});
+const waitFor=(predicate:()=>boolean,timeoutMs=10000)=>new Promise<void>((done,reject)=>{const deadline=setTimeout(()=>{clearInterval(timer);reject(new Error('Preflight timeout'));},timeoutMs),timer=setInterval(()=>{if(predicate()){clearTimeout(deadline);clearInterval(timer);done();}},20);});
 test('actual renderer and FAKE provider preflight attends before an independently requested head milestone frame',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'lumi-body-wire-real-'));
  const config=loadCognitionConfig({loadEnv:false,env:{LUMI_COGNITION_ENABLED:'true',OPENROUTER_API_KEY:'FAKE-NO-TRANSPORT'}});let calls=0,sent:InterpretationInput|null=null;
  const providers:CognitionProviderClient={budget:{snapshot:async()=>({ceilingUsd:1,accountedUsd:0,pending:0,unknown:0,reportedUsd:0,estimatedUsd:0})},status:()=>({...safeCognitionConfig(config),pending:0,queued:0}),interpret:async input=>{calls++;sent=input;return {status:'refused',content:null,provider:'openrouter',model:'FAKE/offline',modelRevision:null,latencyMs:0,attempts:0,inputTokens:null,outputTokens:null,costUsd:null,costBasis:'unknown',reservedUsd:0};}};
- const world=createWorldServer({historyId:'fake-provider-body-preflight',diagnosticsDirectory:directory,renderer:new ChromiumRenderer(),physiology:{active:true,genesisPreset:'acceptance-fast-v1'},cognition:{config,providers}});
+ const genesis=new BranchRuntime({worldId:'lumi',branchId:'live',historyId:'fake-provider-body-preflight',mode:'LIVE',offline:true,physiology:{active:true,genesisPreset:'acceptance-fast-v1'}}),checkpoint=genesis.checkpoint();checkpoint.simulation.pauseUntilTick=120*checkpoint.simulation.config.hz;checkpoint.simulation.character.moving=false;await genesis.close();
+ const world=createWorldServer({checkpoint,historyId:'fake-provider-body-preflight',diagnosticsDirectory:directory,renderer:new ChromiumRenderer(),physiology:{active:true},cognition:{config,providers}});
  try{
-  await world.listen(0);await waitFor(()=>{const cp=world.simulation.checkpoint();return cp.schemaVersion===6&&cp.interoception.transient.length>0;});assert.equal(calls,0);
+  await world.listen(0);const initial=world.simulation.checkpoint();if(initial.schemaVersion!==7)throw new Error('Current physiology required');await waitFor(()=>{const cp=world.simulation.checkpoint();return cp.schemaVersion===7&&cp.interoception.transient.length>0;},(initial.body.config.urgentAttentionSeconds+6)*1000);assert.equal(calls,0);
   world.registry.live.enqueue({type:'turn_head',yawDelta:.15,pitchDelta:0,sceneRevision:world.simulation.snapshot().scene!.revision});
   await waitFor(()=>calls===1);const input=sent as InterpretationInput|null;assert.ok(input);assert.deepEqual(input.context.internalSensations,[{kind:'hunger',band:'severe',description:'My stomach feels insistently empty.',uncertainty:'coarse_internal_signal'}]);
-  const cp=world.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Schema6 required');assert.equal(cp.cognition.requests[0].request.promptRevision,'lumi-vision-prompt-v5');
+  const cp=world.simulation.checkpoint();if(cp.schemaVersion!==7)throw new Error('Schema6 required');assert.equal(cp.cognition.requests[0].request.promptRevision,'lumi-vision-prompt-v5');
   assert.equal(cp.cognition.requests[0].request.selection.source,'actual_renderer');assert.equal(cp.body.lastEffectSequence,0);assert.equal(cp.physiology.origin.evidenceEligibility,'eligible');assert.equal(calls,1);
   t.diagnostic(JSON.stringify({externalCalls:0,profile:'lumi-vision-prompt-v5',attendedSensations:input.context.internalSensations,source:cp.cognition.requests[0].request.selection.source}));
- }finally{await world.close();await rm(directory,{recursive:true,force:true});}
+ }catch(error){const cp=world.simulation.checkpoint();t.diagnostic(JSON.stringify({tick:cp.tick,schema:cp.schemaVersion,head:world.simulation.snapshot().head,attention:'attention' in cp?{pending:cp.attention.pending,lastCapture:cp.attention.lastCapture}:null,automatic:world.automatic.summary(world.registry.live.target),capture:{status:world.vision.manager.view(world.registry.live.target).latest?.status,error:world.vision.manager.view(world.registry.live.target).latest?.error},requests:'cognition' in cp?cp.cognition.requests.map(r=>({id:r.request.requestId,status:r.status})):[]}));throw error;}finally{await world.close();await rm(directory,{recursive:true,force:true});}
 });
 
 for(const failureStage of ['initial-close','restored-close','restart-listen'] as const)test(`physiology verification preserves normalized response and evidence after ${failureStage} failure without external calls`,async()=>{

@@ -3,7 +3,7 @@ import { readdir, mkdir, unlink } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { atomicJson, readBoundedJson, assertOwnedPath, recoveryCheckpointPayload } from './checkpoint-storage.js';
 import { validateRuntimeCheckpoint, hashRuntimeCheckpoint, validId, type RuntimeCheckpoint } from './branch-runtime.js';
-import { Simulation, PhysiologySimulation, validatePhysiologyCheckpoint } from './simulation.js';
+import { Simulation, PhysiologySimulation, validateCheckpoint } from './simulation.js';
 import { fitsCognitionStorage } from './checkpoint-capacity.js';
 
 interface Generation {file:string;generation:number;tick:number;worldTime:number;savedAt:string;hash:string}
@@ -30,13 +30,13 @@ export class RecoveryStore {
       const historyId=randomUUID();
       if(checkpoint&&typeof checkpoint==='object'&&(checkpoint as {kind?:unknown}).kind==='lumi-branch-runtime'){
         const imported=validateRuntimeCheckpoint(checkpoint);
-        if(imported.simulation.schemaVersion===5||imported.simulation.schemaVersion===6){
-          const source=imported.simulation.schemaVersion===6?imported.simulation:new PhysiologySimulation({mode:'LIVE',checkpoint:imported.simulation,historical:true}).checkpoint();
+        if(imported.simulation.schemaVersion===5||imported.simulation.schemaVersion===6||imported.simulation.schemaVersion===7){
+          const source=imported.simulation.schemaVersion>=6?imported.simulation as import('./simulation.js').CheckpointV6|import('./simulation.js').CheckpointV7:new PhysiologySimulation({mode:'LIVE',checkpoint:imported.simulation,historical:true}).checkpoint();
           if(source.physiology.legacyImport!==null)throw new Error('Unverified experiment ancestry cannot enter LIVE checkpoint import');
           if(source.physiology.verifiedCheckpointImports.length>=8)throw new Error('Verified LIVE checkpoint import limit reached (8); source history preserved');
           source.physiology.verifiedCheckpointImports.push({kind:'explicit-live-checkpoint-import-v1',sourceHistoryId:source.cognition.identity.historyId,destinationHistoryId:historyId,importTick:source.tick});
-          source.cognition.identity.historyId=historyId;validatePhysiologyCheckpoint(source);if(!fitsCognitionStorage(source))throw new Error('Checkpoint capacity prevents LIVE checkpoint import; source history preserved');
-          checkpoint={...imported,schemaVersion:5,simulation:source};validateRuntimeCheckpoint(checkpoint);
+          source.cognition.identity.historyId=historyId;validateCheckpoint(source);if(!fitsCognitionStorage(source))throw new Error('Checkpoint capacity prevents LIVE checkpoint import; source history preserved');
+          checkpoint={...imported,schemaVersion:source.schemaVersion===7?6:5,simulation:source};validateRuntimeCheckpoint(checkpoint);
         }
       }
       const store=new RecoveryStore(base,historyId,intervalMs,'override',options.listRecoveryFiles);await mkdir(base,{recursive:true});await assertOwnedPath(base,store.directory);await mkdir(store.directory,{recursive:true});return {store,checkpoint};
@@ -51,7 +51,7 @@ export class RecoveryStore {
     const failures:string[]=[];for(const [index,g]of [m.latest,m.previous].entries()){if(!g)continue;try{const payload=await readBoundedJson(join(store.directory,g.file),base) as RecoveryPayload;if(payload.schemaVersion!==1||payload.kind!=='lumi-live-recovery'||payload.historyId!==store.historyId||payload.generation!==g.generation)throw new Error('Recovery payload has wrong history/mode/generation');const cp=validateRuntimeCheckpoint(payload.checkpoint);if(cp.mode!=='LIVE'||cp.simulation.tick!==g.tick||cp.simulation.tick/cp.simulation.config.hz!==g.worldTime||hashRuntimeCheckpoint(cp)!==g.hash)throw new Error('Recovery payload failed LIVE state/hash validation');
         // Keep the validated pre-upgrade generation beyond the ordinary two-generation
         // rotation. Upgrading sensor rules never resets or destroys its source.
-        const upgradeArchive=cp.simulation.schemaVersion===2?'pre-vision-schema2-':cp.simulation.rulesVersion==='lumi-eyes-v1'?'pre-vision-rules-v1-':cp.simulation.schemaVersion===3?'pre-attention-schema3-':cp.simulation.schemaVersion===4&&cp.simulation.rulesVersion==='lumi-attention-v1'?'pre-attention-rules-v1-':cp.simulation.schemaVersion===4?'pre-cognition-schema4-':cp.simulation.schemaVersion===5?'pre-physiology-schema5-':null;
+        const upgradeArchive=cp.simulation.schemaVersion===2?'pre-vision-schema2-':cp.simulation.rulesVersion==='lumi-eyes-v1'?'pre-vision-rules-v1-':cp.simulation.schemaVersion===3?'pre-attention-schema3-':cp.simulation.schemaVersion===4&&cp.simulation.rulesVersion==='lumi-attention-v1'?'pre-attention-rules-v1-':cp.simulation.schemaVersion===4?'pre-cognition-schema4-':cp.simulation.schemaVersion===5?'pre-physiology-schema5-':cp.simulation.schemaVersion===6?'pre-physiology-v2-schema6-':null;
         if(upgradeArchive){const backup=join(store.directory,upgradeArchive+g.file);try{await atomicJson(backup,payload,true,base);}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;const existing=await readBoundedJson(backup,base) as RecoveryPayload;if(existing.historyId!==store.historyId||existing.generation!==g.generation||hashRuntimeCheckpoint(validateRuntimeCheckpoint(existing.checkpoint))!==g.hash)throw new Error('Existing pre-vision recovery backup is invalid; files preserved');}}
         store.current=index===0?m:{...m,latest:g,previous:null};store.lastOperationCursor=cp.control.nextOperationSequence;store.statusValue.lastCommitted=clean(g);store.statusValue.recovered=clean(g);store.statusValue.fallback=index>0;store.statusValue.checkpointAgeMs=Math.max(0,Date.now()-Date.parse(g.savedAt));if(index>0)store.statusValue.saveError='Latest generation invalid; recovered previous generation: '+failures.join('; ');return {store,checkpoint:cp};
       }catch(e){failures.push(message(e));}}

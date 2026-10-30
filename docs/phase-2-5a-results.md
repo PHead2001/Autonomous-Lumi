@@ -1,5 +1,44 @@
 # Phase 2.5a verification results
 
+## Current v2 correction
+
+The repair is isolated in the `physiology-review-fixes` worktree. It does not enable or migrate owner LIVE. Current contract is **checkpoint 7 / runtime 6 / `lumi-physiology-v2`**; body-rate math stays v1. Actual walking/task slowdown and restorable noisy ordinary sensing are implemented, while severe truth monitoring/deadline forcing bypasses noise/lapses. Active 6→7 migration preserves body/cues/deadlines/memories/gate/history and initializes only new sampling/task-credit fields at the current tick. Circadian phase remains tracked-only. No home/day/night/2.5b system or new paid call is included.
+
+| Check | Actual evidence |
+| --- | --- |
+| V2 mechanics | **7/7**, plus **21** pure reducer and **17** integration checks |
+| Measured execution | 20 simulated seconds: fatigue 0.05 → **12.128 m / 585 work units**; fatigue 0.95 → **9.448 m / 315 units** |
+| Ordinary awareness under impairment | 32 seeded moderate-sleep fixtures (pressure 0.74, fatigue 0.8) attended in **5–40 world seconds**, before severe; this is a measured fixture range, not a new deadline guarantee |
+| Actual renderer + FAKE provider | **1/1**, NVIDIA ANGLE, zero external calls; current v5 internal context |
+| Historical actual checkpoint-6 ZIP | Original `pr9-final-hunger.zip` exact replay **PASS** with unchanged state/event/runtime hashes shown below |
+| New V2 artifact | COMPLETE, **9/9** assertions and independent exact replay **PASS**, detailed below |
+| Test stability | Baseline **308/308**, focused **36/36** and Windows cleanup **15/15** passed before final v2 full checks; isolated held-budget regression fails closed with zero dispatch then succeeds after release |
+| Full suite | Initial new run **307/316**, nine stale schema fixtures corrected and affected **10/10 PASS**; final rerun **316/316 PASS**, zero failures in **28.75 s**, `diagnostics/physiology-v2-final-test.log`; initial failure log retained |
+| Lint/build | Full lint/build passed before test-only corrections; final scoped lint of four changed tests and TypeScript passed (`physiology-v2-final-lint-scoped.log` / `physiology-v2-final-typecheck.log`) |
+| Reviews | Independent high-risk Astra and ordinary current-diff reviews clean, no findings. No hosted clean result or owner-runtime upgrade claimed for this repair |
+
+The test command now uses `--test-concurrency=4`. The host reports 24 available logical workers across 44 test files; this modest cap reduces concurrent process/CIM/ledger fixtures without changing production financial leases, cleanup deadlines or assertions. The prior sporadic Windows process-query timeout was not reproduced, and no blind timeout increase is claimed. No benchmark/performance campaign is implied.
+
+The actual-renderer fixture now declares a stationary 120-world-second genesis window, preventing a genuine stale image after a waypoint turn before the new five-second first sample. Runtime freshness/safety guards were not relaxed. Existing pixel-confidence behavior is unchanged.
+
+### Current V2 diagnostic artifact
+
+`diagnostics/physiology-v2-hunger-final.zip` is **188,311 bytes**, **13 entries**, COMPLETE with **3,796 records**, **2 ordered inputs / 3,784 events**, zero gaps or drops. Both checkpoint/runtime payloads carry the new fractional credit and dedicated sampling PRNG/cadence. The summary passed **9/9**. Independent current replay passed at tick **50,926**; log: `diagnostics/physiology-v2-independent-replay.log`.
+
+```powershell
+npm.cmd run replay -- --bundle diagnostics/physiology-v2-hunger-final.zip
+```
+
+| Canonical evidence | Hash |
+| --- | --- |
+| State | `171b518da373bdd2e86e1300dfc28ba6851e8f1410d6365c85742efe269f2227` |
+| Events | `295e9a4482ab2bb8063e936d1ca9c8383b6b6588885107bb7356bf10c81d49fa` |
+| Runtime | `69b97d58faa266574f002205bb1dd89b803787c80088e19083182298b91552df` |
+
+The noisy mild checkpoint is tick **24,000**, moderate **40,000**. Exact severe crossing **49,091**→attention **49,120** remains **29 raw/eligible seconds**, all exclusions zero and no breach. The labelled nutrition fixture resolves the need at **49,126**; absorption completes at **50,925**. This is still a fixture, not evidence of food acquisition/eating. No original-runtime activation or actual owner migration has been verified by these isolated checks.
+
+## Historical checkpoint-6 / v1 evidence
+
 [PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) hosted review found three actionable defects: validated LIVE checkpoint override history continuity, activation capacity on older-schema migration, and fractional absorption completion. All three are locally fixed: final `npm.cmd test` passed **308/308**, zero failures in **18.86 s**; lint/build passed, with the existing >500 kB chunk advisory only. Independent local re-reviews are clean. Logs: `diagnostics/physiology-pr9-final-{test,lint,build}.txt`. The regenerated current-chain lab is independently verified COMPLETE/replay PASS. Hosted threads await push/re-review; no clean hosted outcome is claimed. Earlier paid artifacts remain historical development-contract evidence.
 
 ## Prior verification evidence

@@ -24,7 +24,7 @@ test('vision bundle preserves typed backend/format evidence and describes head r
 
 test('generated instructions assert a saved activity midpoint only when the captured activity has one',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'lumi-midpoint-export-'));t.after(()=>rm(directory,{recursive:true,force:true}));
-  const original=new BranchRuntime({worldId:'lumi',branchId:'template',mode:'EXPERIMENT',offline:true}),cp=original.checkpoint();cp.simulation.activity={activityId:1,status:'paused',cursor:5,totalTicks:10,appliedMilestones:[],completionCount:0};
+  const original=new BranchRuntime({worldId:'lumi',branchId:'template',mode:'EXPERIMENT',offline:true});original.simulation.applyAction({type:'activity-start',totalTicks:10});for(let i=0;i<5;i++)original.simulation.step();original.simulation.applyAction({type:'activity-pause'});const cp=original.checkpoint();await original.close();assert.equal(cp.simulation.activity.cursor,5);
   const runtime=new BranchRuntime({directory,worldId:'lumi',branchId:'midpoint',mode:'EXPERIMENT',checkpoint:cp});await runtime.close();
   const out=join(directory,'midpoint.zip');await exportIncident({runDirectory:runtime.recorder!.runDirectory,out});const reproduction=strFromU8((await inspectBundle(out))['REPRODUCTION.md']);assert.match(reproduction,/This case includes a saved activity midpoint/);assert.ok(!reproduction.includes('No saved activity midpoint is asserted'));
 });

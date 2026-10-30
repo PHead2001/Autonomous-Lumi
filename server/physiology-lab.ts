@@ -7,10 +7,10 @@ import { createWorldServer } from './world-server.js';
 import { loadCognitionConfig } from './cognition/config.js';
 import { exportIncident, replayBundle } from './diagnostics/bundle.js';
 import { readRun } from './diagnostics/recorder.js';
-import type { CheckpointV6 } from './simulation.js';
+import type { CheckpointV7 } from './simulation.js';
 
 export interface LabAssertion { name:string; expected:string; observed:unknown; status:'PASS'|'FAIL'|'INCONCLUSIVE' }
-const bodyCheckpoint=(runtime:BranchRuntime):CheckpointV6=>{const cp=runtime.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Physiology schema required');return cp;};
+const bodyCheckpoint=(runtime:BranchRuntime):CheckpointV7=>{const cp=runtime.simulation.checkpoint();if(cp.schemaVersion!==7)throw new Error('Physiology schema required');return cp;};
 /** This entry owns a disposable namespace. It never loads owner recovery, dotenv,
  * provider credentials or the application budget, even if normal cognition is on. */
 export async function runHungerLab(options:{out:string;directory?:string}) {
@@ -23,8 +23,8 @@ export async function runHungerLab(options:{out:string;directory?:string}) {
   // Explicit laboratory genesis fixture: one-second ticks, production rates and
   // initial stores. This is a calibration experiment, never an owner migration.
   fixture.simulation.config.hz=1;
-  if(fixture.simulation.schemaVersion!==6)throw new Error('Physiology schema required');
-  fixture.simulation.body.hz=1;fixture.simulation.pauseUntilTick=100000;fixture.simulation.character.moving=false;fixture.scheduler.config.hz=1;
+  if(fixture.simulation.schemaVersion!==7)throw new Error('Physiology schema required');
+  fixture.simulation.body.hz=1;fixture.simulation.interoception.sampling.nextSampleTick=fixture.simulation.tick+5;fixture.simulation.pauseUntilTick=100000;fixture.simulation.character.moving=false;fixture.scheduler.config.hz=1;
   const app=createWorldServer({checkpoint:fixture,historyId,diagnosticsDirectory:directory,clock,autoSchedule:false,automaticCaptures:false,cognition:{config:loadCognitionConfig({env:{},loadEnv:false})}});
   const assertions:LabAssertion[]=[];
   const check=(name:string,expected:string,observed:unknown,pass:boolean|null)=>assertions.push({name,expected,observed,status:pass===null?'INCONCLUSIVE':pass?'PASS':'FAIL'});
@@ -36,9 +36,9 @@ export async function runHungerLab(options:{out:string;directory?:string}) {
     runtime.applyControl({type:'speed',speed:1});runtime.enqueueInternalEncoding(false);
     const advance=async(ticks:number)=>{for(let i=0;i<ticks;i++){elapsed+=1000;if(runtime!.pump()!==1)throw new Error('Laboratory clock failed to advance one fixed tick');if(i%512===511){await runtime!.recorder?.flush();await new Promise<void>(done=>setImmediate(done));}}};
     await advance(18000);runtime.applyControl({type:'activity-start',totalTicks:100000});
-    await advance(2000);const mild=bodyCheckpoint(runtime);
+    await advance(6000);const mild=bodyCheckpoint(runtime);
     check('mild cue ignored during focus','mild hunger sensed, no attended hunger', {band:mild.interoception.slots[0].band,transient:mild.interoception.transient.length,activity:mild.activity.status},mild.interoception.slots[0].band==='mild'&&!mild.interoception.transient.some(s=>s.percept.kind==='hunger')&&mild.activity.status==='running');
-    await advance(20000);const rising=bodyCheckpoint(runtime);
+    await advance(16000);const rising=bodyCheckpoint(runtime);
     check('rising need','moderate hunger while activity continues',{band:rising.interoception.slots[0].band,status:rising.activity.status},rising.interoception.slots[0].band==='moderate'&&rising.activity.status==='running');
     await advance(9125);const severe=bodyCheckpoint(runtime),urgent=severe.interoception.slots[0].urgent;
     const present='providerInternalSensations' in runtime.simulation?runtime.simulation.providerInternalSensations():[];

@@ -16,8 +16,8 @@ test('disposable LIVE accepts real body awareness/encoding without fixture effec
  const app=createWorldServer({historyId:'disposable-body-acceptance',diagnosticsDirectory:directory,clock,autoSchedule:false,automaticCaptures:false,physiology:{active:true,genesisPreset:'acceptance-fast-v1'},cognition:{config}});
  let restarted:ReturnType<typeof createWorldServer>|undefined;
  try{
-  const port=await app.listen(0);elapsed+=100;app.registry.live.pump();
-  const cp=app.registry.live.checkpoint();if(cp.simulation.schemaVersion!==6)throw new Error('Schema6 required');
+  const port=await app.listen(0);for(let i=0;i<310&&(app.registry.live.simulation.checkpoint() as import('../server/simulation.js').CheckpointV7).internalExperiences.length===0;i++){elapsed+=100;app.registry.live.pump();}
+  const cp=app.registry.live.checkpoint();if(cp.simulation.schemaVersion!==7)throw new Error('Schema6 required');
   assert.equal(cp.simulation.body.lastEffectSequence,0);assert.equal(cp.simulation.physiology.origin.evidenceEligibility,'eligible');
   assert.equal(cp.simulation.internalExperiences.length,1);assert.equal(cp.simulation.internalExperiences[0].identity.mode,'LIVE');
   assert.equal(cp.simulation.cognition.requests.length,0);
@@ -28,7 +28,7 @@ test('disposable LIVE accepts real body awareness/encoding without fixture effec
   const frozen=app.registry.live.simulation.checkpoint();elapsed+=60000;assert.equal(app.registry.live.pump(),0);assert.deepEqual(app.registry.live.simulation.checkpoint(),frozen,'host suspension cannot integrate hunger or in-world sleep recovery');
   await app.close();
   restarted=createWorldServer({historyId:'disposable-body-acceptance',checkpoint:cp,diagnosticsDirectory:directory,clock,autoSchedule:false,automaticCaptures:false,cognition:{config}});
-  await restarted.listen(0);const restored=restarted.registry.live.simulation.checkpoint();if(restored.schemaVersion!==6)throw new Error('Schema6 required');
+  await restarted.listen(0);const restored=restarted.registry.live.simulation.checkpoint();if(restored.schemaVersion!==7)throw new Error('Schema6 required');
   assert.deepEqual(restored.internalExperiences,cp.simulation.internalExperiences);assert.deepEqual(restored.character,cp.simulation.character);assert.equal(restored.body.active,true);
  }finally{await app.close();await restarted?.close();await rm(directory,{recursive:true,force:true});}
 });
@@ -54,7 +54,7 @@ test('short actual zero-viewer host run commits and restarts disposable physiolo
   const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();assert.equal(health.viewers,0);assert.ok(health.tick>=3);
   await app.close();const saved=await RecoveryStore.open({directory});
   restarted=createWorldServer({diagnosticsDirectory:directory,recoveryStore:saved.store,checkpoint:saved.checkpoint,autoSchedule:false,automaticCaptures:false,cognition:{config}});
-  await restarted.listen(0);const cp=restarted.registry.live.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Schema6 required');
-  assert.ok(cp.tick>=health.tick);assert.equal(cp.body.active,true);assert.equal(cp.internalExperiences.length,1);assert.equal(cp.internalExperiences[0].identity.historyId,first.store.historyId);assert.equal(cp.cognition.requests.length,0);
+  await restarted.listen(0);const cp=restarted.registry.live.simulation.checkpoint();if(cp.schemaVersion!==7)throw new Error('Schema6 required');
+  const savedState=(saved.checkpoint as import('../server/branch-runtime.js').RuntimeCheckpoint).simulation as import('../server/simulation.js').CheckpointV7;assert.ok(cp.tick>=health.tick);assert.equal(cp.body.active,true);assert.deepEqual(cp.body,savedState.body);assert.deepEqual(cp.interoception,savedState.interoception);assert.deepEqual(cp.internalExperiences,savedState.internalExperiences);assert.equal(cp.cognition.requests.length,0);
  }finally{await app.close();await restarted?.close();await rm(directory,{recursive:true,force:true});}
 });

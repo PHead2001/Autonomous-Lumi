@@ -1,3 +1,5 @@
+import { SeededRandom } from './prng.js';
+import { CURRENT_PHYSIOLOGY_RULES, INTEROCEPTION_V2_CONFIG, type InteroceptionStateV2 } from '../shared/physiology-protocol.js';
 import {
   DEFAULT_PHYSIOLOGY_CONFIG, INTERNAL_KINDS, PHYSIOLOGY_RULES, internalDescription, validatePhysiologyEffect,
   type BodyState, type BodyMode, type BodyCapability, type BodyImpairment, type BodyStepContext, type PhysiologyEffect,
@@ -152,10 +154,53 @@ export function advanceInteroception(previous:InteroceptionState,body:BodyState,
   return {state,events,attended};
 }
 /** Construct a new allowlisted object even if private metadata was attached upstream. */
-export function presentInternalSensations(state:InteroceptionState,active:boolean):InternalSensation[] {
+export function presentInternalSensations(state:InteroceptionState|InteroceptionStateV2,active:boolean):InternalSensation[] {
   return active?state.transient.map(({percept:p})=>({observationId:p.observationId,attentionId:p.attentionId,kind:p.kind,band:p.band,description:p.description,uncertainty:p.uncertainty,provenance:p.provenance})):[];
 }
 /** Provider-facing sensation fields only. Correlation IDs and provenance stay in trusted evidence. */
-export function providerInternalSensations(state:InteroceptionState,active:boolean):InternalSensationContext[] {
+export function providerInternalSensations(state:InteroceptionState|InteroceptionStateV2,active:boolean):InternalSensationContext[] {
   return active?state.transient.map(({percept:p})=>({kind:p.kind,band:p.band,description:p.description,uncertainty:p.uncertainty})):[];
+}
+
+
+/** Migration consumes no randomness and invents no past sensory samples. */
+export function upgradeInteroceptionV2(previous:InteroceptionState,seed:number,hz:number):InteroceptionStateV2 {
+ const state=((seed^0x6d2b79f5)>>>0)||1;
+ return {...structuredClone(previous),schemaVersion:2,rulesVersion:CURRENT_PHYSIOLOGY_RULES,slots:previous.slots.map(slot=>({...structuredClone(slot),sampledBand:slot.band==='severe'?null:slot.band})),sampling:{algorithm:'xorshift32-v1',state,nextSampleTick:previous.lastIntegratedTick+INTEROCEPTION_V2_CONFIG.cadenceSeconds*hz,...INTEROCEPTION_V2_CONFIG}};
+}
+export function advanceInteroceptionV2(previous:InteroceptionStateV2,body:BodyState,ctx:Omit<InteroceptionStepContext,'ordinaryAttentionAllowed'>&{ordinaryAttentionAllowed:boolean;ordinaryAttentionScale:number}):{state:InteroceptionStateV2;events:PhysiologyEvent[];attended:InternalSensation[]} {
+ clock(ctx.tick,ctx.hz);
+ if(ctx.tick!==previous.lastIntegratedTick+1||ctx.tick!==body.lastIntegratedTick||ctx.hz!==body.hz||!Number.isFinite(ctx.ordinaryAttentionScale)||ctx.ordinaryAttentionScale<.4||ctx.ordinaryAttentionScale>1||![ctx.safetyPreempted,ctx.capableAtIntervalStart,ctx.ordinaryAttentionAllowed].every(v=>typeof v==='boolean'))throw new Error('Invalid V2 internal interval');
+ const state=structuredClone(previous);state.lastIntegratedTick=ctx.tick;state.transient=state.transient.filter(t=>t.expiresTick>ctx.tick);
+ const events:PhysiologyEvent[]=[],attended:InternalSensation[]=[];const emit=(type:string,data:PhysiologyEvent['data'])=>events.push({type,tick:ctx.tick,data});
+ if(!body.active){for(const slot of state.slots)if(slot.urgent&&slot.urgent.firstAttendedTick===null)slot.urgent.excludedInactiveTicks++;return {state,events,attended};}
+ const capable=bodyCapability(body).canAttend,sample=capable&&ctx.tick>=state.sampling.nextSampleTick,rng=new SeededRandom(state.sampling.state,state.sampling.state);
+ if(sample)state.sampling.nextSampleTick=ctx.tick+state.sampling.cadenceSeconds*ctx.hz;
+ const deadline=Math.ceil(body.config.urgentAttentionSeconds*ctx.hz),forceAt=Math.max(0,deadline-1),cooldown=Math.ceil(body.config.cueCooldownSeconds*ctx.hz);
+ for(const slot of state.slots){
+  // Exactly two stable-order draws per channel at each capable sample, even with no cue.
+  const noise=sample?(rng.next()*2-1)*state.sampling.noiseAmplitude:0,attentionDraw=sample?rng.next():1;
+  const truthBand=sensationBand(body,slot.kind),changed=truthBand!==slot.band;slot.band=truthBand;
+  if(truthBand!=='severe'&&slot.urgent){emit('INTERNAL_URGENT_RESOLVED',{kind:slot.kind,crossingTick:slot.urgent.crossingTick,firstAttendedTick:slot.urgent.firstAttendedTick,eligibleTicks:slot.urgent.eligibleTicks,excludedSafetyTicks:slot.urgent.excludedSafetyTicks,excludedIncapacityTicks:slot.urgent.excludedIncapacityTicks,excludedInactiveTicks:slot.urgent.excludedInactiveTicks});slot.urgent=null;slot.candidate=null;}
+  if(truthBand==='severe'&&!slot.urgent){slot.urgent={crossingTick:ctx.tick,firstAttendedTick:null,eligibleTicks:0,excludedSafetyTicks:0,excludedIncapacityTicks:0,excludedInactiveTicks:0,retries:0,lastAttemptTick:null,breachTick:null};slot.candidate=null;emit('INTERNAL_URGENT_CROSSED',{kind:slot.kind,crossingTick:ctx.tick,deadlineEligibleTicks:deadline});}
+  const urgent=slot.urgent;
+  if(urgent&&urgent.firstAttendedTick===null&&ctx.tick>urgent.crossingTick){if(!ctx.capableAtIntervalStart)urgent.excludedIncapacityTicks++;else if(ctx.safetyPreempted)urgent.excludedSafetyTicks++;else urgent.eligibleTicks++;}
+  if(sample){const need=(slot.kind==='hunger'?1-body.satiety:slot.kind==='sleep'?body.sleepPressure:Math.max(1-body.condition,body.fatigue*.8))+noise,thresholds=slot.kind==='discomfort'?[.3,.5]:slot.kind==='sleep'?[.45,.65]:[.45,.7];slot.sampledBand=need>=thresholds[1]?'moderate':need>=thresholds[0]?'mild':null;}
+  const sensation=urgent?'severe':slot.sampledBand;
+  const sensedOpportunity=urgent?capable&&(changed||slot.candidate===null&&urgent.firstAttendedTick===null||slot.lastSensedTick===null||ctx.tick-slot.lastSensedTick>=cooldown):sample;
+  if(sensedOpportunity&&sensation!==null&&(urgent||slot.lastSensedTick===null||ctx.tick-slot.lastSensedTick>=cooldown||slot.candidate===null&&slot.sampledBand!==previous.slots.find(s=>s.kind===slot.kind)!.sampledBand)){
+   slot.candidate={observationId:`internal-observation-${state.nextObservationId++}`,kind:slot.kind,band:sensation,sensedTick:ctx.tick};slot.lastSensedTick=ctx.tick;emit('INTERNAL_SENSED',{observationId:slot.candidate.observationId,kind:slot.kind,band:sensation});
+  }
+  if(!urgent&&slot.candidate&&ctx.tick-slot.candidate.sensedTick>=Math.ceil(body.config.transientSeconds*ctx.hz))slot.candidate=null;
+  const candidate=slot.candidate;if(!candidate)continue;
+  const forced=!!urgent&&urgent.firstAttendedTick===null&&urgent.eligibleTicks>=forceAt;
+  const ordinary=sample&&ctx.ordinaryAttentionAllowed&&attentionDraw<ctx.ordinaryAttentionScale;
+  if(!capable||ctx.safetyPreempted||!forced&&!ordinary){if(urgent&&urgent.firstAttendedTick===null&&(urgent.lastAttemptTick===null||ctx.tick-urgent.lastAttemptTick>=ctx.hz)){urgent.retries++;urgent.lastAttemptTick=ctx.tick;}if(ctx.tick===candidate.sensedTick)emit('INTERNAL_IGNORED',{observationId:candidate.observationId,kind:slot.kind,reason:!capable?'incapacity':ctx.safetyPreempted?'safety_preemption':!ctx.ordinaryAttentionAllowed?'ordinary_suppression':!sample?'sampling_wait':'ordinary_lapse'});continue;}
+  const percept:InternalSensation={observationId:candidate.observationId,attentionId:`internal-attention-${state.nextAttentionId++}`,kind:slot.kind,band:candidate.band,description:internalDescription(slot.kind,candidate.band),uncertainty:'coarse_internal_signal',provenance:'SIMULATED_INTEROCEPTION'};
+  state.transient=state.transient.filter(t=>t.percept.kind!==slot.kind);state.transient.push({percept,sensedTick:candidate.sensedTick,attendedTick:ctx.tick,expiresTick:ctx.tick+Math.ceil(body.config.transientSeconds*ctx.hz)});slot.candidate=null;attended.push(percept);
+  if(urgent&&urgent.firstAttendedTick===null){urgent.firstAttendedTick=ctx.tick;if(urgent.eligibleTicks>deadline){urgent.breachTick=ctx.tick;emit('INTERNAL_DEADLINE_BREACH',{kind:slot.kind,eligibleTicks:urgent.eligibleTicks});}}
+  emit('INTERNAL_ATTENDED',{observationId:percept.observationId,attentionId:percept.attentionId,kind:slot.kind,band:percept.band,forced,crossingTick:urgent?.crossingTick??null,elapsedWorldSeconds:urgent?(ctx.tick-urgent.crossingTick)/ctx.hz:0,eligibleSeconds:urgent?urgent.eligibleTicks/ctx.hz:0,excludedSafetySeconds:urgent?urgent.excludedSafetyTicks/ctx.hz:0,excludedIncapacitySeconds:urgent?urgent.excludedIncapacityTicks/ctx.hz:0,excludedInactiveSeconds:urgent?urgent.excludedInactiveTicks/ctx.hz:0});
+ }
+ if(sample)state.sampling.state=rng.state;
+ return {state,events,attended};
 }

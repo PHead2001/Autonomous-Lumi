@@ -1,3 +1,5 @@
+import { CURRENT_PHYSIOLOGY_RULES, type InteroceptionStateV2, validateInteroceptionStateV2, interoceptionV1Projection } from '../shared/physiology-protocol.js';
+import { advanceInteroceptionV2, upgradeInteroceptionV2 } from './physiology.js';
 import { PHYSIOLOGY_RULES, validateBodyState, validateInteroceptionState, validatePhysiologyEffect, validateInternalSensation, type BodyState, type InteroceptionState, type PhysiologyEffect, type InternalSensation, type InternalSensationContext, type PhysiologyEvent } from '../shared/physiology-protocol.js';
 import { createBody, createInteroception, advanceBody, advanceInteroception, bodyCapability, bodyImpairment, applyAcceptedBodyEffect, presentInternalSensations, providerInternalSensations } from './physiology.js';
 import { currentCognitionProfile, COGNITION_SCHEMA_REVISION, cognitionValidationError, validateCognitionProposalReferences } from '../shared/cognition-protocol.js';
@@ -100,6 +102,7 @@ export class Simulation {
   protected supportsPhysiologyInputs():boolean{return false;}
   protected capableOfAction():boolean{return true;}
   protected capableOfAttention():boolean{return true;}
+  protected movementScale():number{return 1;}
   protected motorScale():number{return 1;}
   protected ordinaryAttentionScale():number{return 1;}
   protected beforeInputs(events:DeterministicEvent[]):void{void events;}
@@ -167,7 +170,7 @@ export class Simulation {
     if (!c.moving) return events;
     if (!wasMoving) this.emit(events, 'WALK_RESUMED', 'movement', 'walking', { waypoint: d.waypoint });
     const [x,z] = waypoints[d.waypoint], dx = x - c.x, dz = z - c.z, distance = Math.hypot(dx,dz);
-    const step = Math.min(distance, d.config.speed / d.config.hz);
+    const step = Math.min(distance, d.config.speed*this.movementScale() / d.config.hz);
     if (distance > 0.001) {
       c.heading = Math.atan2(dx,dz);const nextX=Math.max(-ROOM.walkX,Math.min(ROOM.walkX,c.x+dx/distance*step)),nextZ=Math.max(-ROOM.walkZ,Math.min(ROOM.walkZ,c.z+dz/distance*step));
       if(!this.canMove(nextX,nextZ)){d.waypoint=(d.waypoint+1)%waypoints.length;d.pauseUntilTick=d.tick+d.config.pauseTicks;c.moving=false;this.emit(events,'MOVEMENT_BLOCKED','movement','idle',{nextWaypoint:d.waypoint,pauseUntilTick:d.pauseUntilTick});return events;}
@@ -224,7 +227,8 @@ export interface PhysiologyRuntimeState {
  unconsciousWindows:{startTick:number;endTick:number|null}[];
 }
 export interface CheckpointV6 extends Omit<CheckpointV5,'schemaVersion'|'rulesVersion'> {schemaVersion:6;rulesVersion:typeof PHYSIOLOGY_RULES;body:BodyState;interoception:InteroceptionState;physiology:PhysiologyRuntimeState;internalExperiences:InternalExperience[]}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6;
+export interface CheckpointV7 extends Omit<CheckpointV6,'schemaVersion'|'rulesVersion'|'interoception'|'physiology'> {schemaVersion:7;rulesVersion:typeof CURRENT_PHYSIOLOGY_RULES;interoception:InteroceptionStateV2;physiology:PhysiologyRuntimeState&{taskCredit:number;taskCreditActivityId:number}}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -241,6 +245,7 @@ export function upgradeCheckpoint(value: unknown): CheckpointV2 {
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===7)return validatePhysiologyCheckpointV2(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===6)return validatePhysiologyCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===5)return validateCognitionCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===4)return validateSensoryCheckpoint(value);
@@ -313,7 +318,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV6 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -422,7 +427,7 @@ export class VisionSimulation extends LabSimulation {
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return;
   }
-  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV6{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -654,7 +659,7 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }
 function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
@@ -682,9 +687,9 @@ export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
 }
 function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
 /** External callbacks supply only complete ordered commands; this class owns all consequences. */
-export class CognitionSimulation<C extends CheckpointV5|CheckpointV6 = CheckpointV5> extends SensorySimulation {
+export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7 = CheckpointV5> extends SensorySimulation {
  protected cognition:CognitionState;private realExperiences:RealExperience[];private experienceAncestry:{historyId:string;afterTick:number;throughTick:number}[]|null=null;
- constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6}){
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7}){
   const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
   const cp=source.schemaVersion===5?source:null;
   super({...options,checkpoint:cp?cognitionSensoryPart(cp):source,historical:false});
@@ -692,7 +697,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6 = Checkpoin
   this.cognition=cp?structuredClone(cp.cognition):{identity,requests:[],nextRequestTick:0,actionCooldownUntilTick:0,responses:0,firstRequestTick:null,lastResponseTick:null,observationRequestedTick:null,captureUpgrade:null};
   this.realExperiences=structuredClone(cp?.realExperiences??[]);
   if(cp){this.data.pendingInputs=structuredClone(cp.pendingInputs);if(!options.historical)this.cognition.identity=identity;}
-  if(options.physiologyAncestry){const ancestry=validatePhysiologyCheckpoint(options.physiologyAncestry);if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
+  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
   if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||!this.admitsExperienceHistory(e.identity.historyId,e.encodedTick))||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
  }
  protected admitsExperienceHistory(historyId:string,encodedTick:number):boolean{return this.experienceAncestry?this.experienceAncestry.some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick):historyId===this.cognition.identity.historyId;}
@@ -802,7 +807,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6 = Checkpoin
 }
 
 /** Schema 6 is an active-world migration only. V1–V5 offline execution keeps its original class. */
-function physiologyCognitionPart(cp:CheckpointV6):CheckpointV5 {
+function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7):CheckpointV5 {
  const raw=structuredClone(cp) as unknown as Record<string,unknown>;
  for(const key of ['body','interoception','physiology','internalExperiences'])delete raw[key];
  raw.schemaVersion=5;raw.rulesVersion=COGNITION_RULES;
@@ -839,24 +844,26 @@ export function validatePhysiologyCheckpoint(value:unknown):CheckpointV6 {
  return structuredClone(cp);
 }
 /** Derived solely from the persisted, validated ancestry; no history wildcard. */
-function experienceEpochs(cp:CheckpointV6):{historyId:string;afterTick:number;throughTick:number}[]{
+function experienceEpochs(cp:CheckpointV6|CheckpointV7):{historyId:string;afterTick:number;throughTick:number}[]{
  const epochs:{historyId:string;afterTick:number;throughTick:number}[]=[];let historyId=cp.physiology.origin.historyId,afterTick=-1;
  for(const edge of cp.physiology.verifiedCheckpointImports){epochs.push({historyId,afterTick,throughTick:edge.importTick});historyId=edge.destinationHistoryId;afterTick=edge.importTick;}
  epochs.push({historyId,afterTick,throughTick:cp.physiology.legacyImport?.importTick??Number.MAX_SAFE_INTEGER});if(cp.physiology.legacyImport)epochs.push({historyId:cp.physiology.legacyImport.destinationHistoryId,afterTick:cp.physiology.legacyImport.importTick,throughTick:Number.MAX_SAFE_INTEGER});return epochs;
 }
-export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
-export class PhysiologySimulation extends CognitionSimulation<CheckpointV6> {
- private body:BodyState;private interoception:InteroceptionState;private physiology:PhysiologyRuntimeState;private internalExperiences:InternalExperience[];
+export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
+export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7=CheckpointV7> extends CognitionSimulation<C> {
+ private body:BodyState;private interoception:InteroceptionState|InteroceptionStateV2;private physiology:PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};private physiologyVersion:6|7;private internalExperiences:InternalExperience[];
  private intervalStart={x:0,z:0,cursor:0,yaw:0,pitch:0,capable:true};
  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiology?:PhysiologyOptions}){
-  const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),cp=source?.schemaVersion===6?source:null;
+  const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),cp=source&&(source.schemaVersion===6||source.schemaVersion===7)?source:null;
   if(options.physiology?.genesisPreset==='acceptance-fast-v1'&&source)throw new Error('Acceptance genesis requires a new disposable history');
   super({...options,checkpoint:cp?physiologyCognitionPart(cp):source??undefined,...(cp?{physiologyAncestry:cp}:{})});
+  this.physiologyVersion=cp?.schemaVersion===6&&options.historical?6:7;
   const tick=this.data.tick,hz=this.data.config.hz,preset=options.physiology?.genesisPreset??'production-v1';
   this.body=cp?structuredClone(cp.body):createBody(tick,hz,options.physiology?.active??false);
   this.interoception=cp?structuredClone(cp.interoception):createInteroception(tick);
   this.physiology=cp?structuredClone(cp.physiology):{origin:{historyId:this.cognition.identity.historyId,genesisPreset:preset,rulesVersion:PHYSIOLOGY_RULES,evidenceEligibility:'eligible',taintedAtTick:null},verifiedCheckpointImports:[],legacyImport:null,encodingEnabled:options.physiology?.encodingEnabled??true,encodedNeedCrossings:[],interruptedActivity:false,safetyUntilTick:0,unconsciousWindows:[]};
   this.internalExperiences=structuredClone(cp?.internalExperiences??[]);
+  if(this.physiologyVersion===7){if(this.interoception.schemaVersion===1)this.interoception=upgradeInteroceptionV2(this.interoception,this.data.seed,hz);this.physiology.taskCredit=cp?.schemaVersion===7?cp.physiology.taskCredit:0;this.physiology.taskCreditActivityId=cp?.schemaVersion===7?cp.physiology.taskCreditActivityId:this.activity.activityId;}
   if(!cp&&preset==='acceptance-fast-v1'){this.body.active=true;this.body.satiety=.081;this.body.config.satietyUsePerSecond=.001;}
   if(cp)this.data.pendingInputs=structuredClone(cp.pendingInputs);
   const explicitlyActivating=options.physiology?.active===true&&(!cp||!cp.body.active);
@@ -870,11 +877,17 @@ export class PhysiologySimulation extends CognitionSimulation<CheckpointV6> {
  protected override supportsPhysiologyInputs():boolean{return true;}
  protected override capableOfAction():boolean{return !this.body||bodyCapability(this.body).canAct;}
  protected override capableOfAttention():boolean{return !this.body||bodyCapability(this.body).canAttend;}
+ protected override movementScale():number{return this.physiologyVersion===7&&this.body?bodyImpairment(this.body).movementScale:1;}
  protected override motorScale():number{return this.body?bodyImpairment(this.body).headScale:1;}
  protected override ordinaryAttentionScale():number{return this.body?bodyImpairment(this.body).ordinaryAttentionScale:1;}
  protected override cognitionInternalContextAllowed(context:CognitionRequestCommand['selection']['context']):boolean{return context.internalSensations===undefined||context.internalSensations.every(percept=>this.providerInternalSensations().some(actual=>canonicalStringify(percept)===canonicalStringify(actual)));}
  protected override sensoryCaptureAllowed(tick:number):boolean{return !this.physiology||!this.physiology.unconsciousWindows.some(w=>tick>=w.startTick&&(w.endTick===null||tick<w.endTick));}
- protected override shouldAdvanceActivity():boolean{return this.capableOfAction()&&super.shouldAdvanceActivity();}
+ protected override shouldAdvanceActivity():boolean{
+  if(!this.capableOfAction()||!super.shouldAdvanceActivity())return false;
+  if(this.physiologyVersion===6)return true;
+  if(this.physiology.taskCreditActivityId!==this.activity.activityId){this.physiology.taskCredit=0;this.physiology.taskCreditActivityId=this.activity.activityId;}
+  const credit=(this.physiology.taskCredit??0)+bodyImpairment(this.body).taskScale;if(credit<1){this.physiology.taskCredit=credit;return false;}this.physiology.taskCredit=credit-1;return true;
+ }
  protected override beforeMotorExecution():void{this.intervalStart.capable=this.capableOfAttention();}
  protected override beforeInputs(events:DeterministicEvent[]):void{
   this.physiology.unconsciousWindows=this.physiology.unconsciousWindows.filter(w=>w.endTick===null||w.endTick>=this.data.tick-COGNITION_LIMITS.resultMaxAgeTicks);
@@ -900,7 +913,7 @@ export class PhysiologySimulation extends CognitionSimulation<CheckpointV6> {
   const tick=this.data.tick,hz=this.data.config.hz,start=this.intervalStart,safetyPreempted=tick<this.physiology.safetyUntilTick;
   const advanced=advanceBody(this.body,{tick,hz,executed:{distanceMetres:Math.hypot(this.data.character.x-start.x,this.data.character.z-start.z),taskProgress:this.activity.cursor-start.cursor,headRadians:Math.hypot(this.head.yaw-start.yaw,this.head.pitch-start.pitch)},safetyPreempted,capableAtIntervalStart:start.capable});
   this.body=advanced.state;this.physiologyEvents(events,advanced.events);this.enforceCapability(events);
-  const a=this.attentionState();const sensed=advanceInteroception(this.interoception,this.body,{tick,hz,safetyPreempted,capableAtIntervalStart:start.capable,ordinaryAttentionAllowed:this.capableOfAttention()&&this.activity.status!=='running'&&tick>=a.commitmentUntilTick&&tick>=a.developerUntilTick&&advanced.impairment.ordinaryAttentionScale>=.7});
+  const a=this.attentionState(),ordinaryAttentionAllowed=this.capableOfAttention()&&this.activity.status!=='running'&&tick>=a.commitmentUntilTick&&tick>=a.developerUntilTick;const ctx={tick,hz,safetyPreempted,capableAtIntervalStart:start.capable,ordinaryAttentionAllowed};const sensed=this.physiologyVersion===7?advanceInteroceptionV2(this.interoception as InteroceptionStateV2,this.body,{...ctx,ordinaryAttentionScale:advanced.impairment.ordinaryAttentionScale}):advanceInteroception(this.interoception as InteroceptionState,this.body,{...ctx,ordinaryAttentionAllowed:ordinaryAttentionAllowed&&advanced.impairment.ordinaryAttentionScale>=.7});
   this.interoception=sensed.state;this.physiologyEvents(events,sensed.events);
   // Present awareness already exists before this independent, fallible local encoding operation.
   for(const sensation of sensed.attended)this.encodeInternal(sensation,events);
@@ -927,13 +940,28 @@ export class PhysiologySimulation extends CognitionSimulation<CheckpointV6> {
   if(c.type==='physiology_encoding'){this.physiology.encodingEnabled=c.enabled;this.emit(events,'INTERNAL_ENCODING_POLICY','experience','configured',{enabled:c.enabled},input.sequence);return true;}
   return super.applyExtendedInput(input,events);
  }
- override applyAction(action:ControlAction):DeterministicEvent[]{if(action.type==='activity-start'&&!this.capableOfAction())throw new Error('Physiological incapacity prevents starting activity');return super.applyAction(action);}
+ override applyAction(action:ControlAction):DeterministicEvent[]{if(action.type==='activity-start'&&!this.capableOfAction())throw new Error('Physiological incapacity prevents starting activity');const events=super.applyAction(action);if(this.physiologyVersion===7&&action.type==='activity-start'){this.physiology.taskCredit=0;this.physiology.taskCreditActivityId=this.activity.activityId;}return events;}
  bodyState():BodyState{return structuredClone(this.body);}
- interoceptionState():InteroceptionState{return structuredClone(this.interoception);}
+ interoceptionState():InteroceptionState|InteroceptionStateV2{return structuredClone(this.interoception);}
  presentInternalSensations():InternalSensation[]{return presentInternalSensations(this.interoception,this.body.active);}
  providerInternalSensations():InternalSensationContext[]{return providerInternalSensations(this.interoception,this.body.active);}
  admittedInternalExperiences():InternalExperience[]{return structuredClone(this.internalExperiences);}
  override experienceRecords():Experience[]{return [...super.experienceRecords(),...this.admittedInternalExperiences()];}
  override snapshot():WorldState{return {...super.snapshot(),physiologyActive:this.body?.active??false,capability:this.body?bodyCapability(this.body):{awake:true,canAttend:true,canAct:true,reason:'available'},presentInternalSensations:this.interoception?providerInternalSensations(this.interoception,this.body.active):[]};}
- override checkpoint():CheckpointV6{return {...super.checkpoint(),schemaVersion:6,rulesVersion:PHYSIOLOGY_RULES,body:structuredClone(this.body),interoception:structuredClone(this.interoception),physiology:structuredClone(this.physiology),internalExperiences:structuredClone(this.internalExperiences)};}
+ override checkpoint():C{return {...super.checkpoint(),schemaVersion:this.physiologyVersion,rulesVersion:this.physiologyVersion===7?CURRENT_PHYSIOLOGY_RULES:PHYSIOLOGY_RULES,body:structuredClone(this.body),interoception:structuredClone(this.interoception),physiology:structuredClone(this.physiology),internalExperiences:structuredClone(this.internalExperiences)} as C;}
+}
+
+/** Read-only projection for validation/construction; never used to replay CP7 under CP6 rules. */
+function physiologyV1Projection(cp:CheckpointV7):CheckpointV6 {
+ const p=structuredClone(cp.physiology) as PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};delete p.taskCredit;delete p.taskCreditActivityId;
+ return {...structuredClone(cp),schemaVersion:6,rulesVersion:PHYSIOLOGY_RULES,interoception:interoceptionV1Projection(cp.interoception),physiology:p};
+}
+export function validatePhysiologyCheckpointV2(value:unknown):CheckpointV7 {
+ const cp=value as CheckpointV7;if(cp?.schemaVersion!==7||cp.rulesVersion!==CURRENT_PHYSIOLOGY_RULES)fail('V2 physiology schema/rules');
+ const p=cp.physiology;if(!p||!finite(p.taskCredit,0,1)||p.taskCredit===1||!integer(p.taskCreditActivityId)||p.taskCreditActivityId!==cp.activity.activityId)fail('V2 task credit association');
+ object(p,[...Object.keys(physiologyV1Projection(cp).physiology),'taskCredit','taskCreditActivityId'],'V2 physiology runtime');
+ validatePhysiologyCheckpoint(physiologyV1Projection(cp));validateInteroceptionStateV2(cp.interoception,cp.tick,cp.config.hz,cp.body.config);return structuredClone(cp);
+}
+export class HistoricalPhysiologySimulation extends PhysiologySimulation<CheckpointV6>{
+ constructor(options:ConstructorParameters<typeof PhysiologySimulation>[0]){if(validateCheckpoint(options.checkpoint).schemaVersion!==6)throw new Error('Historical physiology requires schema 6');super({...options,historical:true});}
 }

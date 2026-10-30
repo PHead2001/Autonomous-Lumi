@@ -1,4 +1,4 @@
-import { CognitionSimulation, PhysiologySimulation, validateCheckpoint, type CheckpointV6 } from '../server/simulation.js';
+import { CognitionSimulation, PhysiologySimulation, validateCheckpoint, type CheckpointV7 } from '../server/simulation.js';
 import { RecoveryStore } from '../server/recovery-store.js';
 import { eyePose } from '../shared/eye-pose.js';
 import test from 'node:test';
@@ -40,7 +40,7 @@ class MockProviders implements CognitionProviderClient {
 async function fixture(probe=false,physiology=false){
   const directory=await mkdtemp(join(tmpdir(),'lumi-cognition-host-'));
   const source=new BranchRuntime({worldId:'host-fixture',branchId:'experiment',historyId:'mock-history',mode:'EXPERIMENT',offline:true,...(physiology?{physiology:{active:true,genesisPreset:'acceptance-fast-v1' as const,encodingEnabled:false}}:{})}),checkpoint=source.checkpoint();await source.close();
-  const cp=checkpoint.simulation;if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error('Current cognition schema required');
+  const cp=checkpoint.simulation;if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error('Current cognition schema required');
   const visual=createVisibilityFixture();cp.character=visual.character;cp.scene=visual.scene!;cp.head=visual.head!;cp.pauseUntilTick=100000;
   cp.attention.pending={id:1,createdTick:0,expiresTick:300,reasons:['activity_outcome'],triggers:[{reason:'activity_outcome',tick:0,parentSequence:null}],parentSequence:null,status:'pending',captureId:null,requestedTick:null};cp.attention.nextIntentId=2;
   if(probe){cp.attention.pending.reasons=['uncertainty_probe'];cp.attention.pending.triggers=[{reason:'uncertainty_probe',tick:0,parentSequence:null}];cp.attention.config.probeIntervalTicks=100;}
@@ -74,8 +74,8 @@ test('MOCK host sends copied exact selected 512 PNG only after ordered request; 
     f.runtime.enqueue({type:'slam'});const before=f.runtime.simulation.state.tick;f.runtime.simulation.step();assert.equal(f.runtime.simulation.state.tick,before+1);assert.ok(f.runtime.simulation.state.reflex.strength>0);
     assert.equal((await f.cognition.summary(f.runtime)).worldSecondsPerModelResponse,null);
     f.providers.finish();await turn();
-    let cp=f.runtime.simulation.checkpoint();assert.equal(cp.schemaVersion,6);if(cp.schemaVersion!==6)throw new Error();assert.equal(cp.cognition.requests[0].status,'pending','provider callback only enqueues');
-    f.runtime.simulation.step();cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();
+    let cp=f.runtime.simulation.checkpoint();assert.equal(cp.schemaVersion,7);if(cp.schemaVersion!==7)throw new Error();assert.equal(cp.cognition.requests[0].status,'pending','provider callback only enqueues');
+    f.runtime.simulation.step();cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();
     assert.equal(cp.cognition.requests[0].result?.outcome,'success');assert.equal(cp.cognition.requests[0].encoding?.reason,'test_source');assert.equal(cp.realExperiences.length,0);
     assert.ok((await f.cognition.summary(f.runtime)).worldSecondsPerModelResponse!==null);
     f.cognition.pump([f.runtime]);assert.equal(f.providers.calls.length,1);
@@ -86,7 +86,7 @@ test('MOCK malformed and retired callbacks cannot directly execute or mutate a r
   try{
     await selected(f);f.cognition.pump([f.runtime]);f.runtime.simulation.step();f.cognition.pump([f.runtime]);
     f.providers.finish('{"privileged":true}');await turn();f.runtime.simulation.step();
-    const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();
+    const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();
     assert.equal(cp.cognition.requests[0].result?.outcome,'malformed');assert.equal(cp.realExperiences.length,0);assert.equal(cp.cognition.requests[0].action,null);
   }finally{await f.close();}
   const retired=await fixture();
@@ -107,7 +107,7 @@ test('MOCK restored pending work is reconciled once without a provider resend, e
     assert.deepEqual(restored.simulation.checkpoint(),saturated,'a full queue neither drops reconciliation nor creates retry admissions');
     restored.simulation.step();for(let i=0;i<10;i++)host.pump([restored]);
     assert.equal(restored.simulation.checkpoint().pendingInputs.filter(i=>i.command.type==='cognition_result').length,1);assert.equal(providers.calls.length,0);
-    restored.simulation.step();const cp=restored.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();assert.equal(cp.cognition.requests[0].result?.outcome,'interrupted');host.close([restored]);
+    restored.simulation.step();const cp=restored.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();assert.equal(cp.cognition.requests[0].result?.outcome,'interrupted');host.close([restored]);
   }finally{await restored?.close();await f.close();}
 });
 test('MOCK terminal result waits for ordered queue capacity without dropping or resending paid work',async()=>{
@@ -119,7 +119,7 @@ test('MOCK terminal result waits for ordered queue capacity without dropping or 
     for(let i=0;i<10;i++)f.cognition.pump([f.runtime]);assert.deepEqual(f.runtime.simulation.checkpoint(),saturated);
     f.runtime.simulation.step();f.cognition.pump([f.runtime]);
     assert.equal(f.runtime.simulation.checkpoint().pendingInputs.filter(i=>i.command.type==='cognition_result').length,1);
-    f.runtime.simulation.step();const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();assert.equal(cp.cognition.requests[0].result?.outcome,'success');assert.equal(f.providers.calls.length,1);
+    f.runtime.simulation.step();const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();assert.equal(cp.cognition.requests[0].result?.outcome,'success');assert.equal(f.providers.calls.length,1);
   }finally{await f.close();}
 });
 test('MOCK restored host derives configured world cadence from accepted checkpoint requests',async()=>{
@@ -131,7 +131,7 @@ test('MOCK restored host derives configured world cadence from accepted checkpoi
     restored=new BranchRuntime({worldId:f.runtime.target.worldId,branchId:f.runtime.target.branchId,historyId:'mock-history',mode:'EXPERIMENT',checkpoint:f.runtime.checkpoint(),directory:f.directory});await restored.prepare();
     const fresh=new CognitionCoordinator(f.settings,f.providers,f.manager,()=>true,'mock-history',()=>1_000_000);
     const intent={id:2,createdTick:100,expiresTick:900,reasons:['activity_outcome' as const],triggers:[{reason:'activity_outcome' as const,tick:100,parentSequence:null}],parentSequence:null,status:'pending' as const,captureId:null,requestedTick:null};
-    const before=restored.simulation.checkpoint();if(before.schemaVersion!==5&&before.schemaVersion!==6)throw new Error();assert.ok(before.tick>=before.cognition.nextRequestTick,'fixed local cooldown has elapsed');
+    const before=restored.simulation.checkpoint();if(before.schemaVersion!==5&&before.schemaVersion!==7)throw new Error();assert.ok(before.tick>=before.cognition.nextRequestTick,'fixed local cooldown has elapsed');
     assert.equal(fresh.selectedCapture(restored,intent),false,'a new host must retain the configured 20-second world request interval');
     const nextTick=before.cognition.requests[0].requestedTick+20*before.config.hz;
     while(restored.simulation.state.tick<nextTick)restored.simulation.step();
@@ -144,12 +144,12 @@ test('MOCK changed 256 probe obtains an ordered selected 512 followup before int
   try{
     const first=await selected(f);assert.equal(first.width,256);f.cognition.pump([f.runtime]);assert.equal(f.providers.calls.length,0);
     f.renderer.value=40;f.clock.now+=5000;
-    while(true){const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();if(cp.attention.pending)break;f.runtime.simulation.step();assert.ok(f.runtime.simulation.state.tick<200);}
+    while(true){const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();if(cp.attention.pending)break;f.runtime.simulation.step();assert.ok(f.runtime.simulation.state.tick<200);}
     const changed=await selected(f);assert.equal(changed.width,256);
-    let cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();assert.ok(cp.attention.lastCapture?.reasons.includes('visible_change'));
+    let cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();assert.ok(cp.attention.lastCapture?.reasons.includes('visible_change'));
     f.cognition.pump([f.runtime]);assert.equal(f.providers.calls.length,0);assert.equal(f.runtime.simulation.checkpoint().pendingInputs.at(-1)?.command.type,'cognition_observation_request');
     f.runtime.simulation.step();f.clock.now+=5000;
-    while(true){cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==6)throw new Error();if(cp.attention.pending)break;f.runtime.simulation.step();assert.ok(f.runtime.simulation.state.tick<400);}
+    while(true){cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==5&&cp.schemaVersion!==7)throw new Error();if(cp.attention.pending)break;f.runtime.simulation.step();assert.ok(f.runtime.simulation.state.tick<400);}
     const richer=await selected(f);assert.equal(richer.width,512);
     f.cognition.pump([f.runtime]);f.runtime.simulation.step();f.cognition.pump([f.runtime]);assert.equal(f.providers.calls.length,1);assert.equal(f.providers.calls[0].context.observationId,richer.captureId);assert.notEqual(richer.captureId,changed.captureId);
     f.providers.finish();await turn();f.runtime.simulation.step();
@@ -177,9 +177,9 @@ test('cognition status uses private loopback boundary, redacts keys and reports 
  test('active schema6 assembles attended unencoded sensations into explicit v5 context without triggering a camera or provider for the need',async()=>{
   const f=await fixture(false,true);
   try{
-    f.runtime.simulation.step();
+    for(let i=0;i<31*30&&!(f.runtime.simulation.checkpoint() as CheckpointV7).interoception.transient.some(s=>s.percept.kind==='hunger'&&s.percept.band==='severe');i++)f.runtime.simulation.step();
     assert.equal(f.providers.calls.length,0);assert.equal(f.renderer.calls.length,0);
-    const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Schema6 required');
+    const cp=f.runtime.simulation.checkpoint();if(cp.schemaVersion!==7)throw new Error('Schema6 required');
     assert.equal(cp.internalExperiences.length,0);
     assert.equal(cp.interoception.transient[0].percept.band,'severe');
     const capture=await selected(f);
@@ -193,7 +193,7 @@ test('cognition status uses private loopback boundary, redacts keys and reports 
     assert.deepEqual(f.providers.calls[0].context.internalSensations,assembled.selection.context.internalSensations);
     const wire=JSON.stringify(f.providers.calls[0].context);
     for(const secret of ['satiety','reserves','sleepPressure','condition','fatigue','genesisPreset','crossingTick','attentionId','internal-observation','physiology'])assert.equal(wire.includes(secret),false,secret);
-    assert.equal(f.runtime.simulation.checkpoint().schemaVersion,6);
+    assert.equal(f.runtime.simulation.checkpoint().schemaVersion,7);
   }finally{await f.close();}
 });
 
@@ -213,7 +213,7 @@ test('provider context preserves verified imported LIVE ancestors verbatim and r
  const opened=await RecoveryStore.open({directory,checkpoint:envelope});
  const app=createWorldServer({checkpoint:opened.checkpoint,recoveryStore:opened.store,diagnosticsDirectory:directory,autoSchedule:false,automaticCaptures:false,cognition:{config:config(false)}});
  try{
-  await app.listen(0);const cp=app.registry.live.simulation.checkpoint();if(cp.schemaVersion!==6)throw new Error('Schema6 required');
+  await app.listen(0);const cp=app.registry.live.simulation.checkpoint();if(cp.schemaVersion!==7)throw new Error('Schema6 required');
   assert.doesNotThrow(()=>validateCheckpoint(cp));assert.notEqual(cp.cognition.identity.historyId,original.identity.historyId);assert.deepEqual(cp.realExperiences[0],original);
   const expected=[{interpretation:original.interpretation,uncertainty:original.uncertainty}];assert.deepEqual(providerExperiences(cp,cp.cognition.identity),expected);
   assert.deepEqual(providerExperiences(cp,{...cp.cognition.identity,historyId:original.identity.historyId}),[],'a mismatched selection identity cannot borrow the ancestry');
@@ -223,7 +223,7 @@ test('provider context preserves verified imported LIVE ancestors verbatim and r
    (x:typeof cp)=>{x.realExperiences[0].identity.mode='EXPERIMENT';},
    (x:typeof cp)=>{x.realExperiences[0].identity.worldId='another-world';},
    (x:typeof cp)=>{x.cognition.requests[0].request.promptRevision='lumi-vision-prompt-v2';},
-  ]){const adversarial:CheckpointV6=structuredClone(cp);mutate(adversarial);assert.deepEqual(providerExperiences(adversarial,cp.cognition.identity),[]);}
+  ]){const adversarial:CheckpointV7=structuredClone(cp);mutate(adversarial);assert.deepEqual(providerExperiences(adversarial,cp.cognition.identity),[]);}
   assert.deepEqual(cp.realExperiences[0],original,'selection never rewrites admitted source records');
  }finally{await app.close();await rm(directory,{recursive:true,force:true});}
 });

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadCognitionConfig, safeCognitionConfig } from '../server/cognition/config';
 import { DurableBudget, BudgetError } from '../server/cognition/budget';
+import { acquireLocalLease } from '../server/local-lease';
 import { COGNITION_PROMPT_REVISION, CognitionProviders, type ProviderTransport } from '../server/cognition/providers';
 import { INTERPRETATION_JSON_SCHEMA, type CognitionContext, type CognitionProposal, bindCognitionProposal, parseCognitionProposal, validateCognitionProposalReferences, CognitionValidationError } from '../shared/cognition-protocol';
 
@@ -80,6 +81,26 @@ test('existing missing/corrupt ledger fails closed and cross-instance reservatio
     await assert.rejects(first.snapshot(), fails('budget_unavailable'));
     assert.equal((await readFile(join(directory, 'ledger.json'), 'utf8')).includes('bad'), true);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('provider fails closed without dispatch while another owner holds the isolated budget lease', async () => {
+  let calls = 0;
+  const fixture = await setup(async () => { calls++; return Response.json(envelope()); });
+  try {
+    await fixture.budget.snapshot();
+    const lease = await acquireLocalLease(fixture.config.budget.directory);
+    try {
+      const blocked = await fixture.providers.interpret(input('lease_busy'));
+      assert.equal(blocked.status, 'budget_unavailable');
+      assert.equal(blocked.attempts, 0);
+      assert.equal(calls, 0);
+    } finally { await lease.close(); }
+
+    const admitted = await fixture.providers.interpret(input('lease_released'));
+    assert.equal(admitted.status, 'ok');
+    assert.equal(calls, 1);
+    assert.equal((await fixture.budget.snapshot()).accountedUsd, admitted.costUsd);
+  } finally { await fixture.close(); }
 });
 
 test('reported debt above the admission bound persists and late overages cannot be refunded', async () => {
