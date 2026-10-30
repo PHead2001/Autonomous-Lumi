@@ -50,6 +50,10 @@ npm run build
 
 The build includes TypeScript checking.
 
+## Phase 2.5c: nearby shop
+
+Phase 2.5c's shop increment extends the same home through a physical doorway and short path to a functional store. Use **Follow Lumi** to watch a full journey or **Show neighborhood** for an overview. Guided Lab provides isolated **Discover the shop and return** and **Shop closes during a trip** exercises, with actual progress and diagnostic exports. The home pantry and bed remain dependable fallbacks. See [Nearby shop and Observe](docs/town.md) for sensory grounding, purchase rules, replay and scope.
+
 ## Phase 2.5b: home life and Observe
 
 The default page opens the ongoing LIVE home. The owner-facing activity label and recent timeline distinguish selected intentions, actions in progress, interruptions, failures and confirmed outcomes; they are not Lumi’s memories. New/migrated playable home histories activate physiology only after a safe furniture layout is available. Explicit process `LUMI_PHYSIOLOGY_ACTIVE=false` keeps it OFF, and that owner-disabled policy persists on later restore. Existing body/history/memories are preserved, without retroactive needs or invented meals.

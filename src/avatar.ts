@@ -92,6 +92,10 @@ export function createAvatar(options: { firstPerson?: boolean } = {}) {
       }
     } else if (activity?.status === 'started' && activity.stage === 'reach') {
       arms[1].rotation.x = -1.1;
+    } else if (state.town?.heldItem) {
+      // The portable item itself is part of the shared physical snapshot, so
+      // the spectator and actual eyes see the same ownership and item position.
+      arms[1].rotation.x = -.5;
     }
     if (home && home.posture.kind !== 'upright') { legs[0].rotation.x = 0; legs[1].rotation.x = 0; }
     body.position.y = bodyBob(state, time, gait);

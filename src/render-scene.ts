@@ -20,6 +20,8 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
   function applySnapshot(state: WorldState, presentationTime = state.time, placeAvatar = true) {
     if (options.firstPerson) assertCameraClearance(state, options.width, options.height);
     const time = options.firstPerson ? state.time : presentationTime;
+    const shadowExtent=state.town?21:7;
+    Object.assign(sun.shadow.camera,{left:-shadowExtent,right:shadowExtent,top:shadowExtent,bottom:-shadowExtent});sun.shadow.camera.updateProjectionMatrix();
     const physical = physicalSceneSnapshot(state, time), seen = new Set<string>();
     candidateIds = physical.boxes.filter(box => box.observable).map(box => box.id);
     for (const b of physical.boxes) {

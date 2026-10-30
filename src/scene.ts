@@ -9,7 +9,7 @@ export const OBSERVE_HELP:Record<ObserveMode,string> = {
   orbit:'Drag to orbit · Scroll to zoom · R to recenter',
   free:'Focus the view · Drag to look · W/A/S/D or arrows to fly · Q/E down/up · Shift faster · R to recenter',
   follow:'Drag to orbit Lumi · Scroll to zoom · R to recenter',
-  fixed:'A steady room view · R to recenter · 1–4 to switch cameras',
+  fixed:'A steady view · Show neighborhood for the whole route · R to recenter · 1–4 to switch cameras',
 };
 export function createScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -20,13 +20,15 @@ export function createScene(canvas: HTMLCanvasElement) {
   const controls = new OrbitControls(camera, canvas); controls.enableDamping = true;
   controls.minDistance = 4; controls.maxDistance = 22; controls.maxPolarAngle = Math.PI / 2.05;
   controls.minPolarAngle = 0.2; controls.enablePan = false;
-  let mode:ObserveMode='orbit',state:WorldState|null=null,world:ReturnType<typeof createPhysicalRenderScene>|null=null;
+  let mode:ObserveMode='orbit',state:WorldState|null=null,world:ReturnType<typeof createPhysicalRenderScene>|null=null,overview=false;
   let received=performance.now(),lastFrame=performance.now(),initialized=false,disposed=false;
   const held=new Set<string>();let drag:number|null=null,mouseX=0,mouseY=0;
   const aim=()=>state?new THREE.Vector3(...homePoseTransform(state).transformPoint([0,1.25,0])):new THREE.Vector3(0,1.25,0);
   const reset=()=>{
-    held.clear();controls.target.copy(mode==='follow'?aim():new THREE.Vector3(0,1,0));
-    camera.position.copy(controls.target).add(mode==='fixed'?new THREE.Vector3(8,6,9):mode==='free'?new THREE.Vector3(0,2,7):new THREE.Vector3(10,7,12));
+    const neighborhood=overview&&!!state&&'town' in state&&!!state.town&&mode!=='follow';
+    held.clear();controls.maxDistance=neighborhood?40:22;
+    controls.target.copy(mode==='follow'?aim():neighborhood?new THREE.Vector3(1.5,1,-5.5):new THREE.Vector3(0,1,0));
+    camera.position.copy(controls.target).add(neighborhood?new THREE.Vector3(18,19,23):mode==='fixed'?new THREE.Vector3(8,6,9):mode==='free'?new THREE.Vector3(0,2,7):new THREE.Vector3(10,7,12));
     camera.lookAt(controls.target);controls.update();
   };
   const setMode=(next:ObserveMode)=>{mode=next;controls.enabled=next==='orbit'||next==='follow';reset();};reset();
@@ -62,5 +64,5 @@ export function createScene(canvas: HTMLCanvasElement) {
     if(world)renderer.render(world.scene,camera);requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  return {reset,setMode,getMode:()=>mode,setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
+  return {reset,setMode,getMode:()=>mode,setOverview(next:boolean){overview=next;reset();},setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
 }

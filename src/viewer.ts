@@ -2,7 +2,7 @@ import { createScene, OBSERVE_HELP, type ObserveMode } from './scene';
 import { SlamAudio } from './audio';
 import { ViewerLifecycle } from './viewer-lifecycle';
 import { mountHomeLabCard } from './home-lab-ui';
-import { homePresentation, recentHomeTimeline } from './viewer-home';
+import { worldActivity, recentWorldTimeline } from './viewer-town';
 import type { ServerMessage } from '../shared/protocol';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -51,14 +51,15 @@ function connect() {
     const identity = `${state.worldId}/${state.branchId ?? 'live'}/${state.runId}`;
     if (latestWorld !== identity) { latestWorld = identity; lastSound = 0; }
     scene?.setState(state);
+    element('neighborhood-view').hidden=!('town' in state&&state.town);
     element('world-time').textContent = `World time ${Math.floor(state.time / 60)}:${Math.floor(state.time % 60).toString().padStart(2, '0')}`;
     const experiment = state.mode === 'EXPERIMENT';
     connection.textContent = experiment ? 'Experiment connected' : 'Live world';
     element('viewer-mode').textContent = experiment ? 'ISOLATED EXPERIMENT' : 'LIVE HOME'; element('viewer-mode').classList.toggle('experiment', experiment);
     element('viewer-room').textContent = experiment ? 'ISOLATED EXPERIMENT · OBSERVE' : 'LUMI’S HOME · OBSERVE';
-    const presentation = homePresentation(state.home, state.capability, state.character.moving);
+    const presentation = worldActivity(state);
     element('activity-title').textContent = presentation.title; element('activity-detail').textContent = presentation.detail;
-    const history = recentHomeTimeline(state.home, state.tick, state.tick ? state.time / state.tick : 1/30);
+    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30);
     element('history-status').textContent = history.note;
     const timeline = element('activity-timeline'), fragment = document.createDocumentFragment();
     for (const entry of history.entries) { const row = document.createElement('li'), age = document.createElement('time'), label = document.createElement('span'); age.textContent = entry.age; label.textContent = entry.label; row.append(age,label); fragment.append(row); }
@@ -96,8 +97,17 @@ toggle.onclick = () => {
   } else lifecycle.connect();
 };
 element('reset-camera').onclick = () => scene?.reset();
+let neighborhoodView=false;
+element('neighborhood-view').onclick=()=>{
+  neighborhoodView=!neighborhoodView;if(neighborhoodView)observe('fixed');scene?.setOverview(neighborhoodView);
+  element('neighborhood-view').setAttribute('aria-pressed',String(neighborhoodView));
+  element('neighborhood-view').textContent=neighborhoodView?'Show home':'Show neighborhood';
+};
 const cameraMode = element<HTMLSelectElement>('camera-mode');
-function observe(mode: ObserveMode) { scene?.setMode(mode); cameraMode.value = mode; element('camera-help').textContent = OBSERVE_HELP[mode]; element<HTMLCanvasElement>('scene').focus({ preventScroll: true }); }
+function observe(mode: ObserveMode) {
+  if(mode==='follow'&&neighborhoodView){neighborhoodView=false;scene?.setOverview(false);element('neighborhood-view').textContent='Show neighborhood';element('neighborhood-view').setAttribute('aria-pressed','false');}
+  scene?.setMode(mode); cameraMode.value = mode; element('camera-help').textContent = OBSERVE_HELP[mode]; element<HTMLCanvasElement>('scene').focus({ preventScroll: true });
+}
 cameraMode.onchange = () => observe(cameraMode.value as ObserveMode);
 window.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && ['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName))) return;
