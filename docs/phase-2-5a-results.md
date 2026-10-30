@@ -2,7 +2,7 @@
 
 ## Current v2 correction
 
-The repair is isolated in the `physiology-review-fixes` worktree. It does not enable or migrate owner LIVE. Current contract is **checkpoint 7 / runtime 6 / `lumi-physiology-v2`**; body-rate math stays v1. Actual walking/task slowdown and restorable noisy ordinary sensing are implemented, while severe truth monitoring/deadline forcing bypasses noise/lapses. Active 6→7 migration preserves body/cues/deadlines/memories/gate/history and initializes only new sampling/task-credit fields at the current tick. Circadian phase remains tracked-only. No home/day/night/2.5b system or new paid call is included.
+The repair was developed and verified in the isolated `physiology-review-fixes` worktree, then integrated into the canonical checkout. Owner-runtime migration evidence is recorded below; physiology remains inactive. Current contract is **checkpoint 7 / runtime 6 / `lumi-physiology-v2`**; body-rate math stays v1. Actual walking/task slowdown and restorable noisy ordinary sensing are implemented, while severe truth monitoring/deadline forcing bypasses noise/lapses. Active 6→7 migration preserves body/cues/deadlines/memories/gate/history and initializes only new sampling/task-credit fields at the current tick. Circadian phase remains tracked-only. No home/day/night/2.5b system or new paid call is included.
 
 | Check | Actual evidence |
 | --- | --- |
@@ -15,7 +15,7 @@ The repair is isolated in the `physiology-review-fixes` worktree. It does not en
 | Test stability | Baseline **308/308**, focused **36/36** and Windows cleanup **15/15** passed before final v2 full checks; isolated held-budget regression fails closed with zero dispatch then succeeds after release |
 | Full suite | Initial new run **307/316**, nine stale schema fixtures corrected and affected **10/10 PASS**; final rerun **316/316 PASS**, zero failures in **28.75 s**, `diagnostics/physiology-v2-final-test.log`; initial failure log retained |
 | Lint/build | Full lint/build passed before test-only corrections; final scoped lint of four changed tests and TypeScript passed (`physiology-v2-final-lint-scoped.log` / `physiology-v2-final-typecheck.log`) |
-| Reviews | Independent high-risk Astra and ordinary current-diff reviews clean, no findings. No hosted clean result or owner-runtime upgrade claimed for this repair |
+| Reviews | Independent high-risk Astra and ordinary current-diff reviews clean, no findings. Hosted Codex review of `e9d1813` clean with zero unresolved findings; actual owner upgrade verified below. PR #9 open, mergeable and unmerged |
 
 The test command now uses `--test-concurrency=4`. The host reports 24 available logical workers across 44 test files; this modest cap reduces concurrent process/CIM/ledger fixtures without changing production financial leases, cleanup deadlines or assertions. The prior sporadic Windows process-query timeout was not reproduced, and no blind timeout increase is claimed. No benchmark/performance campaign is implied.
 
@@ -35,11 +35,19 @@ npm.cmd run replay -- --bundle diagnostics/physiology-v2-hunger-final.zip
 | Events | `295e9a4482ab2bb8063e936d1ca9c8383b6b6588885107bb7356bf10c81d49fa` |
 | Runtime | `69b97d58faa266574f002205bb1dd89b803787c80088e19083182298b91552df` |
 
-The noisy mild checkpoint is tick **24,000**, moderate **40,000**. Exact severe crossing **49,091**→attention **49,120** remains **29 raw/eligible seconds**, all exclusions zero and no breach. The labelled nutrition fixture resolves the need at **49,126**; absorption completes at **50,925**. This is still a fixture, not evidence of food acquisition/eating. No original-runtime activation or actual owner migration has been verified by these isolated checks.
+The noisy mild checkpoint is tick **24,000**, moderate **40,000**. Exact severe crossing **49,091**→attention **49,120** remains **29 raw/eligible seconds**, all exclusions zero and no breach. The labelled nutrition fixture resolves the need at **49,126**; absorption completes at **50,925**. This is still a fixture, not evidence of food acquisition/eating. The isolated checks did not activate owner physiology; the later actual migration verification below separately proves the running saved world upgrade.
+
+### Actual canonical runtime after integration
+
+Hosted Codex review of tested source `e9d1813` completed clean with zero unresolved findings. [PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) remains open, mergeable and unmerged.
+
+The actual saved owner checkpoint **6**, generation **82**, tick **2,556,545**, recovered as checkpoint **7** / runtime **6**, generation **83**, in the same history `90d139a5-e9a6-429d-98ac-a484539c9e24`. `initial-migration-proof.json` reports PASS: all prior world/body/memory/attention/control fields were preserved, with only the new restart run identity differing from pure migration. Body remained inactive, main cognition ON and Decisions OFF; `.env` and the durable budget were unchanged.
+
+The canonical server **3001** and viewer **5173** were launched detached/hidden and remained alive after the launch shell returned. An actual watcher trigger created a new run with the same history; the normal browser showed the current LIVE world walking at **1423:16**. Evidence folder: `diagnostics/operations/physiology-review-v2-20261030T041723Z/` (`initial-migration-proof.json`, `watch-trigger.json`, `viewer-current.png`). Prior unified-exec processes had already exited at preflight, so this proves saved-world restoration and the new runtime, not continuous uptime. Optional deep watcher-endpoint equality inspection was omitted after a policy block; no such equality or power-readiness claim is made.
 
 ## Historical checkpoint-6 / v1 evidence
 
-[PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) hosted review found three actionable defects: validated LIVE checkpoint override history continuity, activation capacity on older-schema migration, and fractional absorption completion. All three are locally fixed: final `npm.cmd test` passed **308/308**, zero failures in **18.86 s**; lint/build passed, with the existing >500 kB chunk advisory only. Independent local re-reviews are clean. Logs: `diagnostics/physiology-pr9-final-{test,lint,build}.txt`. The regenerated current-chain lab is independently verified COMPLETE/replay PASS. Hosted threads await push/re-review; no clean hosted outcome is claimed. Earlier paid artifacts remain historical development-contract evidence.
+[PR #9](https://github.com/PHead2001/Autonomous-Lumi/pull/9) hosted review found three actionable defects: validated LIVE checkpoint override history continuity, activation capacity on older-schema migration, and fractional absorption completion. All three are locally fixed: final `npm.cmd test` passed **308/308**, zero failures in **18.86 s**; lint/build passed, with the existing >500 kB chunk advisory only. Independent local re-reviews are clean. Logs: `diagnostics/physiology-pr9-final-{test,lint,build}.txt`. The regenerated current-chain lab is independently verified COMPLETE/replay PASS. The later hosted review of source `e9d1813` is clean with zero unresolved findings; PR #9 remains unmerged. Earlier paid artifacts remain historical development-contract evidence.
 
 ## Prior verification evidence
 
@@ -51,7 +59,7 @@ The body/interoception integration, prepared lab, scoped dashboard/browser walkt
 | --- | --- |
 | Host targeted checks | Earlier **48/48**; final actual-renderer/FAKE preflight + three cleanup-failure cases + eight verification checks **12/12 PASS**, `diagnostics/physiology-cleanup-final-check.log`; final lint/build |
 | Core corrections | **54/54 affected PASS**, final lint/build; initial full **299/303** retained honestly |
-| Independent boundary review | All PR #9 boundary re-reviews clean; source complete locally, hosted re-review pending |
+| Independent boundary review | All PR #9 boundary re-reviews clean; local and later hosted source reviews clean |
 | Final PR #9 full checks | **308/308 PASS**, lint/build PASS; existing chunk advisory only |
 | Actual renderer + FAKE-provider preflight | **1/1**, not a paid-provider substitute |
 | Attention demo | **1/1** |
@@ -102,7 +110,7 @@ The two calls total **US$0.00013644**. The original application-wide ledger ceil
 
 ## Review and material limits
 
-Earlier P1/high-risk and legacy-import/sleep-attention re-reviews were accepted before the three hosted findings. The cleanup-report correction retains response/input/budget evidence and any available COMPLETE replayable ZIP when initial close, restored close or restart listen fails; its three injected failure cases and the final 12-check group pass. Ordinary targeted cleanup re-review was clean. All local PR #9 targeted re-reviews are now clean, including independent Astra boundary review. Hosted re-review remains pending; no clean hosted outcome is claimed.
+Earlier P1/high-risk and legacy-import/sleep-attention re-reviews were accepted before the three hosted findings. The cleanup-report correction retains response/input/budget evidence and any available COMPLETE replayable ZIP when initial close, restored close or restart listen fails; its three injected failure cases and the final 12-check group pass. Ordinary targeted cleanup re-review was clean. All local PR #9 targeted re-reviews are now clean, including independent Astra boundary review. The later hosted review of `e9d1813` is clean with zero unresolved findings; PR #9 remains open/unmerged.
 
 Checkpoint 6 now requires `physiology.legacyImport: null|{kind: explicit-unverified-import-v1, sourceHistoryId, destinationHistoryId, importTick}`. Only explicit bare legacy EXPERIMENT import creates a marker. Old origin/records/debug taint remain intact, same-tick old episodes are accepted, future internal encoding is permanently blocked as `legacy_unverified`, and secondary unverified imports reject. Awareness continues. The sleep-attention fix also prevents a first visual delivery while asleep from creating visual attention/baseline/cognition selection; already attended pre-sleep requests retain their separate late-result semantics.
 
