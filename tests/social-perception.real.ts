@@ -38,11 +38,11 @@ test('actual badge RGB distinguishes unverified claim, hidden/dark/off-view cues
           runtime.enqueue({type:'turn_head',yawDelta:0,pitchDelta:0,sceneRevision:runtime.viewerState().scene!.revision});runtime.applyControl({type:'step'});
           runtime.applyControl({type:'resume'});automatic.pump([runtime]);runtime.applyControl({type:'pause'});
           const request=automatic.summary(runtime.target).inFlight;assert.ok(request);captureId=request.captureId;
-          if(name==='stale_snapshot'){runtime.enqueueVisit({type:'visit_start',runId:runtime.target.runId,generation:2});runtime.applyControl({type:'step'});const current=runtime.simulation.checkpoint();if(current.schemaVersion!==11)throw new Error('Social schema required');runtime.enqueueSocial({type:'social_badge',runId:runtime.target.runId,generation:2,sequence:1,actionId:current.visit.lastActionId+1,display:false});runtime.applyControl({type:'step'});}
+          if(name==='stale_snapshot'){runtime.enqueueVisit({type:'visit_start',runId:runtime.target.runId,generation:2});runtime.applyControl({type:'step'});const current=runtime.simulation.checkpoint();if((current.schemaVersion!==11&&current.schemaVersion!==12))throw new Error('Social schema required');runtime.enqueueSocial({type:'social_badge',runId:runtime.target.runId,generation:2,sequence:1,actionId:current.visit.lastActionId+1,display:false});runtime.applyControl({type:'step'});}
           const metadata=await manager.wait(runtime.target,captureId);await immediate();assert.equal(metadata.status,'success');
           runtime.applyControl({type:'step'});automatic.pump([runtime]);runtime.applyControl({type:'step'});
         }
-        const cp=runtime.simulation.checkpoint();if(cp.schemaVersion!==11)throw new Error('Social schema required');
+        const cp=runtime.simulation.checkpoint();if((cp.schemaVersion!==11&&cp.schemaVersion!==12))throw new Error('Social schema required');
         assert.equal(cp.social.firstRecognizedEncounter,null,name+' cannot establish verified creator identity');
         if(name==='unverified'){assert.equal(cp.social.experiences.length,1);assert.equal(cp.social.experiences[0].perceivedIdentity,'creator_claim');}
         else assert.deepEqual(cp.social.experiences,[],name+' cannot encode this encounter');

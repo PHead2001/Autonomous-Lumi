@@ -41,7 +41,7 @@ export interface RecorderHealth {
   status: 'HEALTHY' | 'INCOMPLETE'; queuedRecords: number; queuedBytes: number; writtenRecords: number;
   inFlightRecords: number; inFlightBytes: number;
   droppedRecords: number; criticalDroppedRecords: number; filteredRecords: number; writerFailures: number;
-  evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null;
+  evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null; lastFailure:{stage:string;code:string}|null;
   gaps: string[];
   globalRetainedBytes: number; globalRetainedRuns: number; globalCapExceeded: boolean; globalAccountingComplete: boolean; protectedActiveRuns: number;
   loggingMode: LoggingMode; disabledRecords: number;
@@ -57,7 +57,7 @@ const ranks: Record<Severity, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 const compress = promisify(gzip);
 const safeId = (value: string) => /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const dataKeys = new Set([
-  'policy','progressTicks','noticed','offerId','offerRevision','revision','noticedTick','deadlineTick','transferTick','response','perceivedIdentity','display','badgeKind','experienceId','encodingId','encodingPolicy','reservation','reservedItemId',
+  'deliveryId','errorCode','operationStage','policy','progressTicks','noticed','offerId','offerRevision','revision','noticedTick','deadlineTick','transferTick','response','perceivedIdentity','display','badgeKind','experienceId','encodingId','encodingPolicy','reservation','reservedItemId',
   'runId','forward','strafe','actorId','heading','steps',
   'purchaseId','itemId','good','price','balance','stock','door','open','status',
  'handle','resourceId','recognition','routeCursor','points','expanded','distance','replans','nextReplanTick','servingId','effectSequence','layoutRevision','stage',
@@ -146,6 +146,7 @@ export class FlightRecorder {
   private timer: ReturnType<typeof setInterval>;
   private counters = { writtenRecords: 0, droppedRecords: 0, criticalDroppedRecords: 0, filteredRecords: 0, writerFailures: 0, evictedRecords: 0 };
   private lastError: string | null = null;
+  private lastFailure:{stage:string;code:string}|null=null;
   private gaps: string[] = [];
   private persistedHealth = '';
   private activeMarkerWritten = false;
@@ -209,7 +210,7 @@ export class FlightRecorder {
   recordInput(input: OrderedInput): void {
     if(!this.enabled())return;
     try {
-    const command = validateCommand(input.command,true,true,true,true,true,true,true,true);
+    const command = validateCommand(input.command,true,true,true,true,true,true,true,true,true);
     const safe: OrderedInput = { sequence: input.sequence, receivedTick: input.receivedTick, applyTick: input.applyTick, command, admission: input.admission };
     const record: DiagnosticRecord = {
       schema_version: this.identity.branchId?2:1, utc: new Date(this.now()).toISOString(), world_tick: input.receivedTick, world_elapsed_seconds: input.receivedTick / this.hz,
@@ -221,8 +222,8 @@ export class FlightRecorder {
     } catch { this.counters.droppedRecords++; this.counters.criticalDroppedRecords++; this.gap('input_serialization_failed'); }
   }
   recordEvent(event: DeterministicEvent): void {
-    const experienceEligible=event.type==='SOCIAL_ENCODING'&&event.component==='social_experience'&&event.outcome==='admitted'&&event.data.provenance==='ATTENDED_AUTHORED_SOCIAL_RGB'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='INTERNAL_EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_INTERNAL_SENSOR'&&event.data.source==='actual_internal_sensor'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
-    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||event.type.startsWith('INTERNAL_')||['hearing','attention','cognition','interoception','home_sensor','town_sensor','social_sensor','social_experience'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
+    const experienceEligible=event.type==='DELIVERY_ENCODING'&&event.component==='delivery_experience'&&event.outcome==='admitted'&&event.data.provenance==='ATTENDED_DELIVERY_RGB'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='SOCIAL_ENCODING'&&event.component==='social_experience'&&event.outcome==='admitted'&&event.data.provenance==='ATTENDED_AUTHORED_SOCIAL_RGB'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='INTERNAL_EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_INTERNAL_SENSOR'&&event.data.source==='actual_internal_sensor'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='ATTENDED_RENDERER_INTERPRETATION'&&event.data.source==='actual_renderer'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true||this.identity.worldMode==='EXPERIMENT'&&event.type==='EXPERIENCE_ENCODED'&&event.data.provenance==='TEST STUB'&&event.data.sensed===true&&event.data.attended===true&&event.data.encoded===true;
+    this.recordTrusted({ tick: event.tick, category: experienceEligible?'FOX_EXPERIENCE':event.type === 'EXPERIENCE_ENCODED'||event.type === 'REFLEX_DECISION'||event.type.startsWith('SYNTHETIC_')||event.type.startsWith('INTERNAL_')||['hearing','attention','cognition','interoception','home_sensor','town_sensor','social_sensor','social_experience','delivery_sensor','delivery_experience'].includes(event.component)&&event.type!=='ACOUSTIC_PROPAGATION' ? 'PRIVATE_SENSOR' : event.type.startsWith('INPUT_') ? 'OPERATIONAL_REPLAY' : 'WORLD_TRUTH',
       eventType: event.type, component: event.component, outcome: event.outcome, eventSequence: event.sequence,
       inputSequence: event.inputSequence, parentSequence: event.parentSequence, data: event.data }, true,experienceEligible);
   }
@@ -253,7 +254,7 @@ export class FlightRecorder {
   health(): RecorderHealth {
     return { status: this.gaps.length ? 'INCOMPLETE' : 'HEALTHY', queuedRecords: this.queue.length, queuedBytes: this.bytes,
       inFlightRecords: this.inFlightRecords, inFlightBytes: this.inFlightBytes, ...this.counters,
-      retainedFiles: this.files.length, retainedBytes: this.files.reduce((n, f) => n + f.bytes, 0), lastError: this.lastError, gaps: [...this.gaps], ...this.globalHealth,loggingMode:this.loggingMode,disabledRecords:this.disabledRecords,compressClosed:this.compressClosed };
+      retainedFiles: this.files.length, retainedBytes: this.files.reduce((n, f) => n + f.bytes, 0), lastError: this.lastError,lastFailure:this.lastFailure?{...this.lastFailure}:null, gaps: [...this.gaps], ...this.globalHealth,loggingMode:this.loggingMode,disabledRecords:this.disabledRecords,compressClosed:this.compressClosed };
   }
   flush(): Promise<void> {
     if (this.snapshotInProgress) return this.pending;
@@ -285,7 +286,7 @@ export class FlightRecorder {
       for(const gap of now.gaps)if(gap==='writer_failure'||gap==='retention_evicted_records'||gap.startsWith('global_')||gap.startsWith('unaccounted_')||gap.startsWith('unowned_'))relevantGaps.add(gap);
       const health:RecorderHealth={...pin.health,queuedRecords:0,queuedBytes:0,inFlightRecords:0,inFlightBytes:0,writtenRecords:now.writtenRecords,
         droppedRecords:pin.health.droppedRecords+this.writerDroppedRecords-pin.writerDropped,criticalDroppedRecords:pin.health.criticalDroppedRecords+this.writerCriticalDroppedRecords-pin.writerCriticalDropped,
-        writerFailures:now.writerFailures,evictedRecords:now.evictedRecords,retainedFiles:now.retainedFiles,retainedBytes:now.retainedBytes,lastError:now.lastError,
+        writerFailures:now.writerFailures,evictedRecords:now.evictedRecords,retainedFiles:now.retainedFiles,retainedBytes:now.retainedBytes,lastError:now.lastError,lastFailure:now.lastFailure,
         globalRetainedBytes:now.globalRetainedBytes,globalRetainedRuns:now.globalRetainedRuns,globalCapExceeded:now.globalCapExceeded,globalAccountingComplete:now.globalAccountingComplete,protectedActiveRuns:now.protectedActiveRuns,
         gaps:[...relevantGaps],status:relevantGaps.size?'INCOMPLETE':'HEALTHY'};
       return {...durable,start:pin.start,end:pin.end,runtimeStart:pin.runtimeStart,runtimeEnd:pin.runtimeEnd,
@@ -345,6 +346,7 @@ export class FlightRecorder {
   private writeBatch(throughSequence=Number.MAX_SAFE_INTEGER):Promise<void>{return withStorage(this.runDirectory,()=>this.writeBatchLocked(throughSequence));}
   /** Called only while this branch's storage serializer is held. */
   private async writeBatchLocked(throughSequence=Number.MAX_SAFE_INTEGER): Promise<void> {
+    let operationStage='prepare';
     if (!this.queue.length && !this.dirtyCheckpoint && this.persistedHealth === JSON.stringify(this.health())) return;
     const count=this.queue.findIndex(entry=>entry.sequence>throughSequence);
     const batch=this.queue.splice(0,count<0?this.queue.length:count),batchBytes=batch.reduce((sum,entry)=>sum+Buffer.byteLength(entry.line),0);
@@ -361,16 +363,18 @@ export class FlightRecorder {
         if (this.fileBytes && (this.fileBytes + bytes > this.limits.fileBytes || this.now() - this.fileStarted >= this.limits.fileAgeMs)) { if(this.compressClosed)await this.compressFile(this.files.at(-1)!);this.fileSequence++; this.fileBytes = 0; }
         const newFile = !this.fileBytes;
         const file = newFile ? { name: `events-${this.fileSequence.toString().padStart(5, '0')}.jsonl`, bytes: 0, records: 0 } : this.files.at(-1)!;
-        await assertOwnedPath(this.ownedRoot,join(this.runDirectory,file.name));await this.append(join(this.runDirectory, file.name), entry.line);
+        await assertOwnedPath(this.ownedRoot,join(this.runDirectory,file.name));operationStage='append';await this.append(join(this.runDirectory, file.name), entry.line);
         // A failed first append must not create phantom descriptors for the same filename.
         if (newFile) { this.fileStarted=this.now(); this.files.push(file); }
         this.fileBytes += bytes; file.bytes += bytes; file.records++; this.counters.writtenRecords++; written++;
         this.durableLastRecorderSequence=entry.sequence;
+        operationStage='retention';
         while (this.files.length > this.limits.retainedFiles || this.files.reduce((n, f) => n + f.bytes, 0) > this.limits.diskBytes) {
           const old = this.files.shift()!; await assertOwnedPath(this.ownedRoot,join(this.runDirectory,old.name));await unlink(join(this.runDirectory, old.name)); this.counters.evictedRecords += old.records; this.gap('retention_evicted_records');
           if (!this.files.length) { this.fileSequence++; this.fileBytes = 0; }
         }
       }
+      operationStage='checkpoint';
       if (checkpoint) {
         await this.atomic('checkpoint-start.json', checkpoint.start); await this.atomic('checkpoint-end.json', checkpoint.end);
         if(checkpoint.runtimeStart&&checkpoint.runtimeEnd){await this.atomic('runtime-start.json',checkpoint.runtimeStart);await this.atomic('runtime-end.json',checkpoint.runtimeEnd);}
@@ -380,11 +384,12 @@ export class FlightRecorder {
       this.inFlightRecords = 0; this.inFlightBytes = 0;
       const health = this.health();
       const metadata={schema_version:1,...this.identity,limits:this.limits,startRecorderSequence:this.startRecorderSequence,checkpointRecorderSequence:this.durableCheckpointRecorderSequence,lastRecorderSequence:this.durableLastRecorderSequence};
-      await this.atomic('run.json', { ...metadata, health });
-      await this.enforceGlobalRetention();
-      if(JSON.stringify(this.health())!==JSON.stringify(health))await this.atomic('run.json',{...metadata,health:this.health()});
+      operationStage='metadata';await this.atomic('run.json', { ...metadata, health });
+      operationStage='global_retention';await this.enforceGlobalRetention();
+      operationStage='metadata';if(JSON.stringify(this.health())!==JSON.stringify(health))await this.atomic('run.json',{...metadata,health:this.health()});
       this.persistedHealth = JSON.stringify(health);
-    } catch {
+    } catch(error) {
+      const code=(error as NodeJS.ErrnoException)?.code;this.lastFailure={stage:operationStage,code:typeof code==='string'&&/^[A-Z0-9_]{1,24}$/.test(code)?code:'UNKNOWN'};
       this.counters.writerFailures++; this.counters.droppedRecords += batch.length - written;
       this.counters.criticalDroppedRecords += batch.slice(written).filter(entry => entry.critical).length;
       this.writerDroppedRecords+=batch.length-written;this.writerCriticalDroppedRecords+=batch.slice(written).filter(entry=>entry.critical).length;

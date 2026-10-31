@@ -31,6 +31,7 @@ export class VisitControls {
   offer(itemId:number,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'offer' as const,...envelope,itemId}:null;}
   cancelOffer(offerId:number,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'cancel_offer' as const,...envelope,offerId}:null;}
   badge(display:boolean,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'badge' as const,...envelope,display}:null;}
+  deposit(itemId:number,authoritativeLastActionId:number){const envelope=this.action(authoritativeLastActionId);return envelope?{type:'deposit' as const,...envelope,itemId}:null;}
   clear(){this.keys.clear();return this.movement();}
   end(){const stopped=this.clear();this.target=null;return stopped;}
 }

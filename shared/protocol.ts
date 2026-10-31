@@ -14,6 +14,7 @@ export interface WorldState {
   town?:import('./town-protocol.js').TownWorldView;
   visit?:import('./visit-protocol.js').VisitWorldView;
   social?:import('./social-protocol.js').SocialWorldView;
+  delivery?:import('./delivery-protocol.js').DeliveryWorldView;
 }
 export type ServerMessage = { type: 'state'; state: WorldState } | { type: 'sound'; event: AcousticEvent; state: WorldState };
 export const REFLEX_DURATION = 0.8;

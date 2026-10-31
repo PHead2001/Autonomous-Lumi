@@ -25,7 +25,7 @@ test('ordinary inputs and forged RGB proof cannot create social intentions or cr
   try {
     assert.throws(() => runtime.enqueue({ type: 'social_badge', runId: runtime.target.runId, generation: 1, sequence: 1, actionId: 1, display: true }), /private authenticated/);
     assert.throws(() => runtime.enqueueSocialObservation({ type: 'social_observation', captureId: 'fixture', frameHash: 'a'.repeat(64), capturedTick: 0, attentionTick: 0, sensorSource: 'actual_renderer', actor: { x: 0, z: -1.75, heading: 0 }, offer: null, badge: { revision: 1, kind: 'verified_seal', handle: 'fixture-handle' } }, { authority: 'actual-social-capture-proof' }), /Untrusted social/);
-    const cp = runtime.simulation.checkpoint(); assert.equal(cp.schemaVersion, 11); if (cp.schemaVersion !== 11) throw new Error('Social schema required');
+    const cp = runtime.simulation.checkpoint(); assert.equal(cp.schemaVersion, 12); if (cp.schemaVersion!==12) throw new Error('Social schema required');
     assert.deepEqual(cp.social.experiences, []); assert.equal(cp.social.firstRecognizedEncounter, null); assert.equal(cp.social.badge.display, false);
   } finally { await runtime.close(); }
 });

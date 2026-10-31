@@ -32,6 +32,7 @@ Visit uses a first-person camera at the server-owned avatar eye position. Solid 
 - **Drag the view:** turn/look.
 - **E** or **Interact:** use a nearby door, or attempt a checkout interaction.
 - **At checkout:** select fruit or bread and press **Buy selected item**.
+- **G** or **Deposit held food:** while stopped by the drop-off shelf on the inside back wall, leave your held fruit or bread in persistent storage. Cancel any pending in-person offer for that item first. The server confirms or rejects the deposit; sending the request is not completion.
 - **Observe:** release control and return to the nonphysical Observe cameras.
 
 Movement and interaction are intentions. The server applies bounded movement at fixed simulation ticks and validates collision, control generation, sequence, reach, stock, funds and ownership. A client never submits a finished position or an inventory assertion. The UI waits for the actual server outcome before reporting a purchase.
@@ -55,3 +56,11 @@ The small foundational premise that a creator built Lumi and her world is separa
 Use isolated EXPERIMENT histories for acceptance visits and future introductions. Configuring owner access does not require spawning an avatar into the owner's LIVE world or consuming the first real LIVE encounter as a test.
 
 Full remote accounts, guests, mobile first-person controls and independent hosting are outside this local prototype. Narrow Observe remains available; desktop keyboard/mouse is the primary Visit interface.
+
+## Persistent drop-off
+
+The shelf on the inside back wall is the single designated drop-off point. It stores up to four nonexpiring fruit/bread items. A successful deposit removes the item from your available inventory and places it in world custody; Observe, logout and disconnect do not reclaim or delete it. A full, blocked, stale or invalid interaction leaves inventory unchanged. Completed transaction history is bounded; active stored items and their receipts remain protected.
+
+The normal viewer's **Persistent drop-off** card distinguishes an item waiting from actual notice, opening, collection and consumption. Its activity entries are observer history, not Lumi's diary. A deposit does not notify her cognition or force her to visit the shelf. She must encounter its actual visible indicator and contents through normal sensing and attention. Closed contents are not exposed to her; opening and collection are distinct physical actions, and food only affects her body through later validated eating.
+
+No sender labels are attached in this milestone. Leaving an item does not identify you, invent a meeting, or rewrite earlier anonymous encounters. You can switch to **Observe**, disconnect the viewer, and return to the same eligible avatar and inventory while the deposited item remains in the running world. Normal checkpoint recovery applies: graceful shutdown attempts a final save; an abrupt failure may lose changes after the last committed checkpoint.

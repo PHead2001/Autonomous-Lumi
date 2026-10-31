@@ -34,7 +34,7 @@ export async function runSocialLab(options:SocialLabOptions) {
   const renderer=new ChromiumRenderer(),manager=new CaptureManager(()=>true,renderer);
   const automatic=new AutomaticCaptureCoordinator(manager,()=>true,undefined,()=>true);
   const captures:unknown[]=[];let lastCaptureReal=-Infinity,lastCaptureId:string|null=null,providerCheck:unknown;
-  const cp=()=>{const checkpoint=runtime.simulation.checkpoint();if(checkpoint.schemaVersion!==11)throw new Error('Social schema required');return checkpoint;};
+  const cp=()=>{const checkpoint=runtime.simulation.checkpoint();if((checkpoint.schemaVersion!==11&&checkpoint.schemaVersion!==12))throw new Error('Social schema required');return checkpoint;};
   const advance=async(ticks:number)=>{assert.ok(ticks>=1&&ticks<=128);runtime.applyControl({type:'fast-forward',ticks});await immediate();assert.equal(runtime.captureAvailability().fastForwardRemaining,0);};
   const state=()=>cp().visit;
   const control=async(forward=0,yaw=state().actor!.heading,ticks=1)=>{

@@ -51,7 +51,7 @@ test('Visit authenticates separately, binds one controller and records disconnec
     assert.equal((await packet(ws, badge)).type, 'ack');
     assert.equal((await packet(ws, { type: 'offer', ...scope, generation: control.generation, sequence: 3, actionId: 2, itemId: 999 })).type, 'ack');
     runtime.applyControl({ type: 'step' });
-    const socialState = runtime.simulation.checkpoint(); if (socialState.schemaVersion !== 11) throw new Error('Social schema required');
+    const socialState = runtime.simulation.checkpoint(); if ((socialState.schemaVersion!==11&&socialState.schemaVersion!==12)) throw new Error('Social schema required');
     assert.equal(socialState.social.badge.display, true); assert.equal(socialState.social.offer, null); assert.equal(socialState.social.feedback?.outcome, 'rejected'); assert.deepEqual(socialState.social.experiences, []); assert.equal(socialState.social.firstRecognizedEncounter, null, 'authentication alone supplies no recognition');
     const avatar = runtime.viewerState().visit!.actor!;
     assert.ok(avatar);

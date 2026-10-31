@@ -250,7 +250,7 @@ test('active V3 migration preserves old state/queue while historical replay stay
   const historical=replay(cp,[],5);assert.equal(historical.checkpoint.schemaVersion,3);
   const v1=new Simulation();assert.equal(replay(v1.checkpoint(),[],5).checkpoint.schemaVersion,1);
   const runtime=new BranchRuntime({worldId:'test',branchId:'experiment',mode:'EXPERIMENT',offline:true});
-  try {assert.throws(()=>runtime.enqueue({type:'sensor_feedback',intentId:1,stage:'recovered',captureId:null,capturedTick:0,sceneRevision:0,pose:{x:0,y:0,z:0,bodyHeading:0,headYaw:0,headPitch:0},outcome:'interrupted',signature:null,frameHash:null}),/private/);assert.equal(runtime.checkpoint().simulation.schemaVersion,11);}finally{await runtime.close();}
+  try {assert.throws(()=>runtime.enqueue({type:'sensor_feedback',intentId:1,stage:'recovered',captureId:null,capturedTick:0,sceneRevision:0,pose:{x:0,y:0,z:0,bodyHeading:0,headYaw:0,headPitch:0},outcome:'interrupted',signature:null,frameHash:null}),/private/);assert.equal(runtime.checkpoint().simulation.schemaVersion,12);}finally{await runtime.close();}
 });
 
 test('normalized acoustic/attention/capture chain exports all causal fields and replays with no renderer',async t=>{
@@ -269,6 +269,6 @@ test('normalized acoustic/attention/capture chain exports all causal fields and 
     const files=await inspectBundle(out),records=strFromU8(files['events.jsonl']).trim().split('\n').map(line=>JSON.parse(line));
     const request=records.find(r=>r.event_type==='CAPTURE_REQUEST');assert.equal(request.data.captureReasons,'salient_sound head_milestone');assert.equal(request.data.originSequence,intent.parentSequence);assert.equal(request.causal_event_id,`simulation:${intent.parentSequence}`);
     assert.ok(records.some(r=>r.event_type==='CAPTURE_FEEDBACK'&&r.data.captureId===metadata.captureId));assert.ok(records.some(r=>r.event_type==='ACOUSTIC_PROPAGATION'&&'barrierGroups' in r.data));
-    assert.match(strFromU8(files['REPRODUCTION.md']),/schema 11 head\/scene/);assert.match(strFromU8(files['REPRODUCTION.md']),/sensor_feedback/);assert.equal(Object.keys(files).some(name=>name.endsWith('.png')),false);assert.equal(runtime.simulation.checkpoint().experiences.length,0);
+    assert.match(strFromU8(files['REPRODUCTION.md']),/schema 12 head\/scene/);assert.match(strFromU8(files['REPRODUCTION.md']),/sensor_feedback/);assert.equal(Object.keys(files).some(name=>name.endsWith('.png')),false);assert.equal(runtime.simulation.checkpoint().experiences.length,0);
   }finally{await manager.close();await runtime.close();}
 });

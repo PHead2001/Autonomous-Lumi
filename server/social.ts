@@ -1,7 +1,7 @@
 import {SOCIAL_RULES,LEGACY_SOCIAL_RULES,SOCIAL_LIMITS,socialExact as exact,socialInteger as n,socialId as id,type SocialState,type SocialWorldView,type SocialTimeline,type SocialExperience} from '../shared/social-protocol.js';
 import {validateCognitionIdentity,type CognitionIdentity} from '../shared/cognition-protocol.js';
 import type {InternalSensationContext} from '../shared/physiology-protocol.js';
-import type {CheckpointV11} from './simulation.js';
+import type {CheckpointV11,CheckpointV12} from './simulation.js';
 export function createSocialState(tick:number):SocialState{return {schemaVersion:1,rulesVersion:SOCIAL_RULES,installedTick:tick,nextOfferId:1,offer:null,feedback:null,badge:{display:false,kind:'verified_seal',revision:0},experiences:[],firstRecognizedEncounter:null,seenEvidence:[],giftUse:null,timeline:[],nextTimelineSequence:1,droppedCount:0};}
 export function socialTimeline(state:SocialState,tick:number,type:SocialTimeline['type'],label:string):void {state.timeline.push({sequence:state.nextTimelineSequence++,tick,offerId:state.offer?.id??null,type,label});if(state.timeline.length>SOCIAL_LIMITS.timeline){state.timeline.shift();state.droppedCount++;}}
 export function socialPublicView(s:SocialState):SocialWorldView{return structuredClone({offer:s.offer,feedback:s.feedback,badge:s.badge,giftUse:s.giftUse,timeline:s.timeline,droppedCount:s.droppedCount});}
@@ -25,7 +25,7 @@ export function validateSocialState(value:unknown,tick:number,hz:number):SocialS
  if(!Array.isArray(s.timeline)||s.timeline.length>SOCIAL_LIMITS.timeline||s.nextTimelineSequence!==s.droppedCount+s.timeline.length+1)throw new Error('Invalid social timeline');let last=s.droppedCount;for(const t of s.timeline){if(!exact(t,['sequence','tick','offerId','type','label'])||t.sequence!==++last||!n(t.tick,s.installedTick,tick)||!(t.offerId===null||n(t.offerId,1,s.nextOfferId-1))||!['offer','noticed','response','transfer','cancelled','expired','badge','encoding','consumed'].includes(t.type)||typeof t.label!=='string'||t.label.length>160)throw new Error('Invalid social timeline entry');}return structuredClone(s);
 }
 /** Provider-safe semantics only. Private capture/actor/item/control identifiers never enter the DTO. */
-export function socialProviderExperiences(cp:CheckpointV11,identity:CognitionIdentity):{interpretation:string;uncertainty:string}[]{
+export function socialProviderExperiences(cp:CheckpointV11|CheckpointV12,identity:CognitionIdentity):{interpretation:string;uncertainty:string}[]{
  if(cp.cognition.identity.worldId!==identity.worldId||cp.cognition.identity.branchId!==identity.branchId||cp.cognition.identity.historyId!==identity.historyId||cp.cognition.identity.mode!==identity.mode||cp.physiology.origin.evidenceEligibility!=='eligible'||cp.physiology.legacyImport)return [];
  const imports=cp.physiology.verifiedCheckpointImports,origin=cp.physiology.origin.historyId;
  const admitted=(e:SocialExperience)=>{let history=origin,after=-1;for(const i of imports){if(e.identity.historyId===history&&e.encodedTick>after&&e.encodedTick<=i.importTick)return true;history=i.destinationHistoryId;after=i.importTick;}return e.identity.historyId===history&&e.encodedTick>after&&e.encodedTick<=cp.tick;};

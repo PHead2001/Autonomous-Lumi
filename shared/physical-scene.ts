@@ -1,3 +1,4 @@
+import {deliveryFixtureBoxes} from './delivery-geometry.js';
 import {socialCueBoxes} from './social-geometry.js';
 import { visitActorBoxes } from './visit-geometry.js';
 import { townFixtureBoxes } from './town-geometry.js';
@@ -128,6 +129,7 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
   }
   if(state.visit?.actor)boxes.push(...visitActorBoxes(state));
   if(state.social)boxes.push(...socialCueBoxes(state));
+  if(state.delivery)boxes.push(...deliveryFixtureBoxes(state));
   return { revision: state.social?'lumi-social-scene-v1':state.visit?'lumi-visit-scene-v1':state.town?'lumi-town-scene-v1':PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
 }
 /** Conservative keepout for the entire ordinary slam sweep, not an invisible occluder. */

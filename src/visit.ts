@@ -3,6 +3,7 @@ import type {ActiveTarget} from '../shared/lab-protocol';
 import {VisitControls,type VisitInteraction,type VisitLook} from './visit-controls';
 import {VisitGrant} from './visit-grant';
 import {offerPresentation,socialControls,socialRequestResult,type PendingSocialRequest} from './viewer-social';
+import {deliveryControls,deliveryPresentation,deliveryRequestResult,type PendingDeliveryRequest} from './viewer-delivery';
 
 export interface VisitorCameraPose {x:number;z:number;heading:number;pitch:number}
 interface VisitViewCallbacks {camera(active:boolean,pose:VisitorCameraPose|null,look:VisitLook):void;mode(active:boolean):void;activateAudio():void}
@@ -14,6 +15,14 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
   const panel=el('visit-panel'),status=el('visit-session-status'),feedback=el('visit-feedback'),login=el<HTMLFormElement>('visit-login'),ready=el('visit-ready'),play=el('visit-play'),enter=el<HTMLButtonElement>('visit-enter'),takeover=el<HTMLButtonElement>('visit-takeover'),observe=el<HTMLButtonElement>('enter-observe'),choose=el<HTMLButtonElement>('choose-visit'),credential=el<HTMLInputElement>('visit-credential'),good=el<HTMLSelectElement>('visit-good');
   const controls=new VisitControls();let world:WorldState|null=null,csrf:string|null=null,socket:WebSocket|null=null,timer:ReturnType<typeof setInterval>|undefined,bindingTimer:ReturnType<typeof setTimeout>|undefined,pending=false,entering=false,epoch=0,drag:number|null=null,px=0,py=0,lastFeedback='',grant:VisitGrant|null=null,socialRequest:PendingSocialRequest|null=null;
   const report=(message:string)=>{feedback.textContent=message;el('visit-hud-feedback').textContent=message;};
+  let deliveryRequest:PendingDeliveryRequest|null=null;
+  function renderDelivery(){
+    if(!world)return;const d=world.delivery,eligibility=deliveryControls(d,world.visit,world.social,controls.active),presentation=deliveryPresentation(d);
+    el('visit-delivery').hidden=!d;el<HTMLButtonElement>('visit-deposit').disabled=!eligibility.canDeposit||!!deliveryRequest;
+    el('visit-deposit-hint').textContent=deliveryRequest?'Deposit requested; waiting for the authoritative outcome.':eligibility.hint;
+    el('delivery-section').hidden=!d;el('delivery-summary').textContent=presentation.title;el('delivery-detail').textContent=presentation.detail;el('delivery-storage').textContent=d?`${d.occupied} / ${d.capacity} spaces`:'';
+    const rows=document.createDocumentFragment();for(const label of presentation.entries){const row=document.createElement('li');row.textContent=label;rows.append(row);}el('delivery-items').replaceChildren(rows);
+  }
   function scope():ActiveTarget {if(!world?.branchId)throw new Error('Wait for the selected current world before entering.');return {worldId:world.worldId,branchId:world.branchId,runId:world.runId};}
   function camera(){callbacks.camera(controls.active,world?.visit?.actor??null,controls.cameraLook);}
   function send(value:unknown){if(value&&socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
@@ -24,8 +33,8 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
     el('visit-offer-hint').textContent=socialRequest?'Request sent; waiting for its server outcome.':eligibility.hint;el('visit-offer-status').textContent=`${presentation.title}. ${presentation.detail}`;el('visit-hud-offer').textContent=social?presentation.title:'';
     el('visit-badge').textContent=social?.badge.display?'Hide introduction badge':'Show introduction badge';el('visit-badge').setAttribute('aria-pressed',String(social?.badge.display??false));el('visit-badge-status').textContent=social?.badge.display?'The in-world introduction badge is displayed. Visibility, attention and successful encoding are still required; no greeting or meeting is guaranteed.':'The optional in-world badge is hidden. Login alone does not identify you to Lumi.';
   }
-  function setMode(active:boolean){observe.setAttribute('aria-pressed',String(!active));choose.setAttribute('aria-pressed',String(active));el('visit-hud').hidden=!active;callbacks.mode(active);camera();renderSocial();}
-  function release(message?:string){clearInterval(timer);clearTimeout(bindingTimer);send(controls.end());grant=null;socialRequest=null;const prior=socket;socket=null;prior?.close();play.hidden=true;setMode(false);enter.disabled=!world?.visit||!csrf||pending;if(message)status.textContent=message;}
+  function setMode(active:boolean){observe.setAttribute('aria-pressed',String(!active));choose.setAttribute('aria-pressed',String(active));el('visit-hud').hidden=!active;callbacks.mode(active);camera();renderSocial();renderDelivery();}
+  function release(message?:string){clearInterval(timer);clearTimeout(bindingTimer);send(controls.end());grant=null;socialRequest=null;if(deliveryRequest)el('visit-deposit-status').textContent='Control ended before this deposit was confirmed. Check persistent storage and inventory when reconnected.';deliveryRequest=null;const prior=socket;socket=null;prior?.close();play.hidden=true;setMode(false);enter.disabled=!world?.visit||!csrf||pending;if(message)status.textContent=message;}
   function confirmEntry(){
     if(!grant||!world)return;const state=grant.inspect(world);
     if(state.status==='rejected'){release(state.message);return;}
@@ -58,7 +67,7 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
         if(message.type==='bound'){
           try{grant?.bind(message.generation!);confirmEntry();}catch(error){release(error instanceof Error?error.message:'Control grant changed. Re-enter Visit.');}
         }else if(message.type==='error'){report(message.error??'The server rejected that control.');}
-        else if(message.type==='ack'&&message.queued===false){if(message.sequence===socialRequest?.sequence){socialRequest=null;renderSocial();}report('That intention was not admitted. Your last confirmed world state remains authoritative.');}
+        else if(message.type==='ack'&&message.queued===false){if(message.sequence===socialRequest?.sequence){socialRequest=null;renderSocial();}if(message.sequence===deliveryRequest?.sequence){deliveryRequest=null;el('visit-deposit-status').textContent='Deposit was not admitted. Check storage and inventory before retrying.';renderDelivery();}report('That intention was not admitted. Your last confirmed world state remains authoritative.');}
       };
       current.onclose=()=>{if(socket===current)release('Visit control disconnected. Movement is stopped by the server; re-enter to resume the same avatar.');};current.onerror=()=>current.close();
       bindingTimer=setTimeout(()=>{if(socket===current&&grant&&world&&!controls.active){const state=grant.timeout(world);if(state.status==='active')confirmEntry();else release(state.message);}},8000);
@@ -83,7 +92,13 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
     if(!packet){report(eligibility.hint);return;}socialRequest={actionId:packet.actionId,sequence:packet.sequence,kind};send(packet);renderSocial();report(kind==='offer'?'Offer requested; pending status and response await the server.':kind==='cancel'?'Cancellation requested; waiting for the server outcome.':'Badge display change requested; waiting for the server outcome.');
   }
   el('visit-offer').onclick=()=>socialIntent('offer');el('visit-cancel-offer').onclick=()=>socialIntent('cancel');el('visit-badge').onclick=()=>socialIntent('badge');
-  const keydown=(event:KeyboardEvent)=>{if(!controls.active||event.target!==canvas)return;if(controls.key(event.code,true)){event.preventDefault();if(!event.repeat)send(controls.movement());}else if(event.code==='KeyE'&&!event.repeat){event.preventDefault();interact();}else if(event.code==='KeyF'&&!event.repeat){event.preventDefault();socialIntent('offer');}};
+  function deposit(){
+    if(!world?.visit||deliveryRequest||socket?.readyState!==WebSocket.OPEN)return;const eligibility=deliveryControls(world.delivery,world.visit,world.social,controls.active);
+    if(!eligibility.canDeposit||eligibility.itemId===null){report(eligibility.hint);return;}const packet=controls.deposit(eligibility.itemId,world.visit.lastActionId);if(!packet)return;
+    deliveryRequest={actionId:packet.actionId,sequence:packet.sequence};send(packet);el('visit-deposit-status').textContent='Deposit requested; waiting for the authoritative outcome.';renderDelivery();report('Deposit requested. The item remains in your last confirmed inventory until the server commits it.');
+  }
+  el('visit-deposit').onclick=deposit;
+  const keydown=(event:KeyboardEvent)=>{if(!controls.active||event.target!==canvas)return;if(controls.key(event.code,true)){event.preventDefault();if(!event.repeat)send(controls.movement());}else if(event.code==='KeyE'&&!event.repeat){event.preventDefault();interact();}else if(event.code==='KeyF'&&!event.repeat){event.preventDefault();socialIntent('offer');}else if(event.code==='KeyG'&&!event.repeat){event.preventDefault();deposit();}};
   const keyup=(event:KeyboardEvent)=>{if(controls.key(event.code,false)){event.preventDefault();send(controls.movement());}};
   const pointerdown=(event:PointerEvent)=>{if(!controls.active||event.button!==0)return;canvas.focus({preventScroll:true});drag=event.pointerId;px=event.clientX;py=event.clientY;canvas.setPointerCapture(event.pointerId);};
   const pointermove=(event:PointerEvent)=>{if(drag!==event.pointerId||!controls.active)return;controls.turn(event.clientX-px,event.clientY-py);px=event.clientX;py=event.clientY;camera();};
@@ -99,6 +114,7 @@ export function mountVisit(canvas:HTMLCanvasElement,callbacks:VisitViewCallbacks
         const f=v.feedback,key=f?`${f.tick}/${f.actionId}/${f.type}/${f.outcome}`:'';if(f&&key!==lastFeedback){lastFeedback=key;report(`${f.type==='purchase'?'Purchase':f.type==='door'?'Door interaction':'Control'} ${f.outcome==='accepted'?'confirmed':f.outcome==='stopped'?'stopped':'not completed'}. ${readable(f.reason)}`);}
       }
       const socialResult=socialRequestResult(socialRequest,next.social?.feedback);if(socialResult){socialRequest=null;report(socialResult.message);}renderSocial();
+      const deliveryResult=deliveryRequestResult(deliveryRequest,next.delivery?.feedback);if(deliveryResult){deliveryRequest=null;el('visit-deposit-status').textContent=deliveryResult.message;report(deliveryResult.message);}renderDelivery();
       camera();
     },
     disconnect(){epoch++;release('Viewer disconnected. Visit control released; the server world continues.');},

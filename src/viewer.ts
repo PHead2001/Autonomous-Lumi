@@ -66,7 +66,7 @@ function connect() {
     element('viewer-room').textContent = `${experiment?'ISOLATED EXPERIMENT':'LUMI’S HOME'} · ${isVisiting?'VISIT':'OBSERVE'}`;
     const presentation = worldActivity(state);
     element('activity-title').textContent = presentation.title; element('activity-detail').textContent = presentation.detail;
-    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30,8,state.visit,state.social);
+    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30,8,state.visit,state.social,state.delivery);
     element('history-status').textContent = history.note;
     const timeline = element('activity-timeline'), fragment = document.createDocumentFragment();
     for (const entry of history.entries) { const row = document.createElement('li'), age = document.createElement('time'), label = document.createElement('span'); age.textContent = entry.age; label.textContent = entry.label; row.append(age,label); fragment.append(row); }

@@ -194,7 +194,7 @@ test('invalid camera admission records a failed capture and retains the earlier 
 
 test('nonzero home layout revision keeps the authoritative capture/head ordering cursor',async()=>{
   const source=new BranchRuntime({worldId:'capture-cursor',branchId:'fixture',mode:'EXPERIMENT',offline:true,physiology:{active:false}}),checkpoint=source.checkpoint();await source.close();
-  if((checkpoint.simulation.schemaVersion!==9&&(checkpoint.simulation.schemaVersion!==11&&checkpoint.simulation.schemaVersion!==10)))throw new Error('Town schema required');
+  if((checkpoint.simulation.schemaVersion!==9&&((checkpoint.simulation.schemaVersion!==11&&checkpoint.simulation.schemaVersion!==12)&&checkpoint.simulation.schemaVersion!==10)))throw new Error('Town schema required');
   const cp=checkpoint.simulation,fixture=createVisibilityFixture();
   cp.character=fixture.character;cp.scene={...fixture.scene!,revision:3};cp.head=fixture.head!;cp.pauseUntilTick=10000;cp.home.controller.searchNextTick=10000;cp.home.layout!.revision=7;
   const runtime=new BranchRuntime({worldId:'capture-cursor',branchId:'fixture',mode:'EXPERIMENT',offline:true,checkpoint}),manager=new CaptureManager(()=>true,{render:async(snapshot,width,height)=>pixelFixtureFrame(snapshot,width,height),close:async()=>{}});

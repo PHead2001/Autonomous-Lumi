@@ -45,9 +45,9 @@ test('runtime v1 offline restore stays exact while active migration records v2 a
   try {
     assert.equal(hashCheckpoint(historical.checkpoint().simulation), hashCheckpoint(seed));
     active.applyControl({ type: 'pause' }); active.applyControl({ type: 'step' }); active.capture();
-    const cp = active.checkpoint(); assert.equal(cp.schemaVersion, 10); assert.equal(cp.simulation.rulesVersion, SOCIAL_RULES);
+    const cp = active.checkpoint(); assert.equal(cp.schemaVersion, 11); assert.equal(cp.simulation.rulesVersion, 'lumi-daily-v1');
     await active.recorder!.flush(); const records = (await readRun(active.recorder!.runDirectory)).records;
-    assert.ok(records.some(record => record.event_type === 'STATE_RULES_MIGRATED' && record.data.fromRules === LEGACY_SOCIAL_RULES && record.data.toRules === SOCIAL_RULES));
+    assert.ok(records.some(record => record.event_type === 'STATE_RULES_MIGRATED' && record.data.fromRules === LEGACY_SOCIAL_RULES && record.data.toRules === 'lumi-daily-v1'));
     const out = join(directory, 'v2.zip'); const exported = await exportIncident({ runDirectory: active.recorder!.runDirectory, out, snapshot: await active.recorder!.snapshotForExport() });
     assert.equal(exported.manifest.evidence_status, 'COMPLETE');
     assert.equal((await replayBundle(out)).runtimeHash, hashRuntimeCheckpoint(cp));
@@ -70,7 +70,7 @@ test('recovery retains a validated v1 generation beyond normal rotation before a
     const backup = JSON.parse(await readFile(join(recovered.store.directory, archive), 'utf8')) as { checkpoint: unknown };
     assert.equal(hashRuntimeCheckpoint(validateRuntimeCheckpoint(backup.checkpoint)), hashRuntimeCheckpoint(original));
     active = new BranchRuntime({ worldId: 'policy', branchId: 'live', historyId: opened.store.historyId, mode: 'LIVE', checkpoint: recovered.checkpoint, directory: join(directory, 'runs'), dormant: true });
-    assert.equal(active.checkpoint().simulation.rulesVersion, SOCIAL_RULES);
+    assert.equal(active.checkpoint().simulation.rulesVersion, 'lumi-daily-v1');
     await recovered.store.save(active.checkpoint()); await recovered.store.save(active.checkpoint());
     assert.ok((await readdir(recovered.store.directory)).includes(archive));
   } finally { await historical?.close(); await active?.close(); await rm(directory, { recursive: true, force: true }); }

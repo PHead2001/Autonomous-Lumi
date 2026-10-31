@@ -51,7 +51,11 @@ export function applyAcceptedBodyEffect(previous:BodyState,raw:PhysiologyEffect,
   else emit('BODY_EFFECT_REJECTED',{sequence:effect.sequence,cause:'physical_limit'});
   return {state,events};
 }
-export function advanceBody(previous:BodyState,ctx:BodyStepContext,acceptedEffects:readonly PhysiologyEffect[]=[]):{state:BodyState;events:PhysiologyEvent[];capability:BodyCapability;impairment:BodyImpairment} {
+/** Historical checkpoints retain their original deficit/recovery semantics.
+ * Daily-life policy treats collapse as reversible weakness: enforced rest can
+ * restore capability, but never supplies calories, satiety or a fictitious meal. */
+export type BodyRecoveryPolicy='historical'|'daily-life-v1';
+export function advanceBody(previous:BodyState,ctx:BodyStepContext,acceptedEffects:readonly PhysiologyEffect[]=[],policy:BodyRecoveryPolicy='historical'):{state:BodyState;events:PhysiologyEvent[];capability:BodyCapability;impairment:BodyImpairment} {
   clock(ctx.tick,ctx.hz);
   if(ctx.hz!==previous.hz||ctx.tick!==previous.lastIntegratedTick+1)throw new Error('Body requires exactly one consecutive fixed tick');
   if(!ctx.executed||Object.keys(ctx.executed).sort().join(',')!=='distanceMetres,headRadians,taskProgress'||!Object.values(ctx.executed).every(n=>Number.isFinite(n)&&n>=0)||ctx.executed.distanceMetres>10||ctx.executed.taskProgress>10000||ctx.executed.headRadians>Math.PI*2||typeof ctx.safetyPreempted!=='boolean'||typeof ctx.capableAtIntervalStart!=='boolean'||acceptedEffects.length>32)throw new Error('Invalid executed body interval');
@@ -87,10 +91,18 @@ export function advanceBody(previous:BodyState,ctx:BodyStepContext,acceptedEffec
     const reserveLoad=clamp((.25-state.reserves)/.25),sleepLoad=clamp((state.sleepPressure-.65)/.35);
     const fatigueRecovery=asleep?c.sleepFatigueRecoveryPerSecond:resting?c.restFatigueRecoveryPerSecond:c.fatigueRecoveryPerSecond;
     state.fatigue=clamp(state.fatigue+dt*(reserveLoad*c.lowReserveFatiguePerSecond+(!asleep?sleepLoad*c.sleepDebtFatiguePerSecond:0)-fatigueRecovery));
-    if(state.reserves<.12)state.condition=clamp(Math.max(.1,state.condition-c.conditionLossPerSecond*dt*(.12-state.reserves)/.12));
+    const recoveringWeakness=policy==='daily-life-v1'&&state.mode==='incapacitated';
+    if(recoveringWeakness)state.condition=clamp(state.condition+c.conditionRecoveryPerSecond*dt);
+    else if(state.reserves<.12)state.condition=clamp(Math.max(.1,state.condition-c.conditionLossPerSecond*dt*(.12-state.reserves)/.12));
     else if(asleep||resting)state.condition=clamp(state.condition+c.conditionRecoveryPerSecond*dt);
-    if(state.condition<=c.incapacityCondition)transition('incapacitated','condition_limit');
-    else if(state.mode==='incapacitated'&&state.condition>=c.recoveryCondition&&state.reserves>=.15&&state.sleepPressure<=.4)transition('awake','condition_recovered');
+    if(state.condition<=c.incapacityCondition&&state.mode!=='incapacitated'){
+      transition('incapacitated','condition_limit');
+      if(policy==='daily-life-v1')emit('BODY_RECOVERY_STARTED',{policy,cause:'reversible_weakness',reason:'rest_in_place_without_nutrition'});
+    }
+    else if(state.mode==='incapacitated'&&state.condition>=c.recoveryCondition&&(policy==='daily-life-v1'||state.reserves>=.15)&&state.sleepPressure<=.4){
+      if(policy==='daily-life-v1')emit('BODY_RECOVERY_COMPLETED',{policy,cause:'restored_capability_not_nutrition',reason:'rest_in_place_without_nutrition'});
+      transition('awake','condition_recovered');
+    }
     else if(state.mode!=='incapacitated'&&state.mode!=='asleep'&&state.sleepPressure>=c.forcedSleepPressure)transition('asleep','sleep_pressure_limit');
     else if(state.mode==='asleep'&&state.sleepPressure<=c.wakePressure)transition('awake','sleep_recovered');
   }else state.circadianAnchorTick++;

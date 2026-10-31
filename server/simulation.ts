@@ -1,3 +1,5 @@
+import {DAILY_RULES,DELIVERY_LIMITS,DELIVERY_ANCHOR,createDeliveryState,deliveryPublicView,deliveryTimeline,validateDeliveryState,validateDeliveryCommand,type DeliveryState,type DeliveryCommand,type DeliveryDepositCommand,type DeliveryObservationCommand,type DeliveryExperience} from '../shared/delivery-protocol.js';
+import {deliveryReach} from '../shared/delivery-geometry.js';
 import {SOCIAL_RULES,LEGACY_SOCIAL_RULES,SOCIAL_LIMITS,type SocialRulesVersion,validateSocialCommand,type SocialState,type SocialCommand,type SocialIntentCommand,type SocialObservationCommand,type SocialExperience} from '../shared/social-protocol.js';
 import {createSocialState,socialPublicView,socialTimeline,chooseOfferResponse,validateSocialState,socialProviderExperiences} from './social.js';
 import {socialReach} from '../shared/social-geometry.js';
@@ -37,7 +39,7 @@ export type InvalidReason = 'malformed_json' | 'invalid_shape' | 'unknown_comman
 export type SceneCommand = {type:'configure_scene';illumination:number;fixture:'none'|'visibility';fixtureColor:string;doorOpenRadians:number|null};
 export type PhysiologyCommand = {type:'physiology_fixture';effect:PhysiologyEffect}|{type:'physiology_safety_fixture';ticks:number}|{type:'physiology_encoding';enabled:boolean};
 export type HomeCommand=HomeObservationCommand|{type:'doorbell'}|{type:'home_layout_fixture';layout:HomeLayout};
-export type NormalizedCommand = SocialCommand | VisitCommand | TownCommand | HomeCommand | PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
+export type NormalizedCommand = DeliveryCommand | SocialCommand | VisitCommand | TownCommand | HomeCommand | PhysiologyCommand | { type: 'slam' } | { type: 'invalid'; reason: InvalidReason } | HeadAction | SceneCommand | SensoryCommand | CognitionCommand;
 export interface OrderedInput { sequence: number; receivedTick: number; applyTick: number; command: NormalizedCommand; admission: 'queued' | 'queue_full' }
 export interface DeterministicEvent {
   sequence: number; tick: number; type: string; component: string; outcome: string;
@@ -61,9 +63,10 @@ function object(value: unknown, keys: string[], label: string): Record<string, u
 }
 function integer(v: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max; }
 function finite(v: unknown, min: number, max: number): v is number { return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max; }
-export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false, home=false, town=false, visit=false,social=false): NormalizedCommand {
+export function validateCommand(value: unknown, vision=false, sensory=false, cognition=false, physiology=false, home=false, town=false, visit=false,social=false,delivery=false): NormalizedCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid normalized command');
   const c = value as Record<string, unknown>;
+  if(delivery&&['delivery_deposit','delivery_observation'].includes(c.type as string))return validateDeliveryCommand(value);
   if(social&&['social_offer','social_cancel','social_badge','social_observation'].includes(c.type as string))return validateSocialCommand(value);
   if(visit&&['visit_start','visit_stop','visit_control','visit_interact'].includes(c.type as string))return validateVisitCommand(value);
   if(town&&['town_observation','shop_purchase','town_door','town_fixture'].includes(c.type as string))return validateTownCommand(value);
@@ -125,6 +128,7 @@ export class Simulation {
   protected supportsTownInputs():boolean{return false;}
   protected supportsVisitInputs():boolean{return false;}
   protected supportsSocialInputs():boolean{return false;}
+  protected supportsDeliveryInputs():boolean{return false;}
   protected boundMovement(x:number,z:number):[number,number]{return [Math.max(-ROOM.walkX,Math.min(ROOM.walkX,x)),Math.max(-ROOM.walkZ,Math.min(ROOM.walkZ,z))];}
   protected cognitionActionAllowed():boolean{return true;}
   protected movementPermitted():boolean{return true;}
@@ -168,7 +172,7 @@ export class Simulation {
     this.data.eventHash = hashCanonical({ previous: this.data.eventHash, event }); events.push(event); return event;
   }
   enqueue(command: NormalizedCommand): { input: OrderedInput; events: DeterministicEvent[] } {
-    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs(),this.supportsSocialInputs()), events: DeterministicEvent[] = [];
+    const normalized = validateCommand(command,this.supportsVisionInputs(),this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs(),this.supportsSocialInputs(),this.supportsDeliveryInputs()), events: DeterministicEvent[] = [];
     const input: OrderedInput = { sequence: this.data.nextInputSequence++, receivedTick: this.data.tick, applyTick: this.data.tick + 1, command: normalized, admission: this.data.pendingInputs.length < this.data.config.maxPendingInputs ? 'queued' : 'queue_full' };
     const capacityReason=input.admission==='queued'?this.additionalInputCapacityReason(input):null;
     if(capacityReason!==null)input.admission='queue_full';
@@ -238,7 +242,7 @@ export interface SyntheticExperience {
   id: number; tick: number; kind: 'cue' | 'clock'; provenance: 'TEST STUB';
   observedSeconds: number | null; uncertaintySeconds: number | null;
 }
-export type Experience = SyntheticExperience | RealExperience | InternalExperience | SocialExperience;
+export type Experience = SyntheticExperience | RealExperience | InternalExperience | SocialExperience | DeliveryExperience;
 export interface CheckpointV2 extends Omit<CheckpointV1, 'schemaVersion' | 'rulesVersion'> {
   schemaVersion: 2; rulesVersion: 'lumi-lab-v1'; subjective: SubjectiveClock; activity: ActivityState;
   experiences: SyntheticExperience[]; nextExperienceId: number;
@@ -263,7 +267,8 @@ export interface CheckpointV8 extends Omit<CheckpointV7,'schemaVersion'|'rulesVe
 export interface CheckpointV9 extends Omit<CheckpointV8,'schemaVersion'|'rulesVersion'> {schemaVersion:9;rulesVersion:typeof TOWN_RULES;town:TownState}
 export interface CheckpointV10 extends Omit<CheckpointV9,'schemaVersion'|'rulesVersion'> {schemaVersion:10;rulesVersion:typeof VISIT_RULES;visit:VisitState}
 export interface CheckpointV11 extends Omit<CheckpointV10,'schemaVersion'|'rulesVersion'> {schemaVersion:11;rulesVersion:SocialRulesVersion;social:SocialState}
-export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8 | CheckpointV9 | CheckpointV10 | CheckpointV11;
+export interface CheckpointV12 extends Omit<CheckpointV11,'schemaVersion'|'rulesVersion'> {schemaVersion:12;rulesVersion:typeof DAILY_RULES;delivery:DeliveryState}
+export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8 | CheckpointV9 | CheckpointV10 | CheckpointV11 | CheckpointV12;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
   for (const key of ['subjective','activity','experiences','nextExperienceId']) delete result[key];
@@ -280,6 +285,7 @@ export function upgradeCheckpoint(value: unknown): CheckpointV2 {
     activity: { status:'idle',cursor:0,totalTicks:0,appliedMilestones:[],completionCount:0,activityId:0 }, experiences:[], nextExperienceId:1 };
 }
 export function validateCheckpoint(value: unknown): Checkpoint {
+  if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===12)return validateDeliveryCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===11)return validateSocialCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===10)return validateVisitCheckpoint(value);
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===9)return validateTownCheckpoint(value);
@@ -357,7 +363,7 @@ export class LabSimulation extends Simulation {
     return events;
   }
   protected labCheckpoint():CheckpointV2 {return {...super.checkpoint(),schemaVersion:2,rulesVersion:'lumi-lab-v1',subjective:structuredClone(this.subjective),activity:structuredClone(this.activity),experiences:structuredClone(this.experiences),nextExperienceId:this.nextExperienceId};}
-  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11 {return this.labCheckpoint();}
+  override checkpoint():CheckpointV2|CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12 {return this.labCheckpoint();}
 }
 
 /** Validate V3 through the unchanged V2 contract, substituting only its newly typed inputs.
@@ -392,7 +398,7 @@ export class VisionSimulation extends LabSimulation {
     super({...options,checkpoint:visionLabPart(cp)});this.data.pendingInputs=structuredClone(cp.pendingInputs);this.head=cp.head;this.scene=cp.scene;this.visionRules=cp.rulesVersion;
   }
   override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {
-    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs(),this.supportsSocialInputs());
+    const normalized=validateCommand(command,true,this.supportsSensoryInputs(),this.supportsCognitionInputs(),this.supportsPhysiologyInputs(),this.supportsHomeInputs(),this.supportsTownInputs(),this.supportsVisitInputs(),this.supportsSocialInputs(),this.supportsDeliveryInputs());
     if(normalized.type==='look_at'&&normalized.evidence) {
       if(this.visionRules==='lumi-eyes-v1'&&isCapturedBearingEvidence(normalized.evidence))throw new Error('Captured bearing evidence requires current vision rules');
       if(this.visionRules!== 'lumi-eyes-v1'&&!isCapturedBearingEvidence(normalized.evidence))throw new Error('Legacy observation evidence cannot be admitted; capture again');
@@ -403,7 +409,7 @@ export class VisionSimulation extends LabSimulation {
   protected override onDoorChanged():void{this.scene.revision++;}
   protected override canMove(x:number,z:number):boolean{return canMoveCharacter(this.scene,this.data.character.x,this.data.character.z,x,z);}
   protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {
-    const command=input.command;if(command.type==='social_offer'||command.type==='social_cancel'||command.type==='social_badge'||command.type==='social_observation')return false;if(command.type==='visit_start'||command.type==='visit_stop'||command.type==='visit_control'||command.type==='visit_interact')return false;if(command.type==='town_observation'||command.type==='town_door'||command.type==='town_fixture'||command.type==='shop_purchase')return false;if(command.type==='home_observation'||command.type==='home_layout_fixture'||command.type==='doorbell')return false;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
+    const command=input.command;if(command.type==='delivery_deposit'||command.type==='delivery_observation')return false;if(command.type==='social_offer'||command.type==='social_cancel'||command.type==='social_badge'||command.type==='social_observation')return false;if(command.type==='visit_start'||command.type==='visit_stop'||command.type==='visit_control'||command.type==='visit_interact')return false;if(command.type==='town_observation'||command.type==='town_door'||command.type==='town_fixture'||command.type==='shop_purchase')return false;if(command.type==='home_observation'||command.type==='home_layout_fixture'||command.type==='doorbell')return false;if(command.type==='slam'||command.type==='invalid'||command.type==='emit_sound'||command.type==='sensor_feedback'||command.type==='cognition_request'||command.type==='cognition_result'||command.type==='cognition_observation_request'||command.type==='physiology_fixture'||command.type==='physiology_safety_fixture'||command.type==='physiology_encoding')return false;
     const reject=(reason:string)=>{this.emit(events,'INPUT_VALIDATED','head','rejected',{reason,command:command.type},input.sequence);return true;};
     if(command.type==='configure_scene') {
       if(this.mode!=='EXPERIMENT')return reject('scene_fixture_experiment_only');
@@ -466,7 +472,7 @@ export class VisionSimulation extends LabSimulation {
     }else{h.yaw+=dx/distance*maximum;h.pitch+=dy/distance*maximum;}
     return;
   }
-  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
+  override checkpoint():CheckpointV3|CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12{return {...this.labCheckpoint(),schemaVersion:3,rulesVersion:this.visionRules,head:structuredClone(this.head),scene:structuredClone(this.scene)};}
   override snapshot():WorldState{return {...super.snapshot(),head:structuredClone(this.head),scene:structuredClone(this.scene)};}
 }
 
@@ -698,7 +704,7 @@ export class SensorySimulation extends VisionSimulation {
     }
     return events;
   }
-  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
+  override checkpoint():CheckpointV4|CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12 {return {...super.checkpoint(),schemaVersion:4,rulesVersion:this.attentionRules,attention:structuredClone(this.attention),genericSoundCount:this.genericSoundCount};}
   attentionState():AttentionState{return structuredClone(this.attention);}
 }
 function cognitionSensoryPart(cp:CheckpointV5):CheckpointV4 {
@@ -726,9 +732,9 @@ export function validateCognitionCheckpoint(value:unknown):CheckpointV5 {
 }
 function validateActionOutcome(a:CognitionActionOutcome,tick:number){object(a,['status','reason','actionId','tick'],'cognition action outcome');if(!['executed','rejected'].includes(a.status)||typeof a.reason!=='string'||a.reason.length>100||!(a.actionId===null||integer(a.actionId,1))||!integer(a.tick,0,tick))fail('cognition action outcome');}
 /** External callbacks supply only complete ordered commands; this class owns all consequences. */
-export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11 = CheckpointV5> extends SensorySimulation {
+export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12 = CheckpointV5> extends SensorySimulation {
  protected cognition:CognitionState;private realExperiences:RealExperience[];private experienceAncestry:{historyId:string;afterTick:number;throughTick:number}[]|null=null;
- constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11}){
+ constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiologyAncestry?:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12}){
   const source=validateCheckpoint(options.checkpoint??new Simulation({seed:options.seed}).checkpoint());
   const cp=source.schemaVersion===5?source:null;
   super({...options,checkpoint:cp?cognitionSensoryPart(cp):source,historical:false});
@@ -736,7 +742,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
   this.cognition=cp?structuredClone(cp.cognition):{identity,requests:[],nextRequestTick:0,actionCooldownUntilTick:0,responses:0,firstRequestTick:null,lastResponseTick:null,observationRequestedTick:null,captureUpgrade:null};
   this.realExperiences=structuredClone(cp?.realExperiences??[]);
   if(cp){this.data.pendingInputs=structuredClone(cp.pendingInputs);if(!options.historical)this.cognition.identity=identity;}
-  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
+  if(options.physiologyAncestry){const ancestry=validateCheckpoint(options.physiologyAncestry) as CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12;if(!cp||hashCanonical(cp)!==hashCanonical(physiologyCognitionPart(ancestry))||this.cognition.identity.historyId!==ancestry.cognition.identity.historyId)throw new Error('Cognition ancestry requires the matching validated physiology checkpoint');this.experienceAncestry=experienceEpochs(ancestry);}
   if(this.mode==='LIVE'&&(this.realExperiences.some(e=>e.identity.mode!=='LIVE'||!this.admitsExperienceHistory(e.identity.historyId,e.encodedTick))||cp&&cp.cognition.identity.mode!=='LIVE'))throw new Error('Experimental experience cannot enter LIVE');
  }
  protected admitsExperienceHistory(historyId:string,encodedTick:number):boolean{return this.experienceAncestry?this.experienceAncestry.some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick):historyId===this.cognition.identity.historyId;}
@@ -848,7 +854,7 @@ export class CognitionSimulation<C extends CheckpointV5|CheckpointV6|CheckpointV
 }
 
 /** Schema 6 is an active-world migration only. V1-V5 offline execution keeps its original class. */
-function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11):CheckpointV5 {
+function physiologyCognitionPart(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12):CheckpointV5 {
  const raw=structuredClone(cp) as unknown as Record<string,unknown>;
  for(const key of ['body','interoception','physiology','internalExperiences'])delete raw[key];
  raw.schemaVersion=5;raw.rulesVersion=COGNITION_RULES;
@@ -885,13 +891,13 @@ export function validatePhysiologyCheckpoint(value:unknown):CheckpointV6 {
  return structuredClone(cp);
 }
 /** Derived solely from the persisted, validated ancestry; no history wildcard. */
-function experienceEpochs(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11):{historyId:string;afterTick:number;throughTick:number}[]{
+function experienceEpochs(cp:CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12):{historyId:string;afterTick:number;throughTick:number}[]{
  const epochs:{historyId:string;afterTick:number;throughTick:number}[]=[];let historyId=cp.physiology.origin.historyId,afterTick=-1;
  for(const edge of cp.physiology.verifiedCheckpointImports){epochs.push({historyId,afterTick,throughTick:edge.importTick});historyId=edge.destinationHistoryId;afterTick=edge.importTick;}
  epochs.push({historyId,afterTick,throughTick:cp.physiology.legacyImport?.importTick??Number.MAX_SAFE_INTEGER});if(cp.physiology.legacyImport)epochs.push({historyId:cp.physiology.legacyImport.destinationHistoryId,afterTick:cp.physiology.legacyImport.importTick,throughTick:Number.MAX_SAFE_INTEGER});return epochs;
 }
-export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
-export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11=CheckpointV7> extends CognitionSimulation<C> {
+export function experienceHistoryAdmitted(cp:CheckpointV5|CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12,historyId:string,encodedTick:number):boolean{return cp.schemaVersion===5?historyId===cp.cognition.identity.historyId:experienceEpochs(cp).some(e=>e.historyId===historyId&&encodedTick>e.afterTick&&encodedTick<=e.throughTick);}
+export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12=CheckpointV7> extends CognitionSimulation<C> {
  protected body:BodyState;private interoception:InteroceptionState|InteroceptionStateV2;protected physiology:PhysiologyRuntimeState&{taskCredit?:number;taskCreditActivityId?:number};private physiologyVersion:6|7;private internalExperiences:InternalExperience[];
  private intervalStart={x:0,z:0,cursor:0,yaw:0,pitch:0,capable:true};
  constructor(options:{checkpoint?:unknown;seed?:number;worldId?:string;runId?:string;branchId?:string;historyId?:string;mode:WorldMode;historical?:boolean;physiology?:PhysiologyOptions}){
@@ -959,9 +965,10 @@ export class PhysiologySimulation<C extends CheckpointV6|CheckpointV7|Checkpoint
    if(p.interruptedActivity){p.interruptedActivity=false;this.emit(events,'ACTIVITY_PHYSIOLOGY_RESUMED','activity',this.activity.status==='running'?'resumed':'user_paused',{activityId:this.activity.activityId,cursor:this.activity.cursor});}
   }
  }
+ protected bodyRecoveryPolicy():'historical'|'daily-life-v1'{return 'historical';}
  protected override afterMotors(events:DeterministicEvent[]):void{
   const tick=this.data.tick,hz=this.data.config.hz,start=this.intervalStart,safetyPreempted=tick<this.physiology.safetyUntilTick;
-  const advanced=advanceBody(this.body,{tick,hz,executed:{distanceMetres:Math.hypot(this.data.character.x-start.x,this.data.character.z-start.z),taskProgress:this.activity.cursor-start.cursor,headRadians:Math.hypot(this.head.yaw-start.yaw,this.head.pitch-start.pitch)},safetyPreempted,capableAtIntervalStart:start.capable});
+  const advanced=advanceBody(this.body,{tick,hz,executed:{distanceMetres:Math.hypot(this.data.character.x-start.x,this.data.character.z-start.z),taskProgress:this.activity.cursor-start.cursor,headRadians:Math.hypot(this.head.yaw-start.yaw,this.head.pitch-start.pitch)},safetyPreempted,capableAtIntervalStart:start.capable},[],this.bodyRecoveryPolicy());
   this.body=advanced.state;this.physiologyEvents(events,advanced.events);this.enforceCapability(events);
   const a=this.attentionState(),ordinaryAttentionAllowed=this.capableOfAttention()&&this.activity.status!=='running'&&tick>=a.commitmentUntilTick&&tick>=a.developerUntilTick;const ctx={tick,hz,safetyPreempted,capableAtIntervalStart:start.capable,ordinaryAttentionAllowed};const sensed=this.physiologyVersion===7?advanceInteroceptionV2(this.interoception as InteroceptionStateV2,this.body,{...ctx,ordinaryAttentionScale:advanced.impairment.ordinaryAttentionScale}):advanceInteroception(this.interoception as InteroceptionState,this.body,{...ctx,ordinaryAttentionAllowed:ordinaryAttentionAllowed&&advanced.impairment.ordinaryAttentionScale>=.7});
   this.interoception=sensed.state;this.physiologyEvents(events,sensed.events);
@@ -1030,7 +1037,7 @@ export function validateHomeCheckpoint(value:unknown):CheckpointV8 {
  if(cp.home.task?.committedEffectSequence!==null&&cp.home.task?.committedEffectSequence!==undefined&&cp.home.task.committedEffectSequence>cp.body.lastEffectSequence)fail('home committed effect cursor');
  return structuredClone(cp);
 }
-export class HomeSimulation<C extends CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11=CheckpointV8> extends PhysiologySimulation<C> {
+export class HomeSimulation<C extends CheckpointV8|CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12=CheckpointV8> extends PhysiologySimulation<C> {
  protected home!:HomeState;
  protected homeControllerAllowed():boolean{return true;}
  protected planHomeNavigation(...args:Parameters<typeof planHomeRoute>):ReturnType<typeof planHomeRoute>{return planHomeRoute(...args);}
@@ -1152,7 +1159,7 @@ export function validateTownCheckpoint(value:unknown):CheckpointV9 {
  if(townTaskBusy(cp.town)&&homeTaskBusy(cp.home))fail('competing home and town tasks');
  return structuredClone(cp);
 }
-export class TownSimulation<C extends CheckpointV9|CheckpointV10|CheckpointV11=CheckpointV9> extends HomeSimulation<C> {
+export class TownSimulation<C extends CheckpointV9|CheckpointV10|CheckpointV11|CheckpointV12=CheckpointV9> extends HomeSimulation<C> {
  protected town!:TownState;
  constructor(options:ConstructorParameters<typeof HomeSimulation>[0]) {
   const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===9?source:null;
@@ -1220,8 +1227,9 @@ export class TownSimulation<C extends CheckpointV9|CheckpointV10|CheckpointV11=C
   if(t.stage==='purchase'&&t.stageTicks>=hz){t.purchaseId=s.lastPurchaseId+1;const result=this.commitTownPurchase(t.purchaseId,'fruit',events);if(result.outcome!=='purchased'){this.failTown(result.reason,events);return;}t.itemId=result.itemId;this.townStage('return');return;}
   if(t.stage==='consume'&&t.stageTicks>=4*hz){const item=s.items.find(i=>i.id===t.itemId&&i.owner==='lumi'&&i.consumedTick===null);if(!item){this.failTown('item_unavailable',events);return;}if(this.body.absorption.length>=32){this.failTown('absorption_capacity',events);return;}t.effectSequence=this.applyValidatedHomeEffect({type:'intake',...BASIC_SERVING},events);item.consumedTick=tick;this.home.controller.mealCooldownUntilTick=tick+HOME_LIMITS.mealCooldownSeconds*hz;this.townStage('done');t.status='completed';s.nextOpportunityTick=tick+TOWN_LIMITS.opportunitySeconds*hz;townTimeline(s,tick,'consumed','Consumed purchased food');townTimeline(s,tick,'completed','Finished the shop trip');this.emit(events,'TOWN_FOOD_CONSUMED','town_action','committed',{actionId:t.id,itemId:item.id,effectSequence:t.effectSequence});}
  }
+ protected townControllerAllowed():boolean{return true;}
  protected override beforeMotorExecution(events:DeterministicEvent[]):void {
-  if(this.town&&this.body.active){const s=this.town,tick=this.data.tick,hz=this.data.config.hz;
+  if(this.town&&this.body.active&&this.townControllerAllowed()){const s=this.town,tick=this.data.tick,hz=this.data.config.hz;
    if(this.currentTownCarePolicy()&&s.task?.status==='failed'&&this.capableOfAction()&&!homeTaskBusy(this.home)&&this.activity.status!=='running'){
     const task=s.task,held=s.items.some(i=>i.id===task.itemId&&i.owner==='lumi'&&i.consumedTick===null);
     if(held&&task.stage==='consume'&&task.reason==='awaiting_hunger'&&this.hasAttendedTownHunger()&&this.home.posture.kind==='upright'){task.status='started';task.reason=null;task.nextReplanTick=tick;}
@@ -1275,7 +1283,7 @@ export function validateVisitCheckpoint(value:unknown):CheckpointV10 {
  if(actor&&!canOccupyVisitActor(view,actor.x,actor.z))fail('visitor physical clearance');
  return structuredClone(cp);
 }
-export class VisitSimulation<C extends CheckpointV10|CheckpointV11=CheckpointV10> extends TownSimulation<C> {
+export class VisitSimulation<C extends CheckpointV10|CheckpointV11|CheckpointV12=CheckpointV10> extends TownSimulation<C> {
  protected visit!:VisitState;
  constructor(options:ConstructorParameters<typeof TownSimulation>[0]) {
   const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===10?source:null;
@@ -1366,7 +1374,7 @@ export function validateSocialCheckpoint(value:unknown):CheckpointV11 {
  for(const e of s.experiences)if(!experienceHistoryAdmitted(cp,e.identity.historyId,e.encodedTick)||cp.cognition.identity.mode==='LIVE'&&e.identity.mode!=='LIVE'||e.identity.worldId!==cp.cognition.identity.worldId)fail('social experience ancestry');
  return structuredClone(cp);
 }
-export class SocialSimulation extends VisitSimulation<CheckpointV11> {
+export class SocialSimulation<C extends CheckpointV11|CheckpointV12=CheckpointV11> extends VisitSimulation<C> {
  protected social!:SocialState;
  private readonly socialRules:SocialRulesVersion;
  constructor(options:ConstructorParameters<typeof VisitSimulation>[0]) {
@@ -1441,5 +1449,36 @@ export class SocialSimulation extends VisitSimulation<CheckpointV11> {
  socialState():SocialState{return structuredClone(this.social);}
  override experienceRecords():Experience[]{return [...super.experienceRecords(),...structuredClone(this.social?.experiences??[])];}
  override snapshot():WorldState{return {...super.snapshot(),...(this.social?{social:socialPublicView(this.social),...(this.currentTownCarePolicy()?{town:townPublicView(this.town,this.data.config.hz,true)}:{})}:{})};}
- override checkpoint():CheckpointV11 {const base=super.checkpoint();return this.social?{...base,schemaVersion:11,rulesVersion:this.socialRules,social:structuredClone(this.social)}:base;}
+ override checkpoint():C {const base=super.checkpoint();return (this.social?{...base,schemaVersion:11,rulesVersion:this.socialRules,social:structuredClone(this.social)}:base) as C;}
+}
+
+/** CP12 adds bounded persistent custody and explicit daily-life recovery policy. */
+function deliverySocialPart(cp:CheckpointV12):CheckpointV11 {const raw=structuredClone(cp) as unknown as Record<string,unknown>;delete raw.delivery;raw.schemaVersion=11;raw.rulesVersion=cp.social.rulesVersion;raw.town={...cp.town,items:cp.town.items.filter(i=>i.owner!=='dropoff')};raw.pendingInputs=cp.pendingInputs.map(i=>({...i,command:i.command.type.startsWith('delivery_')?{type:'invalid',reason:'unknown_command'}:i.command}));return validateSocialCheckpoint(raw);}
+export function validateDeliveryCheckpoint(value:unknown):CheckpointV12 {const cp=value as CheckpointV12;if(cp?.schemaVersion!==12||cp.rulesVersion!==DAILY_RULES||cp.social?.rulesVersion!==SOCIAL_RULES)fail('daily schema/rules');const base=deliverySocialPart(cp);object(cp,[...Object.keys(base).filter(k=>k!=='schemaVersion'&&k!=='rulesVersion'),'schemaVersion','rulesVersion','delivery'],'daily root');validateDeliveryState(cp.delivery,cp.tick,cp.config.hz);validateTownState(cp.town,cp.tick,cp.config.hz,true);for(const i of cp.pendingInputs)validateCommand(i.command,true,true,true,true,true,true,true,true,true);for(const r of cp.delivery.receipts){const item=cp.town.items.find(i=>i.id===r.itemId);if(!item||item.kind!==r.good||r.status==='stored'&&(item.owner!=='dropoff'||item.consumedTick!==null||cp.visit.actor?.heldItemId===item.id)||r.status!=='stored'&&item.owner!=='lumi'||r.status==='consumed'&&item.consumedTick!==r.consumedTick||r.status==='collected'&&item.consumedTick!==null)fail('delivery item custody association');if(cp.social.offer?.status==='pending'&&cp.social.offer.itemId===r.itemId)fail('delivery offer reservation conflict');}const task=cp.delivery.task;if(task?.stage==='consume'){const r=cp.delivery.receipts.find(r=>r.deliveryId===task.deliveryId),g=cp.social.giftUse;if(!r||r.status!=='collected'||!g||g.itemId!==r.itemId||g.completedTick!==null||task.progressTicks!==g.progressTicks)fail('delivery consume cursor association');}else if(task&&(task.deliveryId!==null||!cp.delivery.receipts.some(r=>r.status==='stored')))fail('delivery inspection association');if(cp.delivery.known?.kind!=='occupied'&&cp.delivery.known&&!cp.delivery.open)fail('closed delivery contents knowledge');for(const item of cp.town.items)if(item.owner==='dropoff'&&!cp.delivery.receipts.some(r=>r.itemId===item.id&&r.status==='stored'))fail('orphaned dropoff custody');for(const e of cp.delivery.experiences){validateCognitionIdentity(e.identity);if(!experienceHistoryAdmitted(cp,e.identity.historyId,e.encodedTick)||e.identity.worldId!==cp.cognition.identity.worldId||cp.cognition.identity.mode==='LIVE'&&e.identity.mode!=='LIVE')fail('delivery experience ancestry');}return structuredClone(cp);}
+export class DeliverySimulation extends SocialSimulation<CheckpointV12> {
+ protected delivery!:DeliveryState;
+ constructor(options:ConstructorParameters<typeof SocialSimulation>[0]) {const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===12?source:null;super({...options,checkpoint:saved?deliverySocialPart(saved):source??undefined});this.delivery=saved?structuredClone(saved.delivery):createDeliveryState(this.data.tick);if(saved){this.data.pendingInputs=structuredClone(saved.pendingInputs);this.town=structuredClone(saved.town);}validateDeliveryCheckpoint(this.checkpoint());if(!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents daily-life activation; existing state preserved');}
+ protected override movementPauseActive():boolean{return this.deliveryActive()&&this.delivery?.task?.stage==='approach'?false:super.movementPauseActive();}
+ protected override cognitionSemanticExperienceAllowed(e:{interpretation:string;uncertainty:string|number},command:CognitionRequestCommand):boolean{return super.cognitionSemanticExperienceAllowed(e,command)||!!this.delivery&&this.physiology.origin.evidenceEligibility==='eligible'&&this.physiology.legacyImport===null&&this.delivery.experiences.some(old=>this.admitsExperienceHistory(old.identity.historyId,old.encodedTick)&&(this.mode==='EXPERIMENT'||old.identity.mode==='LIVE')&&old.interpretation===e.interpretation&&old.uncertainty===e.uncertainty);}
+ protected override beforeInputs(events:DeterministicEvent[]):void{super.beforeInputs(events);this.pruneDeliveryReceipts();}
+ protected override bodyRecoveryPolicy():'daily-life-v1'{return 'daily-life-v1';}
+ protected override supportsDeliveryInputs():boolean{return true;}
+ protected override retainedConsumedTownItemIds():readonly number[]{return [...new Set([...super.retainedConsumedTownItemIds(),...(this.delivery?.receipts.filter(r=>r.status!=='consumed').map(r=>r.itemId)??[])])];}
+ private urgentDeliveryRest():boolean{return this.providerInternalSensations().some(s=>s.band==='severe'&&(s.kind==='sleep'||s.kind==='discomfort'));}
+ private deliveryActive():boolean {const task=this.delivery?.task;if(!task||this.urgentDeliveryRest()||homeTaskBusy(this.home)||townTaskBusy(this.town))return false;return task.stage==='observe'?this.data.tick-task.startedTick<DELIVERY_LIMITS.inspectionCommitmentSeconds*this.data.config.hz:task.stage!=='waiting'&&task.stage!=='consume';}
+ protected override townControllerAllowed():boolean{return !this.deliveryActive()&&super.townControllerAllowed();}
+ protected override homeControllerAllowed():boolean{return !this.deliveryActive()&&super.homeControllerAllowed();}
+ protected override movementPermitted():boolean {const t=this.delivery?.task;if(this.deliveryActive())return t?.stage==='approach'&&this.capableOfAction()&&t.routeCursor<t.route.length;return super.movementPermitted();}
+ protected override movementDestination():[number,number]{const t=this.delivery?.task;if(this.deliveryActive()&&t?.stage==='approach'&&t.route[t.routeCursor])return [t.route[t.routeCursor].x,t.route[t.routeCursor].z];return super.movementDestination();}
+ protected override movementArrived(events:DeterministicEvent[]):void {const t=this.delivery?.task;if(this.deliveryActive()&&t?.stage==='approach'){t.routeCursor++;this.emit(events,'DELIVERY_ROUTE_POINT','delivery_navigation','reached',{routeCursor:t.routeCursor});return;}super.movementArrived(events);}
+ protected override movementBlocked(events:DeterministicEvent[]):void {const t=this.delivery?.task;if(this.deliveryActive()&&t?.stage==='approach'){t.stage='waiting';t.route=[];t.routeCursor=0;t.nextRetryTick=this.data.tick+DELIVERY_LIMITS.retrySeconds*this.data.config.hz;this.data.character.moving=false;this.emit(events,'DELIVERY_ROUTE_BLOCKED','delivery_navigation','waiting',{nextReplanTick:t.nextRetryTick});return;}super.movementBlocked(events);}
+ private pruneDeliveryReceipts():void {if(!this.delivery)return;const pinned=new Set(super.retainedConsumedTownItemIds());this.delivery.receipts=this.delivery.receipts.filter(r=>r.status!=='consumed'||pinned.has(r.itemId));}
+ private deliveryDeposit(c:DeliveryDepositCommand,events:DeterministicEvent[],sequence:number):void {const v=this.visit,a=v.actor,tick=this.data.tick,d=this.delivery,control=v.control;let reason=c.runId!==this.cognition.identity.runId||control.runId!==c.runId?'wrong_run':c.generation!==control.generation?'stale_generation':control.status!=='active'||!a?'control_inactive':c.sequence<=control.lastSequence?'stale_sequence':null;const feedback=(accepted:boolean,why:string)=>{d.feedback={actionId:c.actionId,outcome:accepted?'accepted':'rejected',reason:why,tick};deliveryTimeline(d,tick,accepted?'deposited':'rejected',accepted?'Item deposited; waiting in drop-off':`Deposit rejected: ${why}`);this.emit(events,'DELIVERY_DEPOSIT','delivery',accepted?'committed':'rejected',{actionId:c.actionId,itemId:c.itemId,reason:why},sequence);};if(reason){feedback(false,reason);return;}control.lastSequence=c.sequence;if(c.actionId<=v.lastActionId){feedback(false,'duplicate_action');return;}v.lastActionId=c.actionId;const item=this.town.items.find(i=>i.id===c.itemId);reason=!item||item.owner!=='owner'||item.consumedTick!==null||a!.heldItemId!==c.itemId?'item_not_held':this.social.offer?.status==='pending'&&this.social.offer.itemId===c.itemId?'offer_reserved':d.receipts.some(r=>r.itemId===c.itemId)?'already_deposited':d.receipts.filter(r=>r.status==='stored').length>=DELIVERY_LIMITS.capacity?'storage_full':!deliveryReach(this.snapshot(),a!)?'out_of_reach':a!.moving?'owner_moving':null;if(reason){feedback(false,reason);return;}const projected=this.checkpoint();const terminal=projected.delivery.receipts.filter(r=>r.status==='consumed'&&r.itemId!==this.social.giftUse?.itemId&&r.itemId!==this.social.offer?.itemId);while(projected.delivery.receipts.length>=DELIVERY_LIMITS.receipts&&terminal.length){const prune=terminal.shift()!;projected.delivery.receipts=projected.delivery.receipts.filter(r=>r.deliveryId!==prune.deliveryId);}if(projected.delivery.receipts.length>=DELIVERY_LIMITS.receipts){feedback(false,'receipt_capacity');return;}projected.delivery.receipts.push({deliveryId:d.nextDeliveryId,itemId:item!.id,good:item!.kind,status:'stored',depositedTick:tick,noticedTick:null,openedTick:null,collectedTick:null,consumedTick:null});if(!fitsCognitionStorage(projected)){feedback(false,'checkpoint_capacity');return;}d.receipts=projected.delivery.receipts;d.nextDeliveryId++;d.open=false;d.revision++;d.known=null;if(d.task&&d.task.stage!=='consume')d.task=null;item!.owner='dropoff';a!.heldItemId=null;this.scene.revision++;feedback(true,'deposited');}
+ private deliveryObservation(c:DeliveryObservationCommand,events:DeterministicEvent[],sequence:number):void {const d=this.delivery,a=this.attentionState(),last=a.lastCapture,tick=this.data.tick;const reason=!this.capableOfAttention()?'physiological_incapacity':c.sensorSource!=='actual_renderer'?'untrusted_sensor_source':!last||last.outcome!=='success'||last.freshness!=='applicable'||last.captureId!==c.captureId||last.capturedTick!==c.capturedTick||last.receivedTick!==c.attentionTick||a.baseline?.frameHash!==c.frameHash?'unattended_capture':!this.sensoryCaptureAllowed(c.capturedTick)?'unconscious_capture':tick-c.capturedTick>DELIVERY_LIMITS.observationAgeSeconds*this.data.config.hz?'stale_capture':c.revision!==d.revision?'stale_container':c.kind!=='occupied'&&!d.open?'closed_contents':null;if(reason){this.emit(events,'DELIVERY_OBSERVATION','delivery_sensor','rejected',{captureId:c.captureId,reason},sequence);return;}d.known=structuredClone(c);const r=d.receipts.find(r=>r.status==='stored');if(r&&c.kind!=='occupied'&&r.good===c.kind&&r.noticedTick===null){r.noticedTick=tick;deliveryTimeline(d,tick,'noticed','Lumi noticed food in the open drop-off',r.deliveryId);}else if(c.kind==='occupied')deliveryTimeline(d,tick,'noticed','Lumi noticed the occupied drop-off');this.emit(events,'DELIVERY_OBSERVATION','delivery_sensor','attended',{captureId:c.captureId,frameHash:c.frameHash,kind:c.kind,capturedTick:c.capturedTick,attentionTick:c.attentionTick},sequence);if(d.experiences.length<16&&this.physiology.encodingEnabled&&this.physiology.legacyImport===null&&this.physiology.origin.evidenceEligibility==='eligible'&&!d.experiences.some(e=>e.captureId===c.captureId)){const e:DeliveryExperience={id:d.experiences.length+1,kind:'delivery',identity:structuredClone(this.cognition.identity),provenance:'ATTENDED_DELIVERY_RGB',source:'actual_renderer',captureId:c.captureId,frameHash:c.frameHash,capturedTick:c.capturedTick,attentionTick:c.attentionTick,encodedTick:tick,interpretation:c.kind==='occupied'?'I noticed an occupied drop-off. Its closed contents and sender are unknown.':`I saw ${c.kind} in the open drop-off; I did not witness who left it.`,uncertainty:'Narrow authored RGB evidence; no sender identity or witnessed handover.'};const projected=this.checkpoint();projected.delivery.experiences.push(e);if(fitsCognitionStorage(projected)){d.experiences.push(e);this.emit(events,'DELIVERY_ENCODING','delivery_experience','admitted',{captureId:c.captureId,frameHash:c.frameHash,capturedTick:c.capturedTick,attentionTick:c.attentionTick,encodedTick:tick,provenance:e.provenance,source:'actual_renderer',sensed:true,attended:true,encoded:true},sequence);}}}
+ protected override applyExtendedInput(input:OrderedInput,events:DeterministicEvent[]):boolean {if(input.command.type==='visit_interact'&&input.command.action==='purchase'||input.command.type==='shop_purchase')this.pruneDeliveryReceipts();if(input.command.type==='delivery_deposit'){this.deliveryDeposit(input.command,events,input.sequence);return true;}if(input.command.type==='delivery_observation'){this.deliveryObservation(input.command,events,input.sequence);return true;}return super.applyExtendedInput(input,events);}
+ private advanceDelivery(events:DeterministicEvent[]):void {const d=this.delivery,tick=this.data.tick,hz=this.data.config.hz,available=this.capableOfAction()&&this.body.active&&!homeTaskBusy(this.home)&&!townTaskBusy(this.town)&&this.activity.status!=='running'&&this.home.posture.kind==='upright';if(!available||this.urgentDeliveryRest())return;const hunger=this.providerInternalSensations().some(s=>s.kind==='hunger'&&(s.band==='moderate'||s.band==='severe'));if(!d.task&&d.known&&d.known.revision===d.revision&&d.receipts.some(r=>r.status==='stored'))d.task={stage:d.open?'observe':'approach',route:[],routeCursor:0,progressTicks:0,deliveryId:null,nextRetryTick:tick,startedTick:tick};const t=d.task;if(!t)return;if(t.stage==='waiting'){if(tick<t.nextRetryTick)return;t.stage='approach';}if(t.stage==='approach'){if(!t.route.length){const world=this.snapshot(),candidates=[DELIVERY_ANCHOR,{x:1.4,z:-2.2},{x:-1.4,z:-2.2},{x:1.45,z:-2.4},{x:-1.45,z:-2.4}],plans=candidates.filter(p=>deliveryReach(world,p)).map(p=>planTownRoute(this.data.character,p,{canOccupy:p=>canOccupyHomeCharacter(world,p.x,p.z),canSweep:(a,b)=>canSweepHomeCharacter(world,a.x,a.z,b.x,b.z)})).filter(p=>p.status==='reachable').sort((a,b)=>a.distance-b.distance),plan=plans[0];if(!plan){t.stage='waiting';t.nextRetryTick=tick+DELIVERY_LIMITS.retrySeconds*hz;return;}t.route=plan.points;t.routeCursor=0;this.emit(events,'DELIVERY_ROUTE_PLANNED','delivery_navigation','reachable',{points:t.route.length,distance:plan.distance});}if(t.routeCursor<t.route.length)return;t.stage='open';t.progressTicks=0;}if(t.stage==='open'){if(!deliveryReach(this.snapshot(),this.data.character)){t.stage='waiting';t.route=[];t.nextRetryTick=tick+DELIVERY_LIMITS.retrySeconds*hz;return;}if(++t.progressTicks<hz)return;d.open=true;d.revision++;d.known=null;this.scene.revision++;for(const r of d.receipts)if(r.status==='stored')r.openedTick??=tick;deliveryTimeline(d,tick,'opened','Lumi opened the drop-off');this.emit(events,'DELIVERY_OPENED','delivery_action','committed',{revision:d.revision});t.stage='observe';t.startedTick=tick;t.progressTicks=0;this.data.character.heading=Math.atan2(-this.data.character.x,-3.25-this.data.character.z);this.head.yaw=this.head.targetYaw=0;this.head.pitch=this.head.targetPitch=-.3;this.requestCapture('uncertainty_probe',events);t.nextRetryTick=tick+5*hz;return;}if(t.stage==='observe'){if(d.known&&d.known.revision===d.revision&&d.known.kind!=='occupied'&&hunger&&!this.home.resources.held&&!this.town.items.some(i=>i.owner==='lumi'&&i.consumedTick===null)){t.stage='collect';t.progressTicks=0;}else{if(tick>=t.nextRetryTick){this.requestCapture('uncertainty_probe',events);t.nextRetryTick=tick+30*hz;}return;}}if(t.stage==='collect'){if(!deliveryReach(this.snapshot(),this.data.character)||!d.known||d.known.revision!==d.revision||d.known.kind==='occupied'){t.stage='approach';t.route=[];return;}const r=d.receipts.find(r=>r.status==='stored'),item=r?this.town.items.find(i=>i.id===r.itemId):null;if(!r||!item||item.owner!=='dropoff'||item.consumedTick!==null||item.kind!==d.known.kind){t.stage='observe';return;}if(++t.progressTicks<hz)return;item.owner='lumi';r.status='collected';r.collectedTick=tick;t.deliveryId=r.deliveryId;t.stage='consume';t.progressTicks=0;this.social.giftUse={itemId:item.id,startedTick:tick,progressTicks:0,effectSequence:null,completedTick:null};d.revision++;d.known=null;this.scene.revision++;deliveryTimeline(d,tick,'collected','Lumi collected food; not yet consumed',r.deliveryId);this.emit(events,'DELIVERY_COLLECTED','delivery_action','committed',{itemId:item.id,deliveryId:r.deliveryId});}if(t.stage==='consume'){const r=d.receipts.find(r=>r.deliveryId===t.deliveryId),g=this.social.giftUse;if(g)t.progressTicks=g.progressTicks;if(r&&g?.completedTick!==null&&g?.itemId===r.itemId){r.status='consumed';r.consumedTick=g.completedTick;deliveryTimeline(d,tick,'consumed','Lumi consumed collected food',r.deliveryId);this.emit(events,'DELIVERY_CONSUMED','delivery_action','committed',{itemId:r.itemId,deliveryId:r.deliveryId,effectSequence:g.effectSequence??0});d.task=null;}}}
+ protected override beforeMotorExecution(events:DeterministicEvent[]):void {if(this.delivery)this.advanceDelivery(events);super.beforeMotorExecution(events);const t=this.delivery?.task,g=this.social?.giftUse;if(t?.stage==='consume'&&g)t.progressTicks=g.progressTicks;if(t?.stage==='consume'&&g?.completedTick!==null){const r=this.delivery.receipts.find(r=>r.deliveryId===t.deliveryId);if(r&&g?.itemId===r.itemId){r.status='consumed';r.consumedTick=g.completedTick;deliveryTimeline(this.delivery,this.data.tick,'consumed','Lumi consumed collected food',r.deliveryId);this.emit(events,'DELIVERY_CONSUMED','delivery_action','committed',{itemId:r.itemId,deliveryId:r.deliveryId,effectSequence:g.effectSequence??0});this.delivery.task=null;}}}
+ override experienceRecords():Experience[]{return [...super.experienceRecords(),...structuredClone(this.delivery?.experiences??[])];}
+ override snapshot():WorldState {const world=super.snapshot();if(!this.delivery)return world;const stored=new Set(this.delivery.receipts.filter(r=>r.status==='stored').map(r=>r.itemId));return {...world,delivery:deliveryPublicView(this.delivery,this.data.config.hz),...(world.visit?{visit:{...world.visit,inventory:world.visit.inventory.filter(i=>!stored.has(i.id))}}:{})};}
+ override checkpoint():CheckpointV12 {const base=super.checkpoint();return this.delivery?{...base,schemaVersion:12,rulesVersion:DAILY_RULES,delivery:structuredClone(this.delivery)}:base;}
 }
