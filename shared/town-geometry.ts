@@ -1,3 +1,5 @@
+import { VISIT_LIMITS } from './visit-protocol.js';
+import {canPlaceLumiAgainstVisitor,canSweepLumiAgainstVisitor} from './visit-geometry.js';
 import type { WorldState } from './protocol.js';
 
 import type { PhysicalBox, Vector3Tuple } from './physical-scene.js';
@@ -72,7 +74,10 @@ export function townFixtureBoxes(world:WorldState):PhysicalBox[]{
 
 }
 
-const floors=[{minX:-4.52,maxX:4.52,minZ:-3.52,maxZ:3.52},{minX:1.75,maxX:4.19,minZ:-10.3,maxZ:-2.4},{minX:-.1,maxX:6.04,minZ:-15.12,maxZ:-9.22}];
+// Extend the connecting rectangle into the actual home/store floors before
+// erosion. This preserves a connected surface for the carried-item envelope;
+// it does not add a floor or bypass any door, wall or furniture collider.
+const floors=[{minX:-4.52,maxX:4.52,minZ:-3.52,maxZ:3.52},{minX:1.75,maxX:4.19,minZ:-10.8,maxZ:-1.9},{minX:-.1,maxX:6.04,minZ:-15.12,maxZ:-9.22}];
 
 export function townWalkablePoint(x:number,z:number,radius=CHARACTER_CLEARANCE_RADIUS):boolean{return Number.isFinite(x)&&Number.isFinite(z)&&floors.some(f=>x>=f.minX+radius&&x<=f.maxX-radius&&z>=f.minZ+radius&&z<=f.maxZ-radius);}
 
@@ -96,13 +101,13 @@ function sweptDoorBoxes(world:WorldState,door:'home'|'shop',from:number,to:numbe
  * novelty. Keep future leaf positions unavailable until the motion finishes. */
 function townCharacterCollisionBoxes(world:WorldState):PhysicalBox[]{const boxes=physicalSceneSnapshot(world).boxes,slam=world.town?.doors.slam;if(slam&&world.time>=slam.startTime&&world.time-slam.startTime<.4){const from=slam.sign===1?TOWN_SLAM_RANGE.min:-TOWN_SLAM_RANGE.max,to=slam.sign===1?TOWN_SLAM_RANGE.max:-TOWN_SLAM_RANGE.min;boxes.push(...sweptDoorBoxes(world,'home',from,to));}return boxes;}
 
-export function canOccupyTownCharacter(world:WorldState,x:number,z:number,radius=CHARACTER_CLEARANCE_RADIUS):boolean {if(!world.town||!townWalkablePoint(x,z,radius))return false;return !townCharacterCollisionBoxes(world).some(b=>{if(!b.collides||b.position[1]+b.size[1]/2<=.06||b.position[1]-b.size[1]/2>=3.45)return false;const [a,c]=local({x,z},b);return Math.abs(a)<b.size[0]/2+radius&&Math.abs(c)<b.size[2]/2+radius;});}
+export function canOccupyTownCharacter(world:WorldState,x:number,z:number,radius=CHARACTER_CLEARANCE_RADIUS):boolean {if(!world.town||!townWalkablePoint(x,z,radius)||!canPlaceLumiAgainstVisitor(world,x,z))return false;return !townCharacterCollisionBoxes(world).some(b=>{if(!b.collides||b.position[1]+b.size[1]/2<=.06||b.position[1]-b.size[1]/2>=3.45)return false;const [a,c]=local({x,z},b);return Math.abs(a)<b.size[0]/2+radius&&Math.abs(c)<b.size[2]/2+radius;});}
 
 /** Exact swept solid test plus bounded surface coverage; no endpoint tunnelling. */
 
 export function canSweepTownCharacter(world:WorldState,fromX:number,fromZ:number,x:number,z:number,radius=CHARACTER_CLEARANCE_RADIUS):boolean {
 
- if(!canOccupyTownCharacter(world,fromX,fromZ,radius)||!canOccupyTownCharacter(world,x,z,radius))return false;
+ if(!canOccupyTownCharacter(world,fromX,fromZ,radius)||!canOccupyTownCharacter(world,x,z,radius)||!canSweepLumiAgainstVisitor(world,fromX,fromZ,x,z))return false;
 
  // Surfaces are a finite union of convex rectangles. All boundary crossing intervals must be covered.
 
@@ -118,5 +123,5 @@ export function townDoorTarget(world:WorldState,door:'home'|'shop',open:boolean)
 export function canChangeTownDoor(world:WorldState,door:'home'|'shop',open:boolean):boolean {const from=door==='home'?doorAngle(world):world.town?.doors.shopAngle??0;return canSweepTownDoor(world,door,from,townDoorTarget(world,door,open));}
 export function canSweepTownDoor(world:WorldState,door:'home'|'shop',from:number,to:number):boolean {
  if(!world.town)return false;
- for(const b of sweptDoorBoxes(world,door,from,to)){const [x,z]=local(world.character,b);if(Math.abs(x)<b.size[0]/2+CHARACTER_CLEARANCE_RADIUS&&Math.abs(z)<b.size[2]/2+CHARACTER_CLEARANCE_RADIUS)return false;}return true;
+ const actors=[{x:world.character.x,z:world.character.z,radius:CHARACTER_CLEARANCE_RADIUS},...(world.visit?.actor?[{x:world.visit.actor.x,z:world.visit.actor.z,radius:VISIT_LIMITS.radius}]:[])];for(const b of sweptDoorBoxes(world,door,from,to))for(const actor of actors){const [x,z]=local(actor,b);if(Math.abs(x)<b.size[0]/2+actor.radius&&Math.abs(z)<b.size[2]/2+actor.radius)return false;}return true;
 }

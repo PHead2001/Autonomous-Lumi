@@ -1,3 +1,6 @@
+import {deliveryFixtureBoxes} from './delivery-geometry.js';
+import {socialCueBoxes} from './social-geometry.js';
+import { visitActorBoxes } from './visit-geometry.js';
 import { townFixtureBoxes } from './town-geometry.js';
 import { homeFixtureBoxes } from './home-geometry.js';
 import type { WorldState } from './protocol.js';
@@ -36,7 +39,7 @@ export interface PhysicalBox {
   cutaway: boolean;
 }
 export interface PhysicalSceneSnapshot {
-  revision: typeof PHYSICAL_SCENE_VERSION | 'lumi-town-scene-v1';
+  revision: typeof PHYSICAL_SCENE_VERSION | 'lumi-town-scene-v1' | 'lumi-visit-scene-v1' | 'lumi-social-scene-v1';
   dynamicRevision: number;
   illumination: number;
   boxes: PhysicalBox[];
@@ -124,7 +127,10 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
     for(const b of boxes){if(b.id==='wall-back-lintel'){b.position[1]=3.6;b.size[1]=.3;}else if(b.id==='door-frame-top')b.position[1]=3.52;else if(b.id==='door-frame-left'||b.id==='door-frame-right'){b.position[1]=1.75;b.size[1]=3.5;}}
     boxes.push(...townFixtureBoxes(state));
   }
-  return { revision: state.town?'lumi-town-scene-v1':PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
+  if(state.visit?.actor)boxes.push(...visitActorBoxes(state));
+  if(state.social)boxes.push(...socialCueBoxes(state));
+  if(state.delivery)boxes.push(...deliveryFixtureBoxes(state));
+  return { revision: state.social?'lumi-social-scene-v1':state.visit?'lumi-visit-scene-v1':state.town?'lumi-town-scene-v1':PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
 }
 /** Conservative keepout for the entire ordinary slam sweep, not an invisible occluder. */
 function animatedDoorKeepout(): PhysicalBox {

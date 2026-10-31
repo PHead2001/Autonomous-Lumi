@@ -4,10 +4,20 @@ import type { WorldState } from '../shared/protocol';
 import { assertCameraClearance, eyePose } from '../shared/eye-pose';
 import { physicalSceneSnapshot } from '../shared/physical-scene';
 import { createAvatar } from './avatar';
+import {VISITOR_PHYSICAL_PREFIX,VISITOR_HELD_PHYSICAL_ID} from '../shared/visit-protocol';
+import {SOCIAL_OFFER_CUE,SOCIAL_BADGE_CUE} from '../shared/social-geometry';
+
+/** Owner-only browser presentation. Sensor firstPerson retains every physical cue. */
+export function physicalPresentationVisible(id:string,cutaway:boolean,firstPerson:boolean,controlledOwnerPresentation=false){
+  if(firstPerson)return true;
+  if(controlledOwnerPresentation)return !(id.startsWith(VISITOR_PHYSICAL_PREFIX)||id===VISITOR_HELD_PHYSICAL_ID||id===SOCIAL_OFFER_CUE||id.startsWith(SOCIAL_OFFER_CUE+'-')||id===SOCIAL_BADGE_CUE||id.startsWith(SOCIAL_BADGE_CUE+'-'));
+  return !cutaway;
+}
 
 export { RENDER_REVISION } from '../shared/physical-scene';
 /** Used by both the spectator and isolated first-person worker. It owns no world loop or clock. */
-export function createPhysicalRenderScene(initial: WorldState, options: { firstPerson: boolean; width?: number; height?: number }) {
+export function createPhysicalRenderScene(initial: WorldState, options: { firstPerson: boolean; width?: number; height?: number; controlledOwnerPresentation?:boolean }) {
+  let controlledOwnerPresentation=options.controlledOwnerPresentation??false;
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#d9ded3');
   const camera = new THREE.PerspectiveCamera();
   const hemisphere = new THREE.HemisphereLight('#fff4de', '#6f8079', 2.5); scene.add(hemisphere);
@@ -32,7 +42,7 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
         mesh.castShadow = true; mesh.receiveShadow = true; environment.add(mesh); meshes.set(b.id, mesh);
       }
       mesh.position.set(...b.position); mesh.scale.set(...b.size); mesh.rotation.y = b.yaw; mesh.material.color.set(b.color);
-      mesh.visible = options.firstPerson || !b.cutaway;
+      mesh.visible = physicalPresentationVisible(b.id,!!b.cutaway,options.firstPerson,controlledOwnerPresentation);
     }
     for (const [id, mesh] of meshes) if (!seen.has(id)) { mesh.removeFromParent(); mesh.geometry.dispose(); mesh.material.dispose(); meshes.delete(id); }
     hemisphere.intensity = physical.illumination * 2.5; sun.intensity = physical.illumination * 4;
@@ -47,7 +57,7 @@ export function createPhysicalRenderScene(initial: WorldState, options: { firstP
   }
   applySnapshot(initial);
   let disposed = false;
-  return { scene, camera, avatar, applySnapshot,
+  return { scene, camera, avatar, applySnapshot,setControlledOwnerPresentation(active:boolean){controlledOwnerPresentation=active;},
     /** Synchronous second pass over exactly the matrices used for RGB. Every mesh writes depth,
      * including unlabelled environment details and the first-person avatar. */
     renderPrivateMask(renderer: THREE.WebGLRenderer, width: number, height: number) {

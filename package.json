@@ -25,6 +25,10 @@
     "vision:attention": "tsx --test tests/vision-attention.real.ts",
     "home:lab": "tsx server/home-lab.ts",
     "town:lab": "tsx server/town-lab.ts",
+    "social:lab": "tsx server/social-lab.ts",
+    "delivery:lab": "tsx server/delivery-lab.ts",
+    "daily-life:lab": "tsx server/daily-life-lab.ts",
+    "owner:pair": "tsx server/owner-pair.ts",
     "physiology:lab": "tsx server/physiology-lab.ts",
     "cognition:verify": "tsx server/cognition/verify.ts"
   },

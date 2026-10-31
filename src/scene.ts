@@ -3,6 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPhysicalRenderScene } from './render-scene';
 import type { WorldState } from '../shared/protocol';
 import { homePoseTransform } from '../shared/home-geometry';
+import {visitorCamera} from './visit-camera';
+import type {VisitorCameraPose} from './visit';
+import type {VisitLook} from './visit-controls';
 
 export type ObserveMode = 'orbit'|'free'|'follow'|'fixed';
 export const OBSERVE_HELP:Record<ObserveMode,string> = {
@@ -22,6 +25,7 @@ export function createScene(canvas: HTMLCanvasElement) {
   controls.minPolarAngle = 0.2; controls.enablePan = false;
   let mode:ObserveMode='orbit',state:WorldState|null=null,world:ReturnType<typeof createPhysicalRenderScene>|null=null,overview=false;
   let received=performance.now(),lastFrame=performance.now(),initialized=false,disposed=false;
+  let visiting=false,visitorPose:VisitorCameraPose|null=null,visitorLook:VisitLook={yaw:0,pitch:0};
   const held=new Set<string>();let drag:number|null=null,mouseX=0,mouseY=0;
   const aim=()=>state?new THREE.Vector3(...homePoseTransform(state).transformPoint([0,1.25,0])):new THREE.Vector3(0,1.25,0);
   const reset=()=>{
@@ -31,12 +35,12 @@ export function createScene(canvas: HTMLCanvasElement) {
     camera.position.copy(controls.target).add(neighborhood?new THREE.Vector3(18,19,23):mode==='fixed'?new THREE.Vector3(8,6,9):mode==='free'?new THREE.Vector3(0,2,7):new THREE.Vector3(10,7,12));
     camera.lookAt(controls.target);controls.update();
   };
-  const setMode=(next:ObserveMode)=>{mode=next;controls.enabled=next==='orbit'||next==='follow';reset();};reset();
-  const keydown=(event:KeyboardEvent)=>{if(mode!=='free')return;if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight'].includes(event.code)){held.add(event.code);event.preventDefault();}};
+  const setMode=(next:ObserveMode)=>{mode=next;controls.enabled=!visiting&&(next==='orbit'||next==='follow');if(!visiting)reset();};reset();
+  const keydown=(event:KeyboardEvent)=>{if(visiting||mode!=='free')return;if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight'].includes(event.code)){held.add(event.code);event.preventDefault();}};
   const keyup=(event:KeyboardEvent)=>{held.delete(event.code);};
   const blur=()=>{held.clear();drag=null;};
-  const pointerdown=(event:PointerEvent)=>{if(mode!=='free'||event.button!==0)return;canvas.focus();drag=event.pointerId;mouseX=event.clientX;mouseY=event.clientY;canvas.setPointerCapture(event.pointerId);};
-  const pointermove=(event:PointerEvent)=>{if(mode!=='free'||drag!==event.pointerId)return;const rotation=new THREE.Euler().setFromQuaternion(camera.quaternion,'YXZ');rotation.y-=(event.clientX-mouseX)*.004;rotation.x=THREE.MathUtils.clamp(rotation.x-(event.clientY-mouseY)*.004,-1.5,1.5);camera.quaternion.setFromEuler(rotation);mouseX=event.clientX;mouseY=event.clientY;};
+  const pointerdown=(event:PointerEvent)=>{if(visiting||mode!=='free'||event.button!==0)return;canvas.focus();drag=event.pointerId;mouseX=event.clientX;mouseY=event.clientY;canvas.setPointerCapture(event.pointerId);};
+  const pointermove=(event:PointerEvent)=>{if(visiting||mode!=='free'||drag!==event.pointerId)return;const rotation=new THREE.Euler().setFromQuaternion(camera.quaternion,'YXZ');rotation.y-=(event.clientX-mouseX)*.004;rotation.x=THREE.MathUtils.clamp(rotation.x-(event.clientY-mouseY)*.004,-1.5,1.5);camera.quaternion.setFromEuler(rotation);mouseX=event.clientX;mouseY=event.clientY;};
   const pointerup=(event:PointerEvent)=>{if(drag===event.pointerId)drag=null;};
   canvas.addEventListener('keydown',keydown);canvas.addEventListener('keyup',keyup);canvas.addEventListener('blur',blur);canvas.addEventListener('pointerdown',pointerdown);canvas.addEventListener('pointermove',pointermove);canvas.addEventListener('pointerup',pointerup);canvas.addEventListener('pointercancel',pointerup);
   function frame(now:number){
@@ -53,10 +57,11 @@ export function createScene(canvas: HTMLCanvasElement) {
         world.avatar.root.position.lerp(new THREE.Vector3(c.x,0,c.z),alpha);
         const angle=Math.atan2(Math.sin(c.heading-world.avatar.root.rotation.y),Math.cos(c.heading-world.avatar.root.rotation.y));world.avatar.root.rotation.y+=angle*alpha;
       }
-      world.applySnapshot(state,time,false);initialized=true;
+      world.setControlledOwnerPresentation(visiting);world.applySnapshot(state,time,false);initialized=true;
     }
-    if(mode==='follow'){const next=aim(),delta=next.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(next);}
-    if(mode==='free'){
+    if(visiting&&visitorPose&&state){const pose=visitorCamera(state,visitorPose,visitorLook);camera.position.copy(pose.position);camera.up.set(0,1,0);camera.lookAt(pose.target);}
+    else if(mode==='follow'){const next=aim(),delta=next.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(next);}
+    if(!visiting&&mode==='free'){
       const velocity=new THREE.Vector3(Number(held.has('KeyD')||held.has('ArrowRight'))-Number(held.has('KeyA')||held.has('ArrowLeft')),0,Number(held.has('KeyS')||held.has('ArrowDown'))-Number(held.has('KeyW')||held.has('ArrowUp')));
       if(velocity.lengthSq())velocity.normalize().applyQuaternion(camera.quaternion);velocity.y+=Number(held.has('KeyE'))-Number(held.has('KeyQ'));
       camera.position.addScaledVector(velocity,dt*(held.has('ShiftLeft')||held.has('ShiftRight')?7:3));camera.position.clamp(new THREE.Vector3(-18,.25,-18),new THREE.Vector3(18,15,18));
@@ -64,5 +69,5 @@ export function createScene(canvas: HTMLCanvasElement) {
     if(world)renderer.render(world.scene,camera);requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  return {reset,setMode,getMode:()=>mode,setOverview(next:boolean){overview=next;reset();},setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
+  return {reset,setMode,getMode:()=>mode,setVisitCamera(active:boolean,pose:VisitorCameraPose|null,look:VisitLook){const changed=visiting!==active;visiting=active;visitorPose=pose;visitorLook=look;controls.enabled=!active&&(mode==='orbit'||mode==='follow');if(changed){camera.fov=active?70:38;camera.near=active ? .05 : .1;camera.updateProjectionMatrix();held.clear();drag=null;if(!active)reset();}},setOverview(next:boolean){overview=next;if(!visiting)reset();},setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
 }

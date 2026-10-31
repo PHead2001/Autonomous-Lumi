@@ -2,12 +2,22 @@ import type { WorldState } from '../shared/protocol';
 import type { HomeWorldView } from '../shared/home-protocol';
 import type { TownWorldView } from '../shared/town-protocol';
 import { homePresentation, recentHomeTimeline } from './viewer-home';
+import type {VisitWorldView,VisitFeedback} from '../shared/visit-protocol';
+import type {SocialWorldView} from '../shared/social-protocol';
+import type {DeliveryWorldView} from '../shared/delivery-protocol';
 
 /** An owner-facing projection of confirmed activity, never a source of cognition. */
-export function worldActivity(state: Pick<WorldState,'home'|'town'|'capability'|'character'>) {
+export function worldActivity(state: Pick<WorldState,'home'|'town'|'capability'|'character'|'social'|'delivery'>) {
   const home=homePresentation(state.home,state.capability,state.character.moving),town=state.town;
-  if(!town||state.capability?.reason==='asleep'||state.capability?.reason==='incapacitated')return home;
-  const a=town.activity,homeBusy=state.home&&['eat','rest'].includes(state.home.activity.kind)&&['selected','started','interrupted'].includes(state.home.activity.status);
+  const homeBusy=state.home&&['eat','rest'].includes(state.home.activity.kind)&&['selected','started','interrupted'].includes(state.home.activity.status);
+  if(state.capability?.reason==='asleep'||state.capability?.reason==='incapacitated')return home;
+  if(state.social?.giftUse&&state.social.giftUse.progressTicks>0&&state.social.giftUse.completedTick===null)return {title:'Eating accepted food',detail:'Consumption is in progress as a separate validated action. Completion has not been reported.'};
+  const delivery=state.delivery?.activity;if(delivery&&delivery.stage!=='idle'&&delivery.status!=='completed'&&delivery.status!=='failed'&&!homeBusy){
+    const labels={approach:'Walking to the drop-off',open:'Opening the drop-off',observe:'Looking inside the drop-off',collect:'Collecting a delivery',consume:'Eating collected food',waiting:'Delivery activity waiting'};
+    return {title:labels[delivery.stage],detail:'A validated delivery activity is in progress. Opening, collection and eating have separate outcomes in the activity history.'};
+  }
+  if(!town)return home;
+  const a=town.activity;
   if(a.status==='idle'||homeBusy)return home;
   const latestHome=state.home?.timeline.at(-1)?.tick??-1,latestTown=town.timeline.at(-1)?.tick??-1;
   if(['completed','failed'].includes(a.status)&&latestHome>latestTown)return home;
@@ -19,15 +29,26 @@ export function worldActivity(state: Pick<WorldState,'home'|'town'|'capability'|
   return {title:a.stage?labels[a.stage]:a.label||'Shop trip in progress',detail:`In progress. Completion is reported separately.${town.heldItem?` Carrying ${town.heldItem}; it has not been reported consumed.`:''}`};
 }
 
-/** Merge only the two bounded public histories, retaining their independent gap counts. */
-export function recentWorldTimeline(home:HomeWorldView|undefined,town:TownWorldView|undefined,currentTick:number,secondsPerTick:number,limit=8) {
-  if(!town)return recentHomeTimeline(home,currentTick,secondsPerTick,limit);
-  const events=[...(home?.timeline??[]).map(e=>({...e,source:0})),...town.timeline.map(e=>({...e,source:1}))];
+function ownerActivityLabel(feedback:VisitFeedback):string {
+  if(feedback.type==='control'){
+    if(feedback.outcome==='stopped')return 'Owner movement stopped';
+    if(feedback.outcome==='rejected')return feedback.reason==='movement_blocked'?'Owner movement blocked':'Owner Visit control rejected';
+    return feedback.reason==='control_acquired'?'Owner Visit control started':'Owner Visit control confirmed';
+  }
+  if(feedback.type==='purchase')return feedback.outcome==='accepted'?'Owner purchase confirmed':'Owner purchase not completed';
+  return feedback.outcome==='accepted'?'Owner used a door':'Owner door interaction not completed';
+}
+
+/** Merge bounded public histories, retaining their independent gap counts. */
+export function recentWorldTimeline(home:HomeWorldView|undefined,town:TownWorldView|undefined,currentTick:number,secondsPerTick:number,limit=8,visit?:VisitWorldView,social?:SocialWorldView,delivery?:DeliveryWorldView) {
+  if(!town&&!visit&&!social&&!delivery)return recentHomeTimeline(home,currentTick,secondsPerTick,limit);
+  const ownerEvents=(visit?.timeline??[]).map((f,i)=>({tick:f.tick,sequence:i,type:f.outcome,label:ownerActivityLabel(f),source:2}));
+  const events=[...(home?.timeline??[]).map(e=>({...e,source:0})),...(town?.timeline??[]).map(e=>({...e,source:1})),...ownerEvents,...(social?.timeline??[]).map(e=>({...e,source:3})),...(delivery?.timeline??[]).map(e=>({...e,source:4}))];
   events.sort((a,b)=>b.tick-a.tick||b.source-a.source||b.sequence-a.sequence);
   const entries=events.slice(0,Math.min(12,Math.max(1,limit))).map(e=>{
     const age=Math.max(0,Math.floor((currentTick-e.tick)*secondsPerTick));
     return {label:e.label,type:e.type,age:age<2?'Just now':age<60?`${age}s ago`:age<3600?`${Math.floor(age/60)}m ago`:`${Math.floor(age/3600)}h ago`};
   });
-  const gaps=[home?.droppedCount?`${home.droppedCount} earlier home events`:null,town.droppedCount?`${town.droppedCount} earlier neighborhood events`:null].filter(Boolean);
+  const gaps=[home?.droppedCount?`${home.droppedCount} earlier home events`:null,town?.droppedCount?`${town.droppedCount} earlier neighborhood events`:null,visit?.droppedCount?`${visit.droppedCount} earlier owner events`:null,social?.droppedCount?`${social.droppedCount} earlier offer/introduction events`:null,delivery?.droppedCount?`${delivery.droppedCount} earlier delivery events`:null].filter(Boolean);
   return {entries,note:events.length?`Showing ${entries.length} of ${events.length} retained events${gaps.length?` · ${gaps.join(' and ')} no longer retained`:''}`:'No home or neighborhood actions recorded yet'};
 }

@@ -4,6 +4,7 @@ import { ViewerLifecycle } from './viewer-lifecycle';
 import { mountHomeLabCard } from './home-lab-ui';
 import { worldActivity, recentWorldTimeline } from './viewer-town';
 import type { ServerMessage } from '../shared/protocol';
+import {mountVisit} from './visit';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const slam = element<HTMLButtonElement>('slam'), bell = element<HTMLButtonElement>('doorbell'), toggle = element<HTMLButtonElement>('connection-toggle');
@@ -19,7 +20,7 @@ const worldId = query.get('worldId'), branchId = query.get('branchId');
 const explicitTarget = worldId !== null || branchId !== null;
 const validTarget = !explicitTarget || (!!worldId && !!branchId && /^[A-Za-z0-9_-]{1,100}$/.test(worldId) && /^[A-Za-z0-9_-]{1,100}$/.test(branchId));
 let currentRunId = '', soundPending: ReturnType<typeof setTimeout> | undefined;
-let cueBusy = false, awaitingState = true, wasDisconnected = false;
+let cueBusy = false, awaitingState = true, wasDisconnected = false,isVisiting=false;
 function interaction(message: string) { element('interaction-status').textContent = message; }
 if (explicitTarget && validTarget) {
   element('viewer-mode').textContent = 'EXPERIMENT VIEWER';
@@ -27,9 +28,14 @@ if (explicitTarget && validTarget) {
   element('viewer-room').textContent = 'ISOLATED EXPERIMENT · OBSERVE';
 }
 function status(text: string, live: boolean) { connection.textContent = text; dot.classList.toggle('connected', live); slam.disabled = !live || cueBusy || awaitingState; bell.disabled = !live || cueBusy || awaitingState; }
+const visit=mountVisit(element<HTMLCanvasElement>('scene'),{
+  activateAudio(){void audio.activate().then(active=>{element('audio-status').textContent=active?'Sound enabled · Only new server sounds play.':'Audio unavailable · World sound and hearing still run.';});},
+  camera(active,pose,look){scene?.setVisitCamera(active,pose,look);},
+  mode(active){isVisiting=active;document.querySelector<HTMLElement>('.observe-controls')!.hidden=active;element<HTMLSelectElement>('camera-mode').disabled=active;element<HTMLButtonElement>('neighborhood-view').disabled=active;element<HTMLButtonElement>('reset-camera').disabled=active;element('entry-help').textContent=active?'Visit controls your separate avatar. Observe releases control and leaves it parked.':'Observe is nonphysical. Visit controls a separate owner avatar.';element<HTMLCanvasElement>('scene').setAttribute('aria-label',active?'Owner Visit. W A S D to move, drag to look, E to interact.':'Observe Lumi’s home. Camera keys 1 to 4; R to recenter.');},
+});
 const lifecycle = new ViewerLifecycle(window, {
   resume: connect,
-  suspend: () => { clearTimeout(reconnect); socket?.close(); },
+  suspend: () => { clearTimeout(reconnect);visit.disconnect();socket?.close(); },
 });
 function connect() {
   if (!validTarget) { status('Invalid world/branch selection', false); return; }
@@ -51,25 +57,27 @@ function connect() {
     const identity = `${state.worldId}/${state.branchId ?? 'live'}/${state.runId}`;
     if (latestWorld !== identity) { latestWorld = identity; lastSound = 0; }
     scene?.setState(state);
+    visit.update(state);
     element('neighborhood-view').hidden=!('town' in state&&state.town);
     element('world-time').textContent = `World time ${Math.floor(state.time / 60)}:${Math.floor(state.time % 60).toString().padStart(2, '0')}`;
     const experiment = state.mode === 'EXPERIMENT';
     connection.textContent = experiment ? 'Experiment connected' : 'Live world';
     element('viewer-mode').textContent = experiment ? 'ISOLATED EXPERIMENT' : 'LIVE HOME'; element('viewer-mode').classList.toggle('experiment', experiment);
-    element('viewer-room').textContent = experiment ? 'ISOLATED EXPERIMENT · OBSERVE' : 'LUMI’S HOME · OBSERVE';
+    element('viewer-room').textContent = `${experiment?'ISOLATED EXPERIMENT':'LUMI’S HOME'} · ${isVisiting?'VISIT':'OBSERVE'}`;
     const presentation = worldActivity(state);
     element('activity-title').textContent = presentation.title; element('activity-detail').textContent = presentation.detail;
-    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30);
+    const history = recentWorldTimeline(state.home, state.town, state.tick, state.tick ? state.time / state.tick : 1/30,8,state.visit,state.social,state.delivery);
     element('history-status').textContent = history.note;
     const timeline = element('activity-timeline'), fragment = document.createDocumentFragment();
     for (const entry of history.entries) { const row = document.createElement('li'), age = document.createElement('time'), label = document.createElement('span'); age.textContent = entry.age; label.textContent = entry.label; row.append(age,label); fragment.append(row); }
     if (!history.entries.length) { const row = document.createElement('li'); row.textContent = 'No recent home action is available.'; fragment.append(row); }
     timeline.replaceChildren(fragment);
-    if (message.type === 'sound' && message.event.id > lastSound) { lastSound = message.event.id; const isBell = 'kind' in message.event && message.event.kind === 'doorbell'; if (isBell) audio.playBell(); else audio.play(); clearTimeout(soundPending); interaction(isBell ? 'The doorbell sounded. She may continue what she’s doing.' : 'The door slammed. Her reaction depends on what she receives.'); }
+    if (message.type === 'sound' && message.event.id > lastSound) { lastSound = message.event.id;const kind=message.event.kind;if(kind==='footstep')audio.playFootstep();else {const isBell=kind==='doorbell';if(isBell)audio.playBell();else audio.play();clearTimeout(soundPending);interaction(isBell?'The doorbell sounded. She may continue what she’s doing.':'The door slammed. Her reaction depends on what she receives.');} }
   };
   current.onclose = () => {
     if (socket !== current) return;
     awaitingState = true; wasDisconnected = true; clearTimeout(soundPending);
+    visit.disconnect();
     status(lifecycle.shouldReconnect ? 'Reconnecting…' : 'Viewer disconnected', false);
     interaction('Viewer disconnected. The last received state is shown; the server world continues.');
     toggle.disabled = false; toggle.textContent = 'Reconnect viewer';
@@ -110,6 +118,7 @@ function observe(mode: ObserveMode) {
 }
 cameraMode.onchange = () => observe(cameraMode.value as ObserveMode);
 window.addEventListener('keydown', event => {
+  if(isVisiting)return;
   if (event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && ['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName))) return;
   const mode = ({Digit1:'orbit',Digit2:'free',Digit3:'follow',Digit4:'fixed'} as Record<string,ObserveMode>)[event.code];
   if (mode) { event.preventDefault(); observe(mode); }
