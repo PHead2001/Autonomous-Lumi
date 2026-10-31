@@ -5,12 +5,12 @@ export interface HomeRoutePlan {status:'reachable'|'blocked';points:NavigationPo
 export const HOME_NAVIGATION={cell:.25,maxExpansions:768,maxPoints:128,walkX:3.2,walkZ:2.3} as const;
 const distance=(a:NavigationPoint,b:NavigationPoint)=>Math.hypot(a.x-b.x,a.z-b.z);
 /** Fixed bounded grid, Euclidean A*, stable node-index tie breaks, swept edge validation. */
-export function planHomeRoute(start:NavigationPoint,goal:NavigationPoint,geometry:NavigationGeometry):HomeRoutePlan {
+export function planHomeRoute(start:NavigationPoint,goal:NavigationPoint,geometry:NavigationGeometry,bounds?:{minX:number;maxX:number;minZ:number;maxZ:number;maxExpansions:number}):HomeRoutePlan {
  const failed=(reason:HomeRoutePlan['reason'],expanded=0):HomeRoutePlan=>({status:'blocked',points:[],expanded,reason,distance:0});
  if(![start.x,start.z,goal.x,goal.z].every(Number.isFinite)||!geometry.canOccupy(goal))return failed('invalid_destination');
  if(geometry.canSweep(start,goal))return {status:'reachable',points:[{...goal}],expanded:0,reason:'route_found',distance:distance(start,goal)};
- const {cell,walkX,walkZ,maxExpansions,maxPoints}=HOME_NAVIGATION,nx=Math.floor(walkX*2/cell)+1,nz=Math.floor(walkZ*2/cell)+1;
- const point=(id:number):NavigationPoint=>({x:-walkX+(id%nx)*cell,z:-walkZ+Math.floor(id/nx)*cell});
+ const {cell,walkX,walkZ,maxPoints}=HOME_NAVIGATION,maxExpansions=bounds?.maxExpansions??HOME_NAVIGATION.maxExpansions,minX=bounds?.minX??-walkX,minZ=bounds?.minZ??-walkZ,maxX=bounds?.maxX??walkX,maxZ=bounds?.maxZ??walkZ,nx=Math.floor((maxX-minX)/cell)+1,nz=Math.floor((maxZ-minZ)/cell)+1;
+ const point=(id:number):NavigationPoint=>({x:minX+(id%nx)*cell,z:minZ+Math.floor(id/nx)*cell});
  const valid=new Set<number>();for(let id=0;id<nx*nz;id++)if(geometry.canOccupy(point(id)))valid.add(id);
  const connectors=(p:NavigationPoint)=>[...valid].filter(id=>distance(p,point(id))<=cell*2.1&&geometry.canSweep(p,point(id))).sort((a,b)=>distance(p,point(a))-distance(p,point(b))||a-b).slice(0,8);
  const from=connectors(start),to=new Set(connectors(goal));if(!from.length||!to.size)return failed('no_route');
@@ -25,3 +25,6 @@ export function planHomeRoute(start:NavigationPoint,goal:NavigationPoint,geometr
  const points:NavigationPoint[]=[];let current=start,index=0;while(index<reversed.length){let last=index;for(let next=index;next<reversed.length;next++){if(!geometry.canSweep(current,reversed[next]))break;last=next;}points.push(reversed[last]);current=reversed[last];index=last+1;if(points.length>maxPoints)return failed('planning_bound',expanded);}
  let total=0,previous=start;for(const p of points){total+=distance(previous,p);previous=p;}return {status:'reachable',points,expanded,reason:'route_found',distance:total};
 }
+
+/** Same bounded deterministic planner with the versioned town's finite surface extent. */
+export const planTownRoute=(start:NavigationPoint,goal:NavigationPoint,geometry:NavigationGeometry):HomeRoutePlan=>planHomeRoute(start,goal,geometry,{minX:-4.1,maxX:5.5,minZ:-14.7,maxZ:3.1,maxExpansions:3000});

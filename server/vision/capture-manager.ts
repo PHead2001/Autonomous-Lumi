@@ -1,11 +1,12 @@
 import { recognizeCapturedHome } from '../home-observation.js';
+import { recognizeCapturedTown } from '../town-observation.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { hashCanonical } from '../canonical.js';
 import type { BranchRuntime } from '../branch-runtime.js';
 import type { ActiveTarget } from '../../shared/lab-protocol.js';
 import type { WorldState } from '../../shared/protocol.js';
 import { eyePose } from '../../shared/eye-pose.js';
-import { PHYSICAL_SCENE_VERSION, RENDER_REVISION } from '../../shared/physical-scene.js';
+import { physicalSceneSnapshot, RENDER_REVISION } from '../../shared/physical-scene.js';
 import { HEAD_LIMITS, observedHeadTarget, validateHeadAction, type CapturedBearingEvidence, type HeadAction } from '../../shared/vision-protocol.js';
 import type { AutomaticCaptureAssociation, CaptureMetadata, CaptureOptions, CaptureView, VisualObservation } from '../../shared/capture-protocol.js';
 import { CAPTURE_LIMITS, MANUAL_CAPTURE_REASONS } from '../../shared/capture-protocol.js';
@@ -59,8 +60,8 @@ export class CaptureManager {
     const snapshot = structuredClone(runtime.viewerState());
     if (!snapshot.head || !snapshot.scene) throw new Error('Capture requires the current vision state schema');
     const checkpoint = runtime.simulation.checkpoint();
-    const id = randomUUID();
-    const metadata: CaptureMetadata = { ...runtime.target, captureId: id, observationId: id, tick: snapshot.tick, stateVersion: checkpoint.schemaVersion, stateHash: hashCanonical(checkpoint), sceneRevision: PHYSICAL_SCENE_VERSION, dynamicRevision: snapshot.scene.revision, renderRevision: RENDER_REVISION, camera: eyePose(snapshot, options.width, options.height), reason: options.reason, width: options.width, height: options.height, format: 'image/png', status: 'queued', requestedAt: new Date().toISOString(), completedAt: null, durationMs: null, frameHash: null, backend: null, error: null };
+    const id = randomUUID(), physical = physicalSceneSnapshot(snapshot);
+    const metadata: CaptureMetadata = { ...runtime.target, captureId: id, observationId: id, tick: snapshot.tick, stateVersion: checkpoint.schemaVersion, stateHash: hashCanonical(checkpoint), sceneRevision: physical.revision, dynamicRevision: snapshot.scene.revision, renderRevision: RENDER_REVISION, camera: eyePose(snapshot, options.width, options.height), reason: options.reason, width: options.width, height: options.height, format: 'image/png', status: 'queued', requestedAt: new Date().toISOString(), completedAt: null, durationMs: null, frameHash: null, backend: null, error: null };
     if (automatic) metadata.automatic = structuredClone(automatic);
     let complete!: () => void; const completion = new Promise<void>(done => { complete = done; });
     const entry: Entry = { metadata, snapshot, grounding: null, handles: new Map(), runtime, completion, complete, retired: false, requestedMono: performance.now() };
@@ -131,6 +132,7 @@ export class CaptureManager {
     return entry.bytes.slice();
   }
   homeObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedHome({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
+  townObservation(target:ActiveTarget,captureId:string,attentionTick:number){const entry=this.entries.get(captureId);if(!this.current(target)||!entry||scopeKey(entry.metadata)!==scopeKey(target)||entry.retired||entry.metadata.status!=='success'||!entry.bytes||!entry.observation)return null;return recognizeCapturedTown({snapshot:entry.snapshot,metadata:entry.metadata,observation:entry.observation,png:entry.bytes,sensorSource:this.renderer instanceof ChromiumRenderer?'actual_renderer':'test_fixture',handles:entry.handles,attentionTick});}
   /** ID-bound filtered evidence for cognition. Never substitutes the latest frame.
    * The caller owns the copied pixels before it enters any provider queue. */
   observation(target: ActiveTarget, captureId: string): { metadata: CaptureMetadata; observation: VisualObservation; png: Uint8Array; sensorSource: 'actual_renderer'|'mock_renderer' } {

@@ -126,7 +126,7 @@ export class EvidenceClient implements CognitionProviderClient {
     this.lastCallMs=this.pacing.now();return this.actual.decide({...input,context,choices});
   }
 }
-function requests(runtime:BranchRuntime):CognitionRequestState[]{const cp=runtime.simulation.checkpoint();return (cp.schemaVersion===5||(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8)))?cp.cognition.requests:[];}
+function requests(runtime:BranchRuntime):CognitionRequestState[]{const cp=runtime.simulation.checkpoint();return (cp.schemaVersion===5||(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9)))?cp.cognition.requests:[];}
 async function waitFor(predicate:()=>boolean,pump:()=>void,timeoutMs=60000):Promise<void>{
   await new Promise<void>((done,reject)=>{
     const timer=setTimeout(()=>{clearInterval(interval);reject(new Error('Bounded scenario deadline exceeded'));},timeoutMs);
@@ -145,7 +145,7 @@ async function experimentCase(name:string,config:CognitionConfig,client:Evidence
   const work=client.begin(name);
   try{
   const source=new BranchRuntime({worldId:'capability-check',branchId:name,historyId:'isolated-capability-history',mode:'EXPERIMENT',offline:true}),checkpoint=source.checkpoint();await source.close();
-  const cp=checkpoint.simulation;if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8)))throw new Error('Cognition schema required');
+  const cp=checkpoint.simulation;if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&cp.schemaVersion!==9)))throw new Error('Cognition schema required');
   const fixture=createVisibilityFixture();cp.character=fixture.character;cp.head=fixture.head!;cp.scene=fixture.scene!;cp.pauseUntilTick=100000;
   if(name==='partial'){cp.head.yaw=.25;cp.head.targetYaw=.25;}
   if(name==='dark')cp.scene.illumination=0;
@@ -163,7 +163,7 @@ async function experimentCase(name:string,config:CognitionConfig,client:Evidence
       if(!config.decisions.available)decisions={status:'unavailable',adoption:'insufficient evidence to adopt; LIVE disabled'};
       else{
         const initial=requests(runtime)[0];
-        await waitFor(()=>{const cp=runtime.simulation.checkpoint();return (cp.schemaVersion===5||(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8)))&&runtime.simulation.state.tick>=cp.cognition.nextRequestTick;},()=>runtime.pump(),10000);
+        await waitFor(()=>{const cp=runtime.simulation.checkpoint();return (cp.schemaVersion===5||(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9)))&&runtime.simulation.state.tick>=cp.cognition.nextRequestTick;},()=>runtime.pump(),10000);
         if(!await client.waitForCadence(work))throw new Error('Case pacing deadline');
         const admitted=host.requestDecisionEvaluation(runtime,initial.request.selection.captureId);
         if(admitted.queued){await waitFor(()=>requests(runtime).some(r=>r.request.requestId===admitted.requestId&&r.status==='completed'),()=>{runtime.pump();host.pump([runtime]);});decisions={status:'evaluated',localBaseline:'continue',fixedLegalChoices:['continue','request_observation'],comparison:resultView(runtime).find(r=>r.requestId===admitted.requestId),adoption:'one matched case is insufficient evidence to adopt; LIVE disabled'};}
@@ -191,14 +191,14 @@ async function liveRecoveryCase(config:CognitionConfig,client:EvidenceClient,dir
     // Unmodified fresh LIVE world: genuine door event -> local attention -> capture.
     world.registry.live.enqueue({type:'slam'});
     await waitFor(()=>requests(world.registry.live).some(r=>r.status==='completed'),()=>{});
-    const cp=world.registry.live.simulation.checkpoint();if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8)))throw new Error('Cognition schema required');
+    const cp=world.registry.live.simulation.checkpoint();if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&cp.schemaVersion!==9)))throw new Error('Cognition schema required');
     ids=cp.realExperiences.map(e=>e.encodingId);first=resultView(world.registry.live);diagnostic=await bundle(world.registry.live,join(directory,'temporary-live.zip'));
   }catch{failure='scenario_failed';}
-  finally{client.endCase(work);const cp=world.registry.live.simulation.checkpoint();if(cp.schemaVersion===5||cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8)){ids=cp.realExperiences.map(e=>e.encodingId);first=resultView(world.registry.live);}try{await world.close();}catch{failure??='runtime_cleanup_failed';}}
+  finally{client.endCase(work);const cp=world.registry.live.simulation.checkpoint();if(cp.schemaVersion===5||cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9)){ids=cp.realExperiences.map(e=>e.encodingId);first=resultView(world.registry.live);}try{await world.close();}catch{failure??='runtime_cleanup_failed';}}
   const recovered=await RecoveryStore.open({directory:liveDirectory});
   const disabled=loadCognitionConfig({loadEnv:false,env:{}}),restored=createWorldServer({diagnosticsDirectory:liveDirectory,recoveryStore:recovered.store,checkpoint:recovered.checkpoint,automaticCaptures:false,cognition:{config:disabled}});
   try{
-    await restored.listen(0);const cp=restored.registry.live.simulation.checkpoint();if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8)))throw new Error('Cognition schema required');
+    await restored.listen(0);const cp=restored.registry.live.simulation.checkpoint();if(cp.schemaVersion!==5&&(cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&cp.schemaVersion!==9)))throw new Error('Cognition schema required');
     const retained=cp.realExperiences.map(e=>e.encodingId),survived=ids.length>0&&ids.every(id=>retained.includes(id))&&restored.registry.historyId===historyId;
     return {case:'temporary-live',classification:'ACTUAL RENDERER AND REAL PROVIDER / TEMPORARY LIVE',...(failure?{failure}:{}),requests:first,encodedCount:ids.length,restartWithCognitionDisabled:{survived,retainedCount:retained.length,sameHistory:restored.registry.historyId===historyId},bundle:diagnostic};
   }finally{await restored.close();}
@@ -261,16 +261,16 @@ export async function runPhysiologyVerification(options:VerificationOptions,conf
   const cleanup:{runtime:'pending'|'closed'|'failed';restartRuntime:'unavailable'|'closed'|'failed'}={runtime:'pending',restartRuntime:'unavailable'};
   try{
     await world.listen(0);
-    const initial=world.registry.live.simulation.checkpoint();if(initial.schemaVersion!==6&&initial.schemaVersion!==7)throw new Error('Physiology schema required');
+    const initial=world.registry.live.simulation.checkpoint();if(initial.schemaVersion!==6&&initial.schemaVersion!==7&&initial.schemaVersion!==8&&initial.schemaVersion!==9)throw new Error('Physiology schema required');
     // The local awareness contract allows the configured urgent interval; ordinary
     // stochastic samples need not attend on their first opportunity.
     const awarenessWaitMs=Math.ceil((initial.body.config.urgentAttentionSeconds+6)*1000);
-    await waitFor(()=>{const cp=world.registry.live.simulation.checkpoint();return (cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8))&&cp.interoception.transient.some(s=>s.percept.kind==='hunger'&&s.percept.band==='severe');},()=>{},awarenessWaitMs);
+    await waitFor(()=>{const cp=world.registry.live.simulation.checkpoint();return (cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9))&&cp.interoception.transient.some(s=>s.percept.kind==='hunger'&&s.percept.band==='severe');},()=>{},awarenessWaitMs);
     // An ordinary accepted head turn produces a real milestone/capture intent.
     // The internal sensor independently attends; no body event forces a camera.
     world.registry.live.enqueue({type:'turn_head',yawDelta:.15,pitchDelta:0,sceneRevision:world.registry.live.viewerState().scene!.revision});
     await waitFor(()=>requests(world.registry.live).some(r=>r.status==='completed'),()=>{});
-    const cp=world.registry.live.simulation.checkpoint();if((cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8)))throw new Error('Physiology checkpoint required');
+    const cp=world.registry.live.simulation.checkpoint();if((cp.schemaVersion!==6&&(cp.schemaVersion!==7&&cp.schemaVersion!==8&&cp.schemaVersion!==9)))throw new Error('Physiology checkpoint required');
     requestRecords=resultView(world.registry.live);internalCount=cp.internalExperiences.length;
     sentContext=cp.cognition.requests[0]?.request.selection.context??null;
     if(requestRecords[0]?.status!=='success')failed('provider_'+(requestRecords[0]?.status??'missing_result'));
@@ -278,7 +278,7 @@ export async function runPhysiologyVerification(options:VerificationOptions,conf
   finally{
     client.endCase(work);
     // Preserve any completed response even when a later scenario/cleanup step fails.
-    try{const cp=world.registry.live.simulation.checkpoint();requestRecords=resultView(world.registry.live);if((cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8))){internalCount=cp.internalExperiences.length;sentContext=cp.cognition.requests[0]?.request.selection.context??null;}}catch{failed('runtime_evidence_unavailable');}
+    try{const cp=world.registry.live.simulation.checkpoint();requestRecords=resultView(world.registry.live);if((cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9))){internalCount=cp.internalExperiences.length;sentContext=cp.cognition.requests[0]?.request.selection.context??null;}}catch{failed('runtime_evidence_unavailable');}
     try{world.cognition.close(world.registry.branches.values());}catch{failed('runtime_cleanup_failed');}
     try{await world.close();cleanup.runtime='closed';}catch{cleanup.runtime='failed';failed('runtime_cleanup_failed');}
   }
@@ -287,7 +287,7 @@ export async function runPhysiologyVerification(options:VerificationOptions,conf
   try{
     const recovered=await RecoveryStore.open({directory}),disabled=loadCognitionConfig({loadEnv:false,env:{}});
     restored=createWorld({diagnosticsDirectory:directory,recoveryStore:recovered.store,checkpoint:recovered.checkpoint,automaticCaptures:false,autoSchedule:false,cognition:{config:disabled}});
-    await restored.listen(0);const cp=restored.registry.live.simulation.checkpoint();survived=(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8))&&cp.body.active&&cp.internalExperiences.length===internalCount&&internalCount>0;
+    await restored.listen(0);const cp=restored.registry.live.simulation.checkpoint();survived=(cp.schemaVersion===6||(cp.schemaVersion===7||cp.schemaVersion===8||cp.schemaVersion===9))&&cp.body.active&&cp.internalExperiences.length===internalCount&&internalCount>0;
   }catch{failed('restart_verification_failed');}
   finally{if(restored)try{await restored.close();cleanup.restartRuntime='closed';}catch{cleanup.restartRuntime='failed';failed('runtime_cleanup_failed');}}
   const numericPrivateFields=['satiety','reserves','sleepPressure','condition','fatigue','activationTick','genesisPreset','crossingTick','eligibleTicks','attentionId','provenance'];

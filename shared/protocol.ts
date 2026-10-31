@@ -11,6 +11,7 @@ export interface WorldState {
   physiologyActive?:boolean;capability?:import('./physiology-protocol.js').BodyCapability;presentInternalSensations?:import('./physiology-protocol.js').InternalSensationContext[];
   head?: HeadState; scene?: PhysicalSceneState;
   home?:import('./home-protocol.js').HomeWorldView;
+  town?:import('./town-protocol.js').TownWorldView;
 }
 export type ServerMessage = { type: 'state'; state: WorldState } | { type: 'sound'; event: AcousticEvent; state: WorldState };
 export const REFLEX_DURATION = 0.8;

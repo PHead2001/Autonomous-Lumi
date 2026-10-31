@@ -1,3 +1,4 @@
+import { townFixtureBoxes } from './town-geometry.js';
 import { homeFixtureBoxes } from './home-geometry.js';
 import type { WorldState } from './protocol.js';
 import { CHARACTER_CLEARANCE_RADIUS } from './avatar-rig.js';
@@ -35,7 +36,7 @@ export interface PhysicalBox {
   cutaway: boolean;
 }
 export interface PhysicalSceneSnapshot {
-  revision: typeof PHYSICAL_SCENE_VERSION;
+  revision: typeof PHYSICAL_SCENE_VERSION | 'lumi-town-scene-v1';
   dynamicRevision: number;
   illumination: number;
   boxes: PhysicalBox[];
@@ -43,7 +44,7 @@ export interface PhysicalSceneSnapshot {
 /** Deliberate acoustic surfaces: decorative panels, trim, cutaway flags and navigation
  * clearance volumes never create extra acoustic walls. Door pose is the shared real leaf. */
 export function acousticBarriers(state:WorldState):{box:PhysicalBox;material:'wall'|'door'|'object';group:string}[] {
-  return physicalSceneSnapshot(state).boxes.flatMap<{box:PhysicalBox;material:'wall'|'door'|'object';group:string}>(box=>box.id.startsWith('wall-')?[{box,material:'wall',group:box.id.startsWith('wall-back-')?'wall-back':box.id}]:box.id==='door-leaf'?[{box,material:'door',group:'door'}]:box.id==='fixture-screen'?[{box,material:'object',group:'fixture-screen'}]:[]);
+  return physicalSceneSnapshot(state).boxes.flatMap<{box:PhysicalBox;material:'wall'|'door'|'object';group:string}>(box=>box.id.startsWith('wall-')?[{box,material:'wall',group:box.id.startsWith('wall-back-')?'wall-back':box.id}]:(box.id==='door-leaf'||box.id==='town-shop-door')?[{box,material:'door',group:box.id==='door-leaf'?'door':box.id}]:box.id==='fixture-screen'?[{box,material:'object',group:'fixture-screen'}]:[]);
 }
 export function defaultPhysicalSceneState(): PhysicalSceneState {
   return { revision: 0, illumination: 1, fixture: 'none', fixtureColor: '#ed6050', doorOpenRadians: null };
@@ -62,6 +63,7 @@ export function validatePhysicalSceneState(raw: unknown): PhysicalSceneState {
   return { revision, ...validateSceneConfiguration(configuration) };
 }
 export function doorAngle(state: WorldState, time = state.time): number {
+  if(state.town){const d=state.town.doors,age=d.slam?time-d.slam.startTime:-1;return d.homeAngle+(age>=0&&age<.4?d.slam!.sign*.5*Math.exp(-age*10)*Math.cos(age*20):0);}
   const override = state.scene?.doorOpenRadians;
   if (override !== undefined && override !== null) return override;
   const age = time - state.door.lastSlam;
@@ -84,7 +86,8 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
   box('wall-left', [0.16, 3.65, 7.2], [-4.6, 1.7, 0], '#c3cdb7');
   box('wall-right', [0.16, 3.65, 7.2], [4.6, 1.7, 0], '#c3cdb7', { cutaway: true });
   box('wall-front', [9.2, 3.65, 0.16], [0, 1.7, 3.6], '#aac0af', { cutaway: true });
-  box('skirting-back', [9.2, 0.13, 0.18], [0, 0.05, -3.47], '#e7dfc8');
+  if(!state.town)box('skirting-back', [9.2, 0.13, 0.18], [0, 0.05, -3.47], '#e7dfc8');
+  else {box('skirting-back-left',[6.5,.13,.18],[-1.3,.05,-3.47],'#e7dfc8');box('skirting-back-right',[.6,.13,.18],[4.25,.05,-3.47],'#e7dfc8');}
   box('skirting-left', [0.18, 0.13, 7.1], [-4.47, 0.05, 0], '#e7dfc8');
   box('rug-border', [4.1, 0.025, 3.3], [-0.3, 0, 0.3], '#729a92', { collides: false });
   box('rug', [3.8, 0.03, 3], [-0.3, 0.005, 0.3], '#83aaa0', { collides: false });
@@ -114,7 +117,14 @@ export function physicalSceneSnapshot(state: WorldState, time = state.time): Phy
     box('fixture-beyond-door', [0.6, 0.65, 0.5], [2.97, 1.9, -4.3], '#b23bce', { observable: true });
   }
   if(state.home?.layout)boxes.push(...homeFixtureBoxes(state.home.layout,state.home.pantryFoodVisible));
-  return { revision: PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
+  if(state.town){
+    // The original decorative prototype door was below the complete fox-ear
+    // envelope. The town version has a genuine full-height traversable opening;
+    // historical room snapshots retain their original lintel and frame.
+    for(const b of boxes){if(b.id==='wall-back-lintel'){b.position[1]=3.6;b.size[1]=.3;}else if(b.id==='door-frame-top')b.position[1]=3.52;else if(b.id==='door-frame-left'||b.id==='door-frame-right'){b.position[1]=1.75;b.size[1]=3.5;}}
+    boxes.push(...townFixtureBoxes(state));
+  }
+  return { revision: state.town?'lumi-town-scene-v1':PHYSICAL_SCENE_VERSION, dynamicRevision: s.revision+(state.home?.layout?.revision??0), illumination: s.illumination, boxes };
 }
 /** Conservative keepout for the entire ordinary slam sweep, not an invisible occluder. */
 function animatedDoorKeepout(): PhysicalBox {

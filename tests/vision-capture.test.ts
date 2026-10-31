@@ -177,8 +177,10 @@ test('invalid camera admission records a failed capture and retains the earlier 
   const manager = new CaptureManager(() => true, { render: async () => { renders++; return frame; }, close: async () => {} });
   try {
     const good = manager.request(a, { reason: 'diagnostic' }); assert.equal((await manager.wait(a.target, good.captureId)).status, 'success');
-    // A valid migrated near-door pose becomes temporarily obstructed by the actual slam transform.
-    a.enqueue({ type: 'slam' }); a.applyControl({ type: 'step' });
+    // Controlled faulty snapshot puts the camera in a solid wall. Current town
+    // movement/slams now prevent the former physical clipping setup. This test
+    // independently retains capture-admission failure/previous-frame behavior.
+    const validSnapshot=a.viewerState.bind(a);a.viewerState=()=>{const snapshot=validSnapshot();snapshot.character.x=4.6;snapshot.character.z=0;snapshot.head!.camera.near=.5;return snapshot;};
     const invalid = manager.request(a, { reason: 'diagnostic' }); assert.equal(invalid.status, 'failed');
     const terminal = await manager.wait(a.target, invalid.captureId); assert.match(terminal.error ?? '', /Camera/); assert.ok(terminal.completedAt); assert.equal(terminal.frameHash, null); assert.equal(terminal.backend, null);
     const view = manager.view(a.target); assert.equal(view.latest?.captureId, invalid.captureId); assert.equal(view.latest?.status, 'failed'); assert.equal(view.previousSuccess?.captureId, good.captureId);
@@ -188,4 +190,24 @@ test('invalid camera admission records a failed capture and retains the earlier 
     assert.deepEqual(records.map(record => record.event_type), ['CAPTURE_REQUEST', 'CAPTURE_SNAPSHOT', 'CAPTURE_FAILURE', 'CAPTURE_TIMING']);
     assert.equal(a.simulation.checkpoint().experiences.length, 0);
   } finally { await manager.close(); await a.close(); await source.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('nonzero home layout revision keeps the authoritative capture/head ordering cursor',async()=>{
+  const source=new BranchRuntime({worldId:'capture-cursor',branchId:'fixture',mode:'EXPERIMENT',offline:true,physiology:{active:false}}),checkpoint=source.checkpoint();await source.close();
+  if(checkpoint.simulation.schemaVersion!==9)throw new Error('Town schema required');
+  const cp=checkpoint.simulation,fixture=createVisibilityFixture();
+  cp.character=fixture.character;cp.scene={...fixture.scene!,revision:3};cp.head=fixture.head!;cp.pauseUntilTick=10000;cp.home.controller.searchNextTick=10000;cp.home.layout!.revision=7;
+  const runtime=new BranchRuntime({worldId:'capture-cursor',branchId:'fixture',mode:'EXPERIMENT',offline:true,checkpoint}),manager=new CaptureManager(()=>true,{render:async(snapshot,width,height)=>pixelFixtureFrame(snapshot,width,height),close:async()=>{}});
+  try{
+    runtime.applyControl({type:'pause'});
+    const request=manager.request(runtime,{reason:'diagnostic'}),metadata=await manager.wait(runtime.target,request.captureId);
+    assert.equal(metadata.status,'success');assert.equal(metadata.sceneRevision,'lumi-town-scene-v1');assert.equal(metadata.dynamicRevision,3);
+    const shape=manager.view(runtime.target).observation!.shapes.find(s=>Math.abs(s.bearingDegrees)<45)!;assert.ok(shape);
+    const action=manager.resolveHeadAction(runtime,{type:'look_at',observationId:metadata.captureId,handle:shape.handle,sceneRevision:3});
+    assert.equal(action.sceneRevision,3);runtime.enqueue(action);runtime.applyControl({type:'step'});
+    assert.notEqual(runtime.viewerState().head!.status,'idle','current qualified observed handle is usable despite a nonzero layout revision');
+    runtime.enqueue({type:'configure_scene',illumination:.9,fixture:'visibility',fixtureColor:cp.scene.fixtureColor,doorOpenRadians:cp.scene.doorOpenRadians});runtime.applyControl({type:'step'});
+    assert.equal(runtime.viewerState().scene!.revision,4);
+    assert.throws(()=>manager.resolveHeadAction(runtime,{type:'look_at',observationId:metadata.captureId,handle:shape.handle,sceneRevision:4}),/revision changed/);
+  }finally{await manager.close();await runtime.close();}
 });

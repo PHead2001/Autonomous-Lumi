@@ -7,10 +7,10 @@ import { createWorldServer } from './world-server.js';
 import { loadCognitionConfig } from './cognition/config.js';
 import { exportIncident, replayBundle } from './diagnostics/bundle.js';
 import { readRun } from './diagnostics/recorder.js';
-import type { CheckpointV8 } from './simulation.js';
+import type { CheckpointV8,CheckpointV9 } from './simulation.js';
 
 export interface LabAssertion { name:string; expected:string; observed:unknown; status:'PASS'|'FAIL'|'INCONCLUSIVE' }
-const bodyCheckpoint=(runtime:BranchRuntime):CheckpointV8=>{const cp=runtime.simulation.checkpoint();if(cp.schemaVersion!==8)throw new Error('Physiology schema required');return cp;};
+const bodyCheckpoint=(runtime:BranchRuntime):CheckpointV8|CheckpointV9=>{const cp=runtime.simulation.checkpoint();if(cp.schemaVersion!==8&&cp.schemaVersion!==9)throw new Error('Physiology schema required');return cp;};
 /** This entry owns a disposable namespace. It never loads owner recovery, dotenv,
  * provider credentials or the application budget, even if normal cognition is on. */
 export async function runHungerLab(options:{out:string;directory?:string}) {
@@ -23,7 +23,7 @@ export async function runHungerLab(options:{out:string;directory?:string}) {
   // Explicit laboratory genesis fixture: one-second ticks, production rates and
   // initial stores. This is a calibration experiment, never an owner migration.
   fixture.simulation.config.hz=1;
-  if(fixture.simulation.schemaVersion!==8)throw new Error('Physiology schema required');
+  if(fixture.simulation.schemaVersion!==8&&fixture.simulation.schemaVersion!==9)throw new Error('Physiology schema required');
   fixture.simulation.home.controller.searchNextTick=100000;fixture.simulation.body.hz=1;fixture.simulation.interoception.sampling.nextSampleTick=fixture.simulation.tick+5;fixture.simulation.pauseUntilTick=100000;fixture.simulation.character.moving=false;fixture.scheduler.config.hz=1;
   const app=createWorldServer({checkpoint:fixture,historyId,diagnosticsDirectory:directory,clock,autoSchedule:false,automaticCaptures:false,cognition:{config:loadCognitionConfig({env:{},loadEnv:false})}});
   const assertions:LabAssertion[]=[];
