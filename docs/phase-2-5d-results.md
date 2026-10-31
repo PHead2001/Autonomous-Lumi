@@ -355,12 +355,7 @@ stalled inspection, full-scene migration/restore, endpoint clearance, capacity,
 and truthful writer failures. The raised-label actual-renderer exports are the
 current sensory evidence after the physical-card correction.
 
-Source and high-risk local re-reviews are clean. The two hosted P1 findings have
-been fixed and affected checks pass. [PR #14](https://github.com/PHead2001/Autonomous-Lumi/pull/14)
-remains **DRAFT awaiting the final correction push and hosted re-review**; root
-will replace that status with terminal hosted evidence. No final remote approval
-or owner merge is claimed yet. Browser acceptance and disposable cleanup are
-complete; owner-LIVE activation remains intentionally deferred.
+Implementation and targeted review corrections are recorded above. [PR #14](https://github.com/PHead2001/Autonomous-Lumi/pull/14) tracks the current hosted review and owner merge decision. Owner-LIVE activation remains deferred.
 
 All acceptance made zero paid calls. The inherited accepted v6 real-provider
 response integration remains unverified after a safely rejected truncated reply;
