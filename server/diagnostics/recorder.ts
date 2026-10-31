@@ -6,6 +6,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { validateCommand, type Checkpoint, type DeterministicEvent, type OrderedInput } from '../simulation.js';
 import {validateRuntimeCheckpoint,validateRuntimeOperation,type RuntimeCheckpoint,type RuntimeOperation} from '../branch-runtime.js';
 import {assertOwnedPath} from '../checkpoint-storage.js';
+import {publishDiagnosticFile} from './publish-file.js';
 type SimulationCheckpoint = Checkpoint;
 
 export type Category = 'WORLD_TRUTH' | 'FOX_EXPERIENCE' | 'PRIVATE_SENSOR' | 'OPERATIONAL_REPLAY';
@@ -40,8 +41,8 @@ export const DEFAULT_LIMITS: RecorderLimits = {
 export interface RecorderHealth {
   status: 'HEALTHY' | 'INCOMPLETE'; queuedRecords: number; queuedBytes: number; writtenRecords: number;
   inFlightRecords: number; inFlightBytes: number;
-  droppedRecords: number; criticalDroppedRecords: number; filteredRecords: number; writerFailures: number;
-  evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null; lastFailure:{stage:string;code:string}|null;
+  droppedRecords: number; criticalDroppedRecords: number; filteredRecords: number; writerFailures: number; writerRetries:number;writerRetryRecoveries:number;
+  evictedRecords: number; retainedFiles: number; retainedBytes: number; lastError: string | null; lastFailure:{stage:string;code:string;syscall?:string;fileRole?:string}|null;
   gaps: string[];
   globalRetainedBytes: number; globalRetainedRuns: number; globalCapExceeded: boolean; globalAccountingComplete: boolean; protectedActiveRuns: number;
   loggingMode: LoggingMode; disabledRecords: number;
@@ -51,7 +52,7 @@ export interface RunSnapshot {metadata:Record<string,unknown>;start:unknown;end:
 interface RecorderOptions {
   directory?: string; worldId: string; runId: string; branchId?: string; worldMode?: 'LIVE' | 'EXPERIMENT'; loggingMode?: LoggingMode; compressClosed?: boolean;
   hz?: number; now?: () => number; minSeverity?: Severity;
-  limits?: Partial<RecorderLimits>; append?: (path: string, data: string) => Promise<void>;
+  limits?: Partial<RecorderLimits>; append?: (path: string, data: string) => Promise<void>; renameFile?:typeof rename;
 }
 const ranks: Record<Severity, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 const compress = promisify(gzip);
@@ -112,6 +113,7 @@ export class FlightRecorder {
   readonly limits: RecorderLimits;
   private readonly now: () => number;
   private readonly append: (path: string, data: string) => Promise<void>;
+  private readonly renameFile:typeof rename;
   private readonly identity: { worldId: string; runId: string; branchId?: string; worldMode?: 'LIVE'|'EXPERIMENT' };
   private readonly minimum: Severity;
   private readonly hz: number;
@@ -144,9 +146,9 @@ export class FlightRecorder {
   private writerDroppedRecords = 0;
   private writerCriticalDroppedRecords = 0;
   private timer: ReturnType<typeof setInterval>;
-  private counters = { writtenRecords: 0, droppedRecords: 0, criticalDroppedRecords: 0, filteredRecords: 0, writerFailures: 0, evictedRecords: 0 };
+  private counters = { writtenRecords: 0, droppedRecords: 0, criticalDroppedRecords: 0, filteredRecords: 0, writerFailures: 0, writerRetries:0, writerRetryRecoveries:0, evictedRecords: 0 };
   private lastError: string | null = null;
-  private lastFailure:{stage:string;code:string}|null=null;
+  private lastFailure:RecorderHealth['lastFailure']=null;
   private gaps: string[] = [];
   private persistedHealth = '';
   private activeMarkerWritten = false;
@@ -164,6 +166,7 @@ export class FlightRecorder {
     if(this.loggingMode==='off')this.gap('logging_disabled');
     this.now = options.now ?? Date.now;
     this.append = options.append ?? ((path, data) => appendFile(path, data, 'utf8'));
+    this.renameFile=options.renameFile??rename;
     this.minimum = options.minSeverity ?? 'info';
     this.hz = options.hz ?? 30;
     if (!Number.isInteger(this.hz) || this.hz < 1 || this.hz > 120) throw new Error('Invalid recorder tick rate');
@@ -286,7 +289,7 @@ export class FlightRecorder {
       for(const gap of now.gaps)if(gap==='writer_failure'||gap==='retention_evicted_records'||gap.startsWith('global_')||gap.startsWith('unaccounted_')||gap.startsWith('unowned_'))relevantGaps.add(gap);
       const health:RecorderHealth={...pin.health,queuedRecords:0,queuedBytes:0,inFlightRecords:0,inFlightBytes:0,writtenRecords:now.writtenRecords,
         droppedRecords:pin.health.droppedRecords+this.writerDroppedRecords-pin.writerDropped,criticalDroppedRecords:pin.health.criticalDroppedRecords+this.writerCriticalDroppedRecords-pin.writerCriticalDropped,
-        writerFailures:now.writerFailures,evictedRecords:now.evictedRecords,retainedFiles:now.retainedFiles,retainedBytes:now.retainedBytes,lastError:now.lastError,lastFailure:now.lastFailure,
+        writerFailures:now.writerFailures,writerRetries:now.writerRetries,writerRetryRecoveries:now.writerRetryRecoveries,evictedRecords:now.evictedRecords,retainedFiles:now.retainedFiles,retainedBytes:now.retainedBytes,lastError:now.lastError,lastFailure:now.lastFailure,
         globalRetainedBytes:now.globalRetainedBytes,globalRetainedRuns:now.globalRetainedRuns,globalCapExceeded:now.globalCapExceeded,globalAccountingComplete:now.globalAccountingComplete,protectedActiveRuns:now.protectedActiveRuns,
         gaps:[...relevantGaps],status:relevantGaps.size?'INCOMPLETE':'HEALTHY'};
       return {...durable,start:pin.start,end:pin.end,runtimeStart:pin.runtimeStart,runtimeEnd:pin.runtimeEnd,
@@ -296,8 +299,19 @@ export class FlightRecorder {
   }
   private async atomic(name: string, value: unknown): Promise<void> {
     const target = join(this.runDirectory, name), temp = target + '.tmp';
-    await assertOwnedPath(this.ownedRoot,target);await assertOwnedPath(this.ownedRoot,temp);
-    await writeFile(temp, JSON.stringify(value, null, 2), 'utf8'); await rename(temp, target);
+    const fileRole=name==='run.json'?'metadata':name==='_active.json'?'active_marker':name.startsWith('runtime-')?'runtime_checkpoint':'simulation_checkpoint';
+    let operation='validate_path';
+    try{
+      await assertOwnedPath(this.ownedRoot,target);await assertOwnedPath(this.ownedRoot,temp);
+      operation='write_temp';await writeFile(temp, JSON.stringify(value, null, 2), 'utf8');
+      operation='rename';const retries=await publishDiagnosticFile(temp,target,{renameFile:this.renameFile,validate:async()=>{await assertOwnedPath(this.ownedRoot,target);await assertOwnedPath(this.ownedRoot,temp);},onRetry:()=>{this.counters.writerRetries++;}});
+      if(retries)this.counters.writerRetryRecoveries++;
+    }catch(error){
+      // Only symbolic roles/operations survive; never persist raw messages or paths.
+      const original=error as NodeJS.ErrnoException,code=typeof original.code==='string'&&/^[A-Z0-9_]{1,24}$/.test(original.code)?original.code:'UNKNOWN';
+      const syscall=typeof original.syscall==='string'&&/^[a-z_]{1,24}$/.test(original.syscall)?original.syscall:operation;
+      throw Object.assign(new Error('Diagnostic file operation failed'),{code,syscall,diagnosticFileRole:fileRole});
+    }
   }
   private async enforceGlobalRetention(): Promise<void> {
     const root = resolve(dirname(this.runDirectory));
@@ -389,7 +403,7 @@ export class FlightRecorder {
       operationStage='metadata';if(JSON.stringify(this.health())!==JSON.stringify(health))await this.atomic('run.json',{...metadata,health:this.health()});
       this.persistedHealth = JSON.stringify(health);
     } catch(error) {
-      const code=(error as NodeJS.ErrnoException)?.code;this.lastFailure={stage:operationStage,code:typeof code==='string'&&/^[A-Z0-9_]{1,24}$/.test(code)?code:'UNKNOWN'};
+      const failure=error as NodeJS.ErrnoException&{diagnosticFileRole?:string},code=failure?.code;this.lastFailure={stage:operationStage,code:typeof code==='string'&&/^[A-Z0-9_]{1,24}$/.test(code)?code:'UNKNOWN',...(typeof failure?.syscall==='string'&&/^[a-z_]{1,24}$/.test(failure.syscall)?{syscall:failure.syscall}:{}),...(['metadata','active_marker','runtime_checkpoint','simulation_checkpoint'].includes(failure?.diagnosticFileRole??'')?{fileRole:failure.diagnosticFileRole}:{})};
       this.counters.writerFailures++; this.counters.droppedRecords += batch.length - written;
       this.counters.criticalDroppedRecords += batch.slice(written).filter(entry => entry.critical).length;
       this.writerDroppedRecords+=batch.length-written;this.writerCriticalDroppedRecords+=batch.slice(written).filter(entry=>entry.critical).length;

@@ -76,6 +76,17 @@ missing fresh image has a bounded45-world-second inspection commitment rather
 than indefinitely holding locomotion. Nominal deposit/parking poses admit an
 alternative computed approach without requiring the owner to return and move.
 
+Post-review corrections revalidate held-food capacity at the collection commit,
+including concurrent in-person offer acceptance, so collection cannot replace a
+newly accepted meal. Partial consume snapshots require their committed receipt
+and matching gift-use cursor. CP11 migration and CP12 restore now validate the
+full physical scene, including delivery fixtures; incompatible saved actors are
+explicitly refused with the source preserved, never silently relocated. Opening
+and closing the container validate endpoint actor clearance. Two fixed, back-set
+physical contents cards are raised to height2.2 to make the actual contents
+readable from valid approaches. This changes real geometry/colliders, not RGB
+recognition thresholds or camera-facing billboards.
+
 ## Sustainable daily behavior
 
 The local controller uses current attended sensations and previously observed
@@ -155,7 +166,7 @@ progress, future events and exactly-once effects.
 
 Generated diagnostics remain ignored by Git. Whole-trial start/end checkpoints,
 hourly state samples and aggregate summaries are retained, but **full-trial
-exact replay is not claimed**. No evicted prefix was reconstructed. The seven
+exact replay is not claimed**. No evicted prefix was reconstructed. The eight
 bounded sanitized ZIPs below are COMPLETE and independently replay without
 rendering or provider calls; each has zero coverage gaps, drops, evictions and
 writer failures.
@@ -167,31 +178,43 @@ writer failures.
 | `diagnostics/daily-life/nominal.food.zip` | Copied selected-action window,33,746–33,755 |
 | `diagnostics/daily-life/adverse.food.zip` | Copied selected-action window,33,546–33,560 |
 | `diagnostics/daily-life/recovery-causal.zip` | Declared overdue fixture, collapse/recovery/real food,27–15,515 |
-| `diagnostics/phase25d/delivery.deposit.zip` | Real purchase/deposit/disconnect, final673;111inputs/586events |
-| `diagnostics/phase25d/delivery.zip` | File-backed restore then actual discovery/open/collect/use, final1,016;10inputs/55events |
+| `diagnostics/phase25d/delivery-raised-labels.deposit.zip` | Real purchase/deposit/disconnect, final673;111inputs/586events |
+| `diagnostics/phase25d/delivery-raised-labels.zip` | File-backed restore then actual discovery/open/collect/use, final1,016;10inputs/55events |
+| `diagnostics/phase25d/browser-recovered.zip` | Actual B-checkpoint return under final geometry, final25,685;483records/36inputs/285events |
 
-The delivery's observed order is deposit672 → opening858 → actual contents
+The current raised-label delivery's observed order is deposit672 → opening858 → actual contents
 notice864 → collection893 → consumption1,013. The owner stays parked at the
 unchanged deposit pose through restore and discovery. Two actual delivery
 experiences describe container/contents evidence; no visitor meeting or sender
 attribution is admitted. Final discovery replay hashes are state
-`1f528ea800ab36f43cc20875d20651470bb57b3fb16be1e805b522b5ce3c9863`, events
-`6f25440fddc9592faf92ccfd16e721ceeaf9f78af7ef3e556c260e5d6fac9179`, runtime
-`39fa3ec3134f673a4ac3e268fcecc6879d22ee1a1d2d742e62eeaf16767d5ffc`.
+`f89125bbe513594c0a8fa9032781d261431f06a24101605d65a5c28f81f7799c`, events
+`1a1310256e7fc63049c0e541cc40217dce181596da26db800a292b33c7c3f747`, runtime
+`3ddd696e7895acb61bd327dbd36424253a9960c3b13b5f2aa3692b90b6c28cd3`.
+
+The `delivery-raised-labels` pair, companion summary and actual indicator/contents
+images are current geometry acceptance; the earlier `delivery` pair remains
+historical evidence. The five daily-life windows are unchanged and were reused,
+not rerun to accumulate passing results. The raised pair's independent CLI
+replays were executed successfully without saving new stdout logs; their current
+canonical PASS results are in the summary. Older `delivery-replay.log` and
+`delivery-deposit-replay.log` are historical and are not claimed as current-pair
+logs. C has its own current `browser-recovered-replay.log`.
 
 ```powershell
 npm.cmd run daily-life:lab -- --hours 24 --seed 13579 --out diagnostics/daily-life/nominal
 npm.cmd run daily-life:lab -- --hours 72 --seed 24680 --adverse true --out diagnostics/daily-life/adverse
 npm.cmd run daily-life:lab -- --scenario recovery --from diagnostics/daily-life/nominal.start.json --out diagnostics/daily-life/recovery-causal
-npm.cmd run delivery:lab -- --out diagnostics/phase25d/delivery.zip
-npm.cmd run replay -- --bundle diagnostics/phase25d/delivery.deposit.zip
-npm.cmd run replay -- --bundle diagnostics/phase25d/delivery.zip
+npm.cmd run delivery:lab -- --out diagnostics/phase25d/delivery-raised-labels.zip
+npm.cmd run replay -- --bundle diagnostics/phase25d/delivery-raised-labels.deposit.zip
+npm.cmd run replay -- --bundle diagnostics/phase25d/delivery-raised-labels.zip
+npm.cmd run replay -- --bundle diagnostics/phase25d/browser-recovered.zip
 # Use the same replay command for each of the five daily-life ZIPs above.
 ```
 
 These CLIs use disposable histories and do not load the owner's inference keys,
-spending ledger or first LIVE encounter. Source summaries/images and independent
-`.replay.log` files remain beside the ZIPs. Fresh generated identities affect
+spending ledger or first LIVE encounter. Source summaries/images retain the
+current frame provenance and canonical replay results; separate CLI replay logs
+are retained with the acceptance diagnostics. Fresh generated identities affect
 hashes; compare a bundle to its own exact replay, not to a different run's hash.
 
 ## Preservation, capacity and desktop continuity
@@ -208,6 +231,13 @@ empty delivery state; every prior field, control and scheduler value is exact.
 Actual recovery-envelope bytes are164,254→164,667. Including all existing future
 growth and the new128KiB delivery reserve, reserved capacity is
 1,512,018→**1,643,503 /2,097,152 bytes**, leaving **453,649 bytes** headroom.
+
+After the full-scene validation correction, a second preflight consumed only
+the existing safe owner copy. It validates the complete new physical scene,
+preserves all prior fields/control/scheduler values, changes no actor or body
+field, and leaves that same453,649-byte reserved headroom. This is
+`diagnostics/phase25d-preservation/owner-full-geometry-preflight.json`; it neither
+opens nor advances canonical recovery.
 
 The maximum-state regression justified correcting the proposed64KiB reserve:
 full validated delivery growth is **116,513 bytes**, including four stored/eight
@@ -232,33 +262,107 @@ were changed. Graceful shutdown attempts a final save; abrupt failure can lose
 progress after the last successfully committed checkpoint. A successful click
 is not an immediate power-loss durability guarantee.
 
-## Writer diagnostics, checks and remaining gates
+## Actual normal-viewer evidence
 
-Writer health now retains a small sanitized `{stage,code}` failure description
-alongside the existing INCOMPLETE counter/gap. Stage distinguishes preparation,
-append, retention, checkpoint, metadata and global-retention operations; errno
-is an uppercase allowlisted-shape code or `UNKNOWN`. Raw errors, paths and
-payloads are excluded. Injected ENOSPC/EACCES append failures remain explicitly
-INCOMPLETE even after later successful writes. This does **not** diagnose or
-claim to solve the historic2.5c writer failures; their OS cause remains unknown,
-separate from retention eviction.
+Root used disposable histories through the actual Vite viewer/proxy, preserving
+the owner LIVE world. Run A completed a manual return, deposit, Observe,
+disconnect and re-entry: the same parked avatar and stored, still-unobserved
+parcel persisted. That does not establish discovery or consumption.
 
-The completed-candidate normal suite reports **493/493 PASS**,47.067seconds
-(`diagnostics/phase25d-final-candidate-test.log`). Global lint and build/typecheck
-logs are `phase25d-final-candidate-lint.log` and
-`phase25d-final-candidate-build.log`; both complete without validation errors.
-The build retains its existing nonfatal large-chunk advisory. Focused corrections
-cover custody, partial consume association, severe-rest preemption and care
-commitment after transient expiry, stalled inspection, replay and capacity.
+Fresh run B explicitly released only two initial controller idle/search delays
+so ordinary autonomous looking could proceed. Normal keyboard/mouse controls
+deposited and parked the owner; actual indicator evidence was subsequently
+attended and the container visibly opened. A door-steering obstruction was
+diagnosed through the real physical view and corrected with normal controls;
+it was not bypassed by teleporting or weakening collision. At that stage the
+contents had not yet been noticed or collected under actual capture quotas;
+B alone therefore did not prove consumption. A390px-wide Observe
+layout was checked for overflow, found usable, and restored to desktop size;
+this is not mobile Visit acceptance.
 
-**Pending root acceptance updates:** the normal-viewer delivery/parking/return
-walkthrough and audio check are still in progress when this document is written.
-Independent implementation re-review and hosted PR review/status will be recorded
-by the lead after completion. No browser PASS or final remote approval is claimed
-here while those gates remain pending. The ordinary-viewer walkthrough is
-separate from the successful real-renderer delivery lab.
+Before adopting the raised physical cards, B was saved as its actual named
+checkpoint at tick19,733 with one stored parcel, an open container and the owner
+parked. Run C **passed** by reopening that same actual checkpoint under final
+geometry, without actor, body, knowledge or item edits and without another
+ordinary-search reset. It preserves B's deposit at10,600 and opening at11,643.
+Fresh actual contents evidence is noticed at20,476, collection commits at20,747,
+and production consumption commits at20,867: exactly120ticks/fourseconds later.
+The normal UI shows the consumed receipt; the owner retains17credits and an
+empty inventory. Enter Visit → refresh → paired re-entry → Observe preserves
+the same eligible avatar/inventory and leaves it parked. The actual screenshot
+is `diagnostics/phase25d/browser-recovered-consumed.png`. This completes the
+normal-browser discovery/use/return proof separately from the scripted lab.
 
-All automated acceptance is provider-free. The inherited accepted v6 real-provider
+C's `browser-recovered.zip` is a new **COMPLETE** causal window beginning at the
+preserved checkpoint, not a reconstruction of B's earlier history. It retains
+483records,36inputs/285events and no gaps, drops, evictions or writer failures.
+Independent CLI replay passes at tick25,685 (`browser-recovered-replay.log`):
+state `b11861e3254b09ece85cbb2ad1ff0194c56dd1cc487a72dddeefa08226b22ea2`,
+events `a12fcbda6487de3e45d50ead93d6687263ce6bc7e51c052ffb80387e8e5e5d9a`,
+runtime `d90381518d544d118de1178e229b1d0c88ea4a61964e50acde9568fd82076591`.
+No audio walkthrough was repeated and no new audible playback PASS is claimed.
+
+Final cleanup (`final-cleanup.json`) finds no test launcher/`lumi-vision`
+processes or listeners on3001/5173/3030/5174; the disposable pairing credential
+directory was removed. Vite emitted `ECONNRESET` when the test tab closed; this
+was a nonpersisting shutdown socket failure and is retained as an operational
+observation. The canonical owner app stayed OFF throughout.
+
+## Writer diagnostics and observed limitations
+
+Run A's actual `browser-waiting-incomplete.zip` reports **five writer failures**
+and **22,801 evicted records**, with zero dropped records. Its archive remains
+**INCOMPLETE for both reasons**, and is not one of the eight COMPLETE windows.
+The observed failure stage was metadata with code `EPERM`; the process holding
+the file and exact failing syscall were not captured and remain unverified.
+At its named checkpoint B reported zero writer failures/retries but retained
+normal eviction; that is not a reconstructed complete browser history. C stayed
+at zero writer failures/retries through cleanup. Those observations do not
+establish that all OS-level writer failure causes have been solved.
+
+Writer health now retains sanitized `stage`, `code`, and available symbolic
+`syscall` / `fileRole` details. Raw exception messages, paths and payloads are
+excluded. Atomic diagnostic publication preserves the previous complete target
+and retries only rename `EPERM`/`EBUSY` with four asynchronous backoffs of
+10/25/50/100ms (**185ms total delay**). Retry/recovery counts remain visible;
+exhaustion records a real failure and leaves evidence INCOMPLETE. `EACCES` and
+`ENOSPC` are not retried or converted into success.
+
+A real Windows no-delete-sharing reader reproduced `EPERM` at rename. The
+test verifies recovery after releasing the lock, atomic publication, and retained
+old target/temp bytes on exhaustion. This proves that failure class and bounded
+mitigation, **not that the same reader or syscall caused run A**. Historic
+2.5c's18 writer failures also retain their unknown OS cause; neither those nor
+A's incomplete archive are relabelled solved or COMPLETE. Retention remains a
+separate bounded-evidence limit.
+
+## Checks, review and remaining gates
+
+The initial completed-candidate normal suite reports **493/493 PASS**,47.067s
+(`diagnostics/phase25d-final-candidate-test.log`). Later writer corrections pass
+**31/31 affected checks** (`phase25d-writer-affected.log`), and post-P1
+transaction/full-scene corrections pass **70/70 affected checks**
+(`phase25d-hosted-p1-affected.log`). These supplement the original full run;
+they are **not a newly repeated full493-test result**. Global lint and
+build/typecheck passed on the corrective candidates and valid results were
+reused (`phase25d-writer-lint.log`, `phase25d-writer-build.log`,
+`phase25d-hosted-p1-lint.log`, `phase25d-hosted-p1-build.log`). The existing
+nonfatal large-chunk advisory remains.
+
+Focused review corrections cover concurrent custody at commit, partial consume
+association, severe-rest preemption and care commitment after transient expiry,
+stalled inspection, full-scene migration/restore, endpoint clearance, capacity,
+and truthful writer failures. The raised-label actual-renderer exports are the
+current sensory evidence after the physical-card correction.
+
+Source and high-risk local re-reviews are clean. The two hosted P1 findings have
+been fixed and affected checks pass. [PR #14](https://github.com/PHead2001/Autonomous-Lumi/pull/14)
+remains **DRAFT awaiting the final correction push and hosted re-review**; root
+will replace that status with terminal hosted evidence. No final remote approval
+or owner merge is claimed yet. Browser acceptance and disposable cleanup are
+complete; owner-LIVE activation remains intentionally deferred.
+
+All acceptance made zero paid calls. The inherited accepted v6 real-provider
 response integration remains unverified after a safely rejected truncated reply;
 this phase does not retry paid inference or weaken its contract.
 
