@@ -31,6 +31,7 @@ test('actual visitor and owned held item require visible RGB, remain occluded be
     runtime.applyControl({ type: 'pause' }); runtime.applyControl({ type: 'step' });
     runtime.enqueueVisit({ type: 'visit_start', runId: runtime.target.runId, generation: 2 }); runtime.applyControl({ type: 'step' });
     const captured = structuredClone(runtime.viewerState()), before = runtime.checkpoint().simulation;
+    if(before.schemaVersion!==11)throw new Error('Current social schema required after Visit migration');
     const request = manager.request(runtime, { reason: 'diagnostic', width: 512, height: 512 });
     // Advance the live motor while the real renderer owns the earlier copied snapshot.
     runtime.enqueueVisit({ type: 'visit_control', runId: runtime.target.runId, generation: 2, sequence: 1, forward: -1, strafe: 0, yaw: 0, pitch: 0, expiresTick: runtime.simulation.state.tick + 20 });
@@ -47,7 +48,7 @@ test('actual visitor and owned held item require visible RGB, remain occluded be
     assert.ok(grounding.pixelQualification.objects.some(object => object.privateId.startsWith(VISITOR_PHYSICAL_PREFIX) && object.qualified), 'paired actual RGB qualifies visitor geometry');
     assert.ok(grounding.pixelQualification.objects.some(object => object.privateId === VISITOR_HELD_PHYSICAL_ID && object.qualified), 'paired actual RGB qualifies the owned held fruit');
     await writeFile(join(directory, 'visible.png'), manager.frame(runtime.target, request.captureId));
-    const blockedSeed = structuredClone(before); if (blockedSeed.schemaVersion !== 10) throw new Error('Visit schema required');
+    const blockedSeed = structuredClone(before); if (blockedSeed.schemaVersion !== 11) throw new Error('Current social schema required');
     blockedSeed.character.x = 0; blockedSeed.character.z = 0; blockedSeed.character.heading = Math.atan2(2.97, -6.5);
     blockedSeed.head.pitch = blockedSeed.head.targetPitch = 0;
     blocked = new BranchRuntime({ worldId: 'visit-eye', branchId: 'blocked', mode: 'EXPERIMENT', checkpoint: blockedSeed, directory: join(directory, 'runs') });
@@ -60,7 +61,9 @@ test('actual visitor and owned held item require visible RGB, remain occluded be
     await writeFile(join(directory, 'blocked.png'), manager.frame(blocked.target, hiddenRequest.captureId));
     const report = { fixture: 'isolated EXPERIMENT spatial staging; item acquired by production purchase', visible: metadata, blocked: hiddenMetadata, visitorQualified: grounding.pixelQualification.objects.filter(object => object.privateId.startsWith(VISITOR_PHYSICAL_PREFIX) || object.privateId === VISITOR_HELD_PHYSICAL_ID), blockedVisitorQualified: hidden.pixelQualification.objects.filter(object => object.privateId.startsWith(VISITOR_PHYSICAL_PREFIX) || object.privateId === VISITOR_HELD_PHYSICAL_ID), capturedActor: captured.visit!.actor, latestActor: runtime.viewerState().visit!.actor, capturedHeadDistance: head.distance, latestHeadDistance: latestHead.distance, personalExperience: false, paidCalls: 0 };
     await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2));
-    const after = runtime.checkpoint().simulation; if (after.schemaVersion !== 10) throw new Error('Visit schema required');
-    assert.deepEqual(after.realExperiences, before.schemaVersion === 10 ? before.realExperiences : []);
+    const after = runtime.checkpoint().simulation; if (after.schemaVersion !== 11) throw new Error('Current social schema required');
+    assert.deepEqual(after.realExperiences, before.realExperiences);
+    assert.deepEqual(after.social.experiences,before.social.experiences,'diagnostic presence captures do not encode a social encounter');
+    assert.equal(after.social.firstRecognizedEncounter,null,'an unseen authentication marker cannot introduce the creator');
   } finally { await manager.close(); await runtime.close(); await blocked?.close(); }
 });

@@ -1,13 +1,15 @@
 import type {CognitionIdentity} from './cognition-protocol.js';
 import type {ShopGood} from './town-protocol.js';
-export const SOCIAL_RULES='lumi-social-v1' as const;
+export const LEGACY_SOCIAL_RULES='lumi-social-v1' as const;
+export const SOCIAL_RULES='lumi-social-v2' as const;
+export type SocialRulesVersion=typeof SOCIAL_RULES|typeof LEGACY_SOCIAL_RULES;
 export const SOCIAL_LIMITS={reach:1.8,offerSeconds:20,observationAgeSeconds:2,experiences:32,timeline:32} as const;
 export type OfferStatus='pending'|'accepted'|'declined'|'deferred'|'cancelled'|'expired';
 export interface SocialOffer {id:number;revision:number;itemId:number;good:ShopGood;generation:number;runId:string;createdTick:number;deadlineTick:number;status:OfferStatus;noticedTick:number|null;response:'accept'|'decline'|'defer'|'ignore'|null;reason:string;transferTick:number|null}
 export interface SocialTimeline {sequence:number;tick:number;offerId:number|null;type:'offer'|'noticed'|'response'|'transfer'|'cancelled'|'expired'|'badge'|'encoding'|'consumed';label:string}
 export interface SocialExperience {id:number;kind:'social';provenance:'ATTENDED_AUTHORED_SOCIAL_RGB';recognition:'authored-social-rgb-v1';source:'actual_renderer';identity:CognitionIdentity;encodingId:string;captureId:string;frameHash:string;handle:string;capturedTick:number;attentionTick:number;encodedTick:number;perceivedIdentity:'anonymous_visitor'|'creator_claim'|'recognized_creator';interpretation:string;uncertainty:string}
 export interface SocialIntentFeedback {actionId:number;kind:'offer'|'cancel'|'badge';outcome:'accepted'|'rejected';reason:string;tick:number}
-export interface SocialState {schemaVersion:1;rulesVersion:typeof SOCIAL_RULES;installedTick:number;nextOfferId:number;offer:SocialOffer|null;feedback:SocialIntentFeedback|null;badge:{display:boolean;kind:'verified_seal'|'unverified_claim';revision:number};experiences:SocialExperience[];firstRecognizedEncounter:{experienceId:number;encodingId:string}|null;seenEvidence:string[];giftUse:{itemId:number;startedTick:number;progressTicks:number;effectSequence:number|null;completedTick:number|null}|null;timeline:SocialTimeline[];nextTimelineSequence:number;droppedCount:number}
+export interface SocialState {schemaVersion:1;rulesVersion:SocialRulesVersion;installedTick:number;nextOfferId:number;offer:SocialOffer|null;feedback:SocialIntentFeedback|null;badge:{display:boolean;kind:'verified_seal'|'unverified_claim';revision:number};experiences:SocialExperience[];firstRecognizedEncounter:{experienceId:number;encodingId:string}|null;seenEvidence:string[];giftUse:{itemId:number;startedTick:number;progressTicks:number;effectSequence:number|null;completedTick:number|null}|null;timeline:SocialTimeline[];nextTimelineSequence:number;droppedCount:number}
 export interface SocialWorldView {offer:SocialOffer|null;feedback:SocialIntentFeedback|null;badge:SocialState['badge'];giftUse:SocialState['giftUse'];timeline:SocialTimeline[];droppedCount:number}
 interface Scope {runId:string;generation:number;sequence:number;actionId:number}
 export interface SocialOfferCommand extends Scope {type:'social_offer';itemId:number}

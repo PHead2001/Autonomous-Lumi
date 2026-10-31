@@ -14,6 +14,7 @@ import { TOWN_GEOMETRY } from '../shared/town-geometry.js';
 import { VISIT_LIMITS } from '../shared/visit-protocol.js';
 import { planTownRoute, planHomeRoute } from './home-navigation.js';
 import { exportIncident, replayBundle } from './diagnostics/bundle.js';
+import { SOCIAL_RULES } from '../shared/social-protocol.js';
 
 export interface SocialLabOptions { out:string; scenario?:'accept'|'decline'; introduction?:boolean;onEncodedObservation?:(runtime:BranchRuntime,manager:CaptureManager,captureId:string)=>Promise<unknown> }
 /** Disposable fixed-tick acceptance. Owner intentions are scripted, Lumi's
@@ -22,6 +23,7 @@ export async function runSocialLab(options:SocialLabOptions) {
   const out=resolve(options.out),scenario=options.scenario??'accept';await mkdir(dirname(out),{recursive:true});
   const identity={worldId:'social-lab',branchId:'experiment',historyId:randomUUID(),runId:'genesis',mode:'EXPERIMENT' as const};
   const initial=new SocialSimulation({...identity,physiology:{active:true,genesisPreset:'production-v1'}}).checkpoint();
+  assert.equal(initial.rulesVersion,SOCIAL_RULES);assert.equal(initial.social.rulesVersion,SOCIAL_RULES);
   // Declared initial need/view fixtures, with no resource knowledge, offer,
   // visitor, experience or final action/response injected.
   initial.body.satiety=scenario==='accept'?.24:.85;initial.body.sleepPressure=.1;
@@ -67,10 +69,10 @@ export async function runSocialLab(options:SocialLabOptions) {
   };
   try {
     runtime.applyControl({type:'pause'});runtime.enqueueVisit({type:'visit_start',runId:runtime.target.runId,generation:1});await advance(1);
-    await walk({x:2.97,z:-4.6});await interact('door','home');await walk({x:2.97,z:-2.65});
+    await walk({x:3.76,z:2.72});await walk({x:3.76,z:-2.56});await walk({x:3.12,z:-2.56});await interact('door','home');await walk({x:3.12,z:-5.8});
     await walk({x:2.97,z:-8.1});await interact('door','shop');await walk(TOWN_GEOMETRY.checkout);await interact('purchase','fruit');
     const purchased=cp();assert.equal(purchased.visit.balance,17);assert.equal(purchased.town.items.filter(item=>item.owner==='owner'&&item.consumedTick===null).length,1);
-    await walk({x:2.97,z:-2.65});await walk({x:0,z:-1.75});await face(0);await control();
+    await walk({x:3.12,z:-2.56});await walk({x:0,z:-1.75});await face(0);await control();
     const itemId=state().actor!.heldItemId!;assert.ok(itemId);await social('offer',itemId);assert.equal(cp().social.offer?.status,'pending');
     const effectsBefore=cp().body.lastEffectSequence;await capture('offer');
     const outcome=cp();assert.equal(outcome.social.offer?.response,scenario==='accept'?'accept':'decline');assert.equal(outcome.social.offer?.status,scenario==='accept'?'accepted':'declined');

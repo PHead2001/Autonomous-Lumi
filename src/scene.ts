@@ -57,7 +57,7 @@ export function createScene(canvas: HTMLCanvasElement) {
         world.avatar.root.position.lerp(new THREE.Vector3(c.x,0,c.z),alpha);
         const angle=Math.atan2(Math.sin(c.heading-world.avatar.root.rotation.y),Math.cos(c.heading-world.avatar.root.rotation.y));world.avatar.root.rotation.y+=angle*alpha;
       }
-      world.applySnapshot(state,time,false);initialized=true;
+      world.setControlledOwnerPresentation(visiting);world.applySnapshot(state,time,false);initialized=true;
     }
     if(visiting&&visitorPose&&state){const pose=visitorCamera(state,visitorPose,visitorLook);camera.position.copy(pose.position);camera.up.set(0,1,0);camera.lookAt(pose.target);}
     else if(mode==='follow'){const next=aim(),delta=next.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(next);}
@@ -69,5 +69,5 @@ export function createScene(canvas: HTMLCanvasElement) {
     if(world)renderer.render(world.scene,camera);requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  return {reset,setMode,getMode:()=>mode,setVisitCamera(active:boolean,pose:VisitorCameraPose|null,look:VisitLook){const changed=visiting!==active;visiting=active;visitorPose=pose;visitorLook=look;controls.enabled=!active&&(mode==='orbit'||mode==='follow');if(changed){held.clear();drag=null;if(!active)reset();}},setOverview(next:boolean){overview=next;if(!visiting)reset();},setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
+  return {reset,setMode,getMode:()=>mode,setVisitCamera(active:boolean,pose:VisitorCameraPose|null,look:VisitLook){const changed=visiting!==active;visiting=active;visitorPose=pose;visitorLook=look;controls.enabled=!active&&(mode==='orbit'||mode==='follow');if(changed){camera.fov=active?70:38;camera.near=active ? .05 : .1;camera.updateProjectionMatrix();held.clear();drag=null;if(!active)reset();}},setOverview(next:boolean){overview=next;if(!visiting)reset();},setState(next:WorldState){if(next.worldId!==state?.worldId||next.runId!==state?.runId)initialized=false;state=next;received=performance.now();world??=createPhysicalRenderScene(next,{firstPerson:false});},dispose(){disposed=true;controls.dispose();world?.dispose();renderer.dispose();canvas.removeEventListener('keydown',keydown);canvas.removeEventListener('keyup',keyup);canvas.removeEventListener('blur',blur);canvas.removeEventListener('pointerdown',pointerdown);canvas.removeEventListener('pointermove',pointermove);canvas.removeEventListener('pointerup',pointerup);canvas.removeEventListener('pointercancel',pointerup);}};
 }

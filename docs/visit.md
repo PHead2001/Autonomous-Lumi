@@ -12,6 +12,8 @@ npm run owner:pair
 
 The command shows a private credential. Restart the normal server to load it, then open `http://127.0.0.1:5173/`, choose **Visit**, and enter the credential in the password field. **Pair this browser** creates a local authenticated session; pairing does not spawn an avatar. Press **Enter Visit** separately when ready to enter the selected world.
 
+The normal development viewer proxies Visit HTTP requests and its dedicated WebSocket to the same Node world. Vite preserves the browser's Host header so it matches Origin; strict Origin, session and CSRF validation remain active on the documented port 5173.
+
 The credential is stored separately from world checkpoints, diagnostics and replay exports in the local user's `.autonomous-lumi/private` directory. It is not a creator-recognition cue. Do not place it in a URL, source file, screenshot or diagnostic bundle.
 
 For an explicit credential replacement:
@@ -24,7 +26,7 @@ Restart the server after replacement so old sessions are revoked. Server restart
 
 ## Move and interact
 
-Visit uses a third-person camera based on the server-owned avatar pose. Focus the scene, then:
+Visit uses a first-person camera at the server-owned avatar eye position. Solid walls remain visible. Your own body, held item and introduction/offer cues are hidden only in this local controlled view; authoritative inventory stays in the HUD. Observe and the actual Lumi sensor still see the physical avatar and its cues. Focus the scene, then:
 
 - **W/A/S/D:** move forward, left, backward and right relative to your look.
 - **Drag the view:** turn/look.

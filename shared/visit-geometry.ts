@@ -35,3 +35,17 @@ export function canSweepVisitActor(world:WorldState,fromX:number,fromZ:number,x:
 /** A single explicit entrance; alternate nearby points handle an occupied path
  * without moving an existing actor or inventing a departure/re-entry. */
 export function visitEntrance(world:WorldState):{x:number;z:number}|null {for(const z of [-6.5,-7.2,-5.8])for(const x of [2.97,3.5,2.45])if(canOccupyVisitActor(world,x,z))return {x,z};return null;}
+
+/** V2 spawn is a finite set of lounge positions, away from the shared corridor
+ * and Lumi's currently planned route. An unavailable lounge rejects admission;
+ * it never moves a saved actor or falls back into the doorway. */
+export function visitLoungeEntrance(world:WorldState,routes:readonly {from:{x:number;z:number};to:{x:number;z:number}}[]):{x:number;z:number}|null {for(const x of [0,-.8,.8,-1.6,1.6]){const p={x,z:2.4};if(canOccupyVisitActor(world,p.x,p.z)&&routes.every(r=>pointSegmentDistanceSquared(p.x,p.z,r.from.x,r.from.z,r.to.x,r.to.z)>=(VISIT_LIMITS.radius+CHARACTER_CLEARANCE_RADIUS)**2))return p;}return null;}
+
+/** V2 bounded wall sliding. Every accepted segment uses the same full-body,
+ * pair and door-sweep validation as ordinary movement. The two axis segments
+ * share the original path-length budget, so sliding cannot add speed. */
+export function slideVisitMovement(world:WorldState,dx:number,dz:number):{x:number;z:number;distance:number}|null {const a=world.visit?.actor;if(!a)return null;const budget=Math.hypot(dx,dz);if(canSweepVisitActor(world,a.x,a.z,a.x+dx,a.z+dz))return {x:a.x+dx,z:a.z+dz,distance:budget};let x=a.x,z=a.z,distance=0;
+ if(Math.abs(dx)>1e-12&&canSweepVisitActor(world,x,z,x+dx,z)){x+=dx;distance+=Math.abs(dx);}
+ const stepZ=Math.sign(dz)*Math.min(Math.abs(dz),Math.max(0,budget-distance));if(Math.abs(stepZ)>1e-12&&canSweepVisitActor(world,x,z,x,z+stepZ)){z+=stepZ;distance+=Math.abs(stepZ);}
+ return distance>1e-12?{x,z,distance}:null;
+}

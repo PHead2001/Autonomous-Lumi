@@ -60,7 +60,7 @@ const dataKeys = new Set([
   'policy','progressTicks','noticed','offerId','offerRevision','revision','noticedTick','deadlineTick','transferTick','response','perceivedIdentity','display','badgeKind','experienceId','encodingId','encodingPolicy','reservation','reservedItemId',
   'runId','forward','strafe','actorId','heading','steps',
   'purchaseId','itemId','good','price','balance','stock','door','open','status',
- 'handle','resourceId','recognition','routeCursor','points','expanded','distance','replans','servingId','effectSequence','layoutRevision','stage',
+ 'handle','resourceId','recognition','routeCursor','points','expanded','distance','replans','nextReplanTick','servingId','effectSequence','layoutRevision','stage',
   'active','firstAttendedTick','deadlineEligibleTicks','excludedSafetyTicks','excludedIncapacityTicks','excludedInactiveTicks',
   'attentionId','band','from','to','satiety','reserves','absorptionSeconds','crossingTick','eligibleTicks','elapsedWorldSeconds','eligibleSeconds','excludedSafetySeconds','excludedIncapacitySeconds','excludedInactiveSeconds','forced','genesisPreset','evidenceEligibility',
   'requestId','provider','model','promptRevision','schemaRevision','attentionTick','interpretationTick','encodedTick','source','interpretation','uncertainty','latencyMs','attempts','costUsd','costBasis','inputTokens','outputTokens',

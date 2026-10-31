@@ -1,8 +1,8 @@
-import {SOCIAL_RULES,SOCIAL_LIMITS,validateSocialCommand,type SocialState,type SocialCommand,type SocialIntentCommand,type SocialObservationCommand,type SocialExperience} from '../shared/social-protocol.js';
+import {SOCIAL_RULES,LEGACY_SOCIAL_RULES,SOCIAL_LIMITS,type SocialRulesVersion,validateSocialCommand,type SocialState,type SocialCommand,type SocialIntentCommand,type SocialObservationCommand,type SocialExperience} from '../shared/social-protocol.js';
 import {createSocialState,socialPublicView,socialTimeline,chooseOfferResponse,validateSocialState,socialProviderExperiences} from './social.js';
 import {socialReach} from '../shared/social-geometry.js';
 import { VISIT_RULES,VISIT_LIMITS,validateVisitCommand,validateVisitState,type VisitState,type VisitCommand,type VisitStopCommand,type VisitFeedback } from '../shared/visit-protocol.js';
-import { canOccupyVisitActor,canSweepVisitActor,visitEntrance } from '../shared/visit-geometry.js';
+import { canOccupyVisitActor,canSweepVisitActor,visitEntrance,visitLoungeEntrance,slideVisitMovement } from '../shared/visit-geometry.js';
 import { createVisitState,visitPublicView,visitFeedback } from './visit.js';
 import { TOWN_RULES,TOWN_LIMITS,validateTownCommand,validateTownState,type TownState,type TownCommand,type KnownTownAffordance } from '../shared/town-protocol.js';
 import { TOWN_GEOMETRY,TOWN_SLAM_RANGE,canOccupyTownCharacter,canSweepTownCharacter,canChangeTownDoor,canSweepTownDoor,townDoorTarget } from '../shared/town-geometry.js';
@@ -262,7 +262,7 @@ export interface CheckpointV7 extends Omit<CheckpointV6,'schemaVersion'|'rulesVe
 export interface CheckpointV8 extends Omit<CheckpointV7,'schemaVersion'|'rulesVersion'> {schemaVersion:8;rulesVersion:typeof HOME_RULES;home:HomeState}
 export interface CheckpointV9 extends Omit<CheckpointV8,'schemaVersion'|'rulesVersion'> {schemaVersion:9;rulesVersion:typeof TOWN_RULES;town:TownState}
 export interface CheckpointV10 extends Omit<CheckpointV9,'schemaVersion'|'rulesVersion'> {schemaVersion:10;rulesVersion:typeof VISIT_RULES;visit:VisitState}
-export interface CheckpointV11 extends Omit<CheckpointV10,'schemaVersion'|'rulesVersion'> {schemaVersion:11;rulesVersion:typeof SOCIAL_RULES;social:SocialState}
+export interface CheckpointV11 extends Omit<CheckpointV10,'schemaVersion'|'rulesVersion'> {schemaVersion:11;rulesVersion:SocialRulesVersion;social:SocialState}
 export type Checkpoint = CheckpointV1 | CheckpointV2 | CheckpointV3 | CheckpointV4 | CheckpointV5 | CheckpointV6 | CheckpointV7 | CheckpointV8 | CheckpointV9 | CheckpointV10 | CheckpointV11;
 function legacyPart(c: CheckpointV2): CheckpointV1 {
   const result = structuredClone(c) as unknown as Record<string, unknown>;
@@ -1185,18 +1185,28 @@ export class TownSimulation<C extends CheckpointV9|CheckpointV10|CheckpointV11=C
   if(tick>=s.shop.nextRestockTick){const intervals=Math.floor((tick-s.shop.nextRestockTick)/(TOWN_LIMITS.restockSeconds*hz))+1;s.shop.nextRestockTick+=intervals*TOWN_LIMITS.restockSeconds*hz;s.shop.stock.fruit=Math.min(8,s.shop.stock.fruit+intervals);s.shop.stock.bread=Math.min(8,s.shop.stock.bread+intervals);this.scene.revision++;}
  }
  protected setTownDoor(door:'home'|'shop',open:boolean,events:DeterministicEvent[],inputSequence?:number):boolean {if(!canChangeTownDoor(this.snapshot(),door,open)){this.emit(events,'TOWN_DOOR','town','rejected',{door,open,reason:'occupied_sweep'},inputSequence);return false;}const angle=townDoorTarget(this.snapshot(),door,open);if(this.town.doors[door]!==open||(door==='home'?this.town.doors.homeAngle:this.town.doors.shopAngle)!==angle){this.town.doors[door]=open;if(door==='home'){this.town.doors.homeAngle=angle;this.town.doors.slam=null;}else this.town.doors.shopAngle=angle;this.scene.revision++;townTimeline(this.town,this.data.tick,'door',open?'Door opened':'Door closed');this.emit(events,'TOWN_DOOR','town','changed',{door,open},inputSequence);}return true;}
+ protected currentTownCarePolicy():boolean{return false;}
+ protected hasAttendedTownHunger():boolean{return this.providerInternalSensations().some(p=>p.kind==='hunger');}
+ private returnReachableWithoutVisitor():boolean {const t=this.town.task!,world=this.snapshot();if(world.visit)world.visit={...world.visit,actor:null};world.town!.doors={...world.town!.doors,home:true,shop:true,homeAngle:townDoorTarget(world,'home',true),shopAngle:townDoorTarget(world,'shop',true),slam:null};return planTownRoute(this.data.character,t.homeAnchor,{canOccupy:p=>canOccupyTownCharacter(world,p.x,p.z),canSweep:(a,b)=>canSweepTownCharacter(world,a.x,a.z,b.x,b.z)}).status==='reachable';}
  protected retainedConsumedTownItemIds():readonly number[]{return [];}
  protected commitTownPurchase(purchaseId:number,good:'fruit'|'bread',events:DeterministicEvent[],inputSequence?:number):ReturnType<typeof purchaseTownItem>{const t=this.town,world=this.snapshot(),reachable=Math.hypot(this.data.character.x-TOWN_GEOMETRY.checkout.x,this.data.character.z-TOWN_GEOMETRY.checkout.z)<.45&&canSweepTownCharacter(world,this.data.character.x,this.data.character.z,TOWN_GEOMETRY.checkout.x,TOWN_GEOMETRY.checkout.z);const result=purchaseTownItem(t,{purchaseId,good},this.data.tick,this.home.resources.held!==null,reachable,null,this.retainedConsumedTownItemIds());this.emit(events,'SHOP_PURCHASE','shop',result.outcome,{purchaseId,good,itemId:result.itemId??0,price:result.price,balance:t.balance,stock:t.shop.stock[good],reason:result.reason},inputSequence);if(result.outcome==='purchased'){this.scene.revision++;townTimeline(t,this.data.tick,'purchased','Purchased food');}return result;}
  private townStage(stage:NonNullable<TownState['task']>['stage']):void{const t=this.town.task!;t.stage=stage;t.stageTicks=0;t.stageStartedTick=this.data.tick;t.route=[];t.routeCursor=0;t.replans=0;t.status='started';t.nextReplanTick=this.data.tick;}
- private failTown(reason:string,events:DeterministicEvent[]):void {const t=this.town.task!;t.reason=reason;this.town.nextOpportunityTick=this.data.tick+TOWN_LIMITS.opportunitySeconds*this.data.config.hz;townTimeline(this.town,this.data.tick,'failed','Shop trip unavailable: returning home');this.emit(events,'TOWN_ACTION_FAILED','town_action','failed',{actionId:t.id,reason,stage:t.stage});if(t.stage!=='return'&&Math.hypot(this.data.character.x-t.homeAnchor.x,this.data.character.z-t.homeAnchor.z)>.3){this.townStage('return');t.reason=reason;}else{t.status='failed';this.data.pauseUntilTick=this.data.tick+this.data.config.hz;}}
+ private failTown(reason:string,events:DeterministicEvent[]):void {const t=this.town.task!;
+  if(this.currentTownCarePolicy()&&reason==='route_unreachable'&&t.stage==='return'&&this.returnReachableWithoutVisitor()){
+   const first=t.reason!=='actor_blocked';t.status='interrupted';t.reason='actor_blocked';t.route=[];t.routeCursor=0;t.replans=0;t.nextReplanTick=this.data.tick+5*this.data.config.hz;this.data.character.moving=false;
+   if(first){townTimeline(this.town,this.data.tick,'interrupted','Return path occupied; waiting to retry');this.emit(events,'TOWN_RETURN_WAITING','town_navigation','interrupted',{actionId:t.id,reason:'actor_blocked'});}
+   this.emit(events,'TOWN_RETRY_SCHEDULED','town_navigation','waiting',{actionId:t.id,nextReplanTick:t.nextReplanTick});return;
+  }
+  t.reason=reason;this.town.nextOpportunityTick=this.data.tick+TOWN_LIMITS.opportunitySeconds*this.data.config.hz;townTimeline(this.town,this.data.tick,'failed','Shop trip unavailable: returning home');this.emit(events,'TOWN_ACTION_FAILED','town_action','failed',{actionId:t.id,reason,stage:t.stage});if(t.stage!=='return'&&Math.hypot(this.data.character.x-t.homeAnchor.x,this.data.character.z-t.homeAnchor.z)>.3){this.townStage('return');t.reason=reason;}else{t.status='failed';this.data.pauseUntilTick=this.data.tick+this.data.config.hz;}}
  private planTown(events:DeterministicEvent[]):boolean {const t=this.town.task!,world=this.snapshot(),target=t.stage==='return'?t.homeAnchor:t.target.anchor;
   // Plan a door-opening capability; execution still validates the actual leaf at every fixed step.
   world.town!.doors={...world.town!.doors,home:true,shop:true,homeAngle:townDoorTarget(world,'home',true),shopAngle:townDoorTarget(world,'shop',true),slam:null};const plan=planTownRoute(this.data.character,target,{canOccupy:p=>canOccupyTownCharacter(world,p.x,p.z),canSweep:(a,b)=>canSweepTownCharacter(world,a.x,a.z,b.x,b.z)});t.replans++;t.nextReplanTick=this.data.tick+this.data.config.hz;
-  if(plan.status!=='reachable'){if(t.replans>=3)this.failTown('route_unreachable',events);else{t.status='interrupted';t.reason='route_blocked';}return false;}t.route=plan.points;t.routeCursor=0;t.status='started';this.emit(events,'TOWN_ROUTE_PLANNED','town_navigation','reachable',{actionId:t.id,points:t.route.length,expanded:plan.expanded,distance:plan.distance,replans:t.replans});townTimeline(this.town,this.data.tick,'started',t.stage==='return'?'Returning home':t.stage==='explore'?'Walking to the visible exit':'Walking to the shop');return true;
+  if(plan.status!=='reachable'){if(t.replans>=3)this.failTown('route_unreachable',events);else{t.status='interrupted';t.reason='route_blocked';}return false;}t.route=plan.points;t.routeCursor=0;t.status='started';if(this.currentTownCarePolicy()&&['route_blocked','route_unreachable','actor_blocked'].includes(t.reason??''))t.reason=null;this.emit(events,'TOWN_ROUTE_PLANNED','town_navigation','reachable',{actionId:t.id,points:t.route.length,expanded:plan.expanded,distance:plan.distance,replans:t.replans});townTimeline(this.town,this.data.tick,'started',t.stage==='return'?'Returning home':t.stage==='explore'?'Walking to the visible exit':'Walking to the shop');return true;
  }
  private advanceTown(events:DeterministicEvent[]):void {
   const s=this.town,t=s.task!,tick=this.data.tick,hz=this.data.config.hz,a=this.attentionState();if(!this.body.active||!this.capableOfAction()||tick<a.commitmentUntilTick||tick<a.developerUntilTick){if(t.status!=='interrupted'){t.status='interrupted';townTimeline(s,tick,'interrupted','Shop activity interrupted');this.emit(events,'TOWN_ACTION_INTERRUPTED','town_action','interrupted',{actionId:t.id,reason:!this.body.active?'owner_disabled':!this.capableOfAction()?'physiological_incapacity':'attention_committed'});}return;}
   if(tick<t.nextReplanTick)return;
+  if(this.currentTownCarePolicy()&&t.stage==='consume'&&t.stageTicks===0&&!this.hasAttendedTownHunger()){t.status='failed';t.reason='awaiting_hunger';townTimeline(s,tick,'interrupted','Holding purchased food; no current hunger cue');this.emit(events,'TOWN_MEAL_DEFERRED','town_controller','waiting',{actionId:t.id,itemId:t.itemId??0,reason:'awaiting_hunger'});return;}
   if(['explore','outbound','return'].includes(t.stage)){
    if(!t.route.length){if(t.replans>=3){this.failTown('route_unreachable',events);return;}if(!this.planTown(events))return;}
    for(const door of ['home','shop'] as const){const p=door==='home'?{x:2.97,z:-3.53}:TOWN_GEOMETRY.shopDoor;if(!s.doors[door]&&!(door==='home'&&s.doors.slam)&&Math.hypot(this.data.character.x-p.x,this.data.character.z-p.z)<1.7)this.setTownDoor(door,true,events);}
@@ -1212,9 +1222,14 @@ export class TownSimulation<C extends CheckpointV9|CheckpointV10|CheckpointV11=C
  }
  protected override beforeMotorExecution(events:DeterministicEvent[]):void {
   if(this.town&&this.body.active){const s=this.town,tick=this.data.tick,hz=this.data.config.hz;
+   if(this.currentTownCarePolicy()&&s.task?.status==='failed'&&this.capableOfAction()&&!homeTaskBusy(this.home)&&this.activity.status!=='running'){
+    const task=s.task,held=s.items.some(i=>i.id===task.itemId&&i.owner==='lumi'&&i.consumedTick===null);
+    if(held&&task.stage==='consume'&&task.reason==='awaiting_hunger'&&this.hasAttendedTownHunger()&&this.home.posture.kind==='upright'){task.status='started';task.reason=null;task.nextReplanTick=tick;}
+    else if(held&&task.stage==='return'&&['route_blocked','route_unreachable','actor_blocked'].includes(task.reason??'')&&tick>=task.nextReplanTick&&this.returnReachableWithoutVisitor()){task.status='interrupted';task.reason='actor_blocked';task.route=[];task.routeCursor=0;task.replans=0;task.nextReplanTick=tick;}
+   }
    if(!townTaskBusy(s)&&!homeTaskBusy(this.home)&&this.home.posture.kind==='upright'&&this.capableOfAction()&&this.activity.status!=='running'&&tick>=s.nextOpportunityTick&&!this.home.resources.held&&!s.items.some(i=>i.owner==='lumi'&&i.consumedTick===null)){
     const severe=this.presentInternalSensations().some(c=>c.band==='severe');const target=s.known.filter(k=>(k.kind==='exit'||k.open===true)&&tick-k.attentionTick<=60*hz).sort((a,b)=>(a.kind==='shop'?-1:1)-(b.kind==='shop'?-1:1)||b.attentionTick-a.attentionTick||a.resourceId.localeCompare(b.resourceId))[0];
-    if(target&&!severe){beginTownTask(s,target,{x:this.data.character.x,z:this.data.character.z},tick);this.home.controller.searchPhase='idle';this.home.controller.searchOriginHeading=null;this.home.controller.searchActionId=null;this.home.controller.searchBodyTarget=null;this.home.controller.searchOrientation=0;this.home.controller.searchPose=0;this.head.status='idle';this.head.scan=null;this.head.activeActionId=null;this.head.observedAim=null;this.head.targetYaw=this.head.yaw;this.head.targetPitch=this.head.pitch;this.emit(events,'TOWN_GOAL_SELECTED','town_controller','selected',{actionId:s.task!.id,kind:target.kind,captureId:target.captureId,frameHash:target.frameHash,attentionTick:target.attentionTick,recognition:target.recognition});}
+    if(target&&!severe&&(!this.currentTownCarePolicy()||this.hasAttendedTownHunger())){beginTownTask(s,target,{x:this.data.character.x,z:this.data.character.z},tick);this.home.controller.searchPhase='idle';this.home.controller.searchOriginHeading=null;this.home.controller.searchActionId=null;this.home.controller.searchBodyTarget=null;this.home.controller.searchOrientation=0;this.home.controller.searchPose=0;this.head.status='idle';this.head.scan=null;this.head.activeActionId=null;this.head.observedAim=null;this.head.targetYaw=this.head.yaw;this.head.targetPitch=this.head.pitch;this.emit(events,'TOWN_GOAL_SELECTED','town_controller','selected',{actionId:s.task!.id,kind:target.kind,captureId:target.captureId,frameHash:target.frameHash,attentionTick:target.attentionTick,recognition:target.recognition});}
    }
    if(townTaskBusy(s))this.advanceTown(events);
   }
@@ -1269,6 +1284,10 @@ export class VisitSimulation<C extends CheckpointV10|CheckpointV11=CheckpointV10
   validateVisitCheckpoint(this.checkpoint());if(!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents Visit activation; existing state preserved');
  }
  protected override supportsVisitInputs():boolean{return true;}
+ protected currentVisitMotorPolicy():boolean{return false;}
+ protected visitSpawnPoint():{x:number;z:number}|null{return visitEntrance(this.snapshot());}
+ protected initialVisitHeading(point:{x:number;z:number}):number{void point;return 0;}
+ protected visitMovement(dx:number,dz:number):{x:number;z:number;distance:number}|null {const a=this.visit.actor!;return canSweepVisitActor(this.snapshot(),a.x,a.z,a.x+dx,a.z+dz)?{x:a.x+dx,z:a.z+dz,distance:Math.hypot(dx,dz)}:null;}
  override enqueue(command:NormalizedCommand):{input:OrderedInput;events:DeterministicEvent[]} {return command.type==='visit_stop'?this.enqueueSafetyStop(command):super.enqueue(command);}
  /** Exactly one bounded safety slot. Replays call this same enqueue path; no
   * socket/timer or unrecorded mutation is needed to stop an actor under load. */
@@ -1285,7 +1304,7 @@ export class VisitSimulation<C extends CheckpointV10|CheckpointV11=CheckpointV10
   if(input.admission==='queued'){if(existing){this.data.pendingInputs=this.data.pendingInputs.filter(i=>i.sequence!==existing.sequence);this.emit(events,'VISIT_STOP_SUPERSEDED','visit_control','superseded',{generation:normalized.generation,sequence:existing.sequence},input.sequence);}this.data.pendingInputs.push(structuredClone(input));}
   return {input:structuredClone(input),events};
  }
- private visitResult(type:VisitFeedback['type'],outcome:VisitFeedback['outcome'],reason:string,events:DeterministicEvent[],inputSequence?:number,actionId=this.visit.lastActionId):void {visitFeedback(this.visit,{actionId,type,outcome,reason,tick:this.data.tick});this.emit(events,'VISIT_ACTION','visit',outcome,{actionId,kind:type,reason,generation:this.visit.control.generation},inputSequence);}
+ private visitResult(type:VisitFeedback['type'],outcome:VisitFeedback['outcome'],reason:string,events:DeterministicEvent[],inputSequence?:number,actionId=this.visit.lastActionId):void {const prior=this.visit.feedback,repeatedBlock=this.currentVisitMotorPolicy()&&reason==='movement_blocked'&&prior?.type===type&&prior.outcome===outcome&&prior.reason===reason&&prior.actionId===actionId;if(!repeatedBlock)visitFeedback(this.visit,{actionId,type,outcome,reason,tick:this.data.tick});this.emit(events,'VISIT_ACTION','visit',outcome,{actionId,kind:type,reason,generation:this.visit.control.generation},inputSequence);}
  protected stopVisit(reason:VisitStopCommand['reason'],events:DeterministicEvent[],inputSequence?:number):void {const c=this.visit.control;c.forward=c.strafe=0;c.expiresTick=0;if(reason!=='timeout')c.status='parked';if(this.visit.actor)this.visit.actor.moving=false;this.visitResult('control','stopped',reason,events,inputSequence);this.emit(events,'VISIT_CONTROL_STOP','visit_control','stopped',{generation:c.generation,reason},inputSequence);}
  protected override setTownDoor(door:'home'|'shop',open:boolean,events:DeterministicEvent[],inputSequence?:number):boolean {
   const world=this.snapshot(),from=door==='home'?doorAngle(world):this.town.doors.shopAngle,preferred=townDoorTarget(world,door,open),angles=open?[preferred,-preferred]:[0];
@@ -1299,13 +1318,13 @@ export class VisitSimulation<C extends CheckpointV10|CheckpointV11=CheckpointV10
   const reason=this.visitScopeReason(c);if(reason){this.visitResult('control','rejected',reason,events,input.sequence);return true;}
   if(c.type==='visit_start'){
    if(c.generation!==control.generation+1){this.visitResult('control','rejected','stale_generation',events,input.sequence);return true;}
-   if(!this.visit.actor){const point=visitEntrance(this.snapshot());if(!point){this.visitResult('control','rejected','entrance_blocked',events,input.sequence);return true;}this.visit.actor={id:'owner-avatar-v1',appearance:'visitor-neutral-v1',...point,heading:0,pitch:0,moving:false,gait:0,heldItemId:null,spawnedTick:tick,distanceSinceFootstep:0};this.scene.revision++;this.emit(events,'VISITOR_ENTERED','visit','spawned',{actorId:this.visit.actor.id,x:point.x,z:point.z},input.sequence);}
+   if(!this.visit.actor){const point=this.visitSpawnPoint();if(!point){this.visitResult('control','rejected','entrance_blocked',events,input.sequence);return true;}this.visit.actor={id:'owner-avatar-v1',appearance:'visitor-neutral-v1',...point,heading:this.initialVisitHeading(point),pitch:0,moving:false,gait:0,heldItemId:null,spawnedTick:tick,distanceSinceFootstep:0};this.scene.revision++;this.emit(events,'VISITOR_ENTERED','visit','spawned',{actorId:this.visit.actor.id,x:point.x,z:point.z},input.sequence);}
    const a=this.visit.actor;control.generation=c.generation;control.lastSequence=0;control.status='active';control.runId=c.runId;control.forward=control.strafe=0;control.expiresTick=tick+Math.ceil(VISIT_LIMITS.inputLifetimeSeconds*this.data.config.hz);control.targetYaw=a.heading;control.targetPitch=a.pitch;a.moving=false;this.visitResult('control','accepted','control_acquired',events,input.sequence);return true;
   }
   if(c.type==='visit_stop'){this.stopVisit(c.reason,events,input.sequence);return true;}
   if(c.sequence<=control.lastSequence){this.visitResult('control','rejected','stale_sequence',events,input.sequence);return true;}
   if(c.type==='visit_control'){
-   if(c.expiresTick<=tick||c.expiresTick>input.receivedTick+Math.ceil(VISIT_LIMITS.inputLifetimeSeconds*this.data.config.hz)){this.visitResult('control','rejected','stale_input',events,input.sequence);return true;}
+   if((this.currentVisitMotorPolicy()?c.expiresTick<tick:c.expiresTick<=tick)||c.expiresTick>input.receivedTick+Math.ceil(VISIT_LIMITS.inputLifetimeSeconds*this.data.config.hz)){this.visitResult('control','rejected','stale_input',events,input.sequence);return true;}
    control.lastSequence=c.sequence;control.forward=c.forward;control.strafe=c.strafe;control.targetYaw=c.yaw;control.targetPitch=c.pitch;control.expiresTick=c.expiresTick;this.emit(events,'VISIT_CONTROL','visit_control','accepted',{generation:c.generation,sequence:c.sequence,expiresTick:c.expiresTick,forward:c.forward,strafe:c.strafe,yaw:c.yaw,pitch:c.pitch},input.sequence);return true;
   }
   control.lastSequence=c.sequence;if(c.actionId<=this.visit.lastActionId){this.visitResult(c.action,'rejected','duplicate_action',events,input.sequence,c.actionId);return true;}this.visit.lastActionId=c.actionId;
@@ -1319,7 +1338,7 @@ export class VisitSimulation<C extends CheckpointV10|CheckpointV11=CheckpointV10
    a.moving=false;if(c.status==='active'){
     const turn=Math.max(-VISIT_LIMITS.turnRadiansPerSecond/hz,Math.min(VISIT_LIMITS.turnRadiansPerSecond/hz,angleDifference(c.targetYaw,a.heading))),pitch=Math.max(-VISIT_LIMITS.pitchRadiansPerSecond/hz,Math.min(VISIT_LIMITS.pitchRadiansPerSecond/hz,c.targetPitch-a.pitch));a.heading=Math.atan2(Math.sin(a.heading+turn),Math.cos(a.heading+turn));a.pitch=Math.max(-.9,Math.min(.9,a.pitch+pitch));
     const length=Math.max(1,Math.hypot(c.forward,c.strafe)),forward=c.forward/length,strafe=c.strafe/length,dx=(forward*Math.sin(a.heading)-strafe*Math.cos(a.heading))*VISIT_LIMITS.speed/hz,dz=(forward*Math.cos(a.heading)+strafe*Math.sin(a.heading))*VISIT_LIMITS.speed/hz,distance=Math.hypot(dx,dz);
-    if(distance>0){if(canSweepVisitActor(this.snapshot(),a.x,a.z,a.x+dx,a.z+dz)){a.x+=dx;a.z+=dz;a.gait+=distance*8;a.moving=true;a.distanceSinceFootstep+=distance;this.scene.revision++;while(a.distanceSinceFootstep>=VISIT_LIMITS.footstepDistance){a.distanceSinceFootstep-=VISIT_LIMITS.footstepDistance;const sound={kind:'footstep' as const,id:this.data.nextSoundId++,time:tick/hz,x:a.x,y:.1,z:a.z,intensity:.12,suddenness:.18,sourceId:'visitor-footstep'};this.genericSoundCount++;const emitted=this.emit(events,'ACOUSTIC_EVENT','sound','emitted',{...sound,provenance:'WORLD_ACTION'});this.hear(sound,events,undefined,emitted.sequence);}}
+    if(distance>0){const moved=this.visitMovement(dx,dz);if(moved){a.x=moved.x;a.z=moved.z;a.gait+=moved.distance*8;a.moving=true;a.distanceSinceFootstep+=moved.distance;if(this.currentVisitMotorPolicy()&&this.visit.feedback?.reason==='movement_blocked')this.visitResult('control','accepted','movement_resumed',events);this.scene.revision++;while(a.distanceSinceFootstep>=VISIT_LIMITS.footstepDistance){a.distanceSinceFootstep-=VISIT_LIMITS.footstepDistance;const sound={kind:'footstep' as const,id:this.data.nextSoundId++,time:tick/hz,x:a.x,y:.1,z:a.z,intensity:.12,suddenness:.18,sourceId:'visitor-footstep'};this.genericSoundCount++;const emitted=this.emit(events,'ACOUSTIC_EVENT','sound','emitted',{...sound,provenance:'WORLD_ACTION'});this.hear(sound,events,undefined,emitted.sequence);}}
      else{c.forward=c.strafe=0;this.emit(events,'VISIT_MOVEMENT_BLOCKED','visit_control','blocked',{generation:c.generation,x:a.x,z:a.z});this.visitResult('control','rejected','movement_blocked',events);}}
    }
   }
@@ -1337,7 +1356,7 @@ function socialVisitPart(cp:CheckpointV11):CheckpointV10 {
  raw.pendingInputs=cp.pendingInputs.map(i=>({...i,command:i.command.type.startsWith('social_')?{type:'invalid',reason:'unknown_command'}:i.command}));return validateVisitCheckpoint(raw);
 }
 export function validateSocialCheckpoint(value:unknown):CheckpointV11 {
- const cp=value as CheckpointV11;if(cp?.schemaVersion!==11||cp.rulesVersion!==SOCIAL_RULES)fail('social schema/rules');
+ const cp=value as CheckpointV11;if(cp?.schemaVersion!==11||![SOCIAL_RULES,LEGACY_SOCIAL_RULES].includes(cp.rulesVersion)||cp.social?.rulesVersion!==cp.rulesVersion)fail('social schema/rules');
  const base=socialVisitPart(cp);object(cp,[...Object.keys(base).filter(k=>k!=='schemaVersion'&&k!=='rulesVersion'),'schemaVersion','rulesVersion','social'],'social root');validateSocialState(cp.social,cp.tick,cp.config.hz);
  for(const i of cp.pendingInputs)validateCommand(i.command,true,true,true,true,true,true,true,true);
  const s=cp.social,o=s.offer,actor=cp.visit.actor,item=o?cp.town.items.find(i=>i.id===o.itemId):null;
@@ -1349,12 +1368,18 @@ export function validateSocialCheckpoint(value:unknown):CheckpointV11 {
 }
 export class SocialSimulation extends VisitSimulation<CheckpointV11> {
  protected social!:SocialState;
+ private readonly socialRules:SocialRulesVersion;
  constructor(options:ConstructorParameters<typeof VisitSimulation>[0]) {
   const source=options.checkpoint===undefined?null:validateCheckpoint(options.checkpoint),saved=source?.schemaVersion===11?source:null;
-  super({...options,checkpoint:saved?socialVisitPart(saved):source??undefined});this.social=saved?structuredClone(saved.social):createSocialState(this.data.tick);if(saved)this.data.pendingInputs=structuredClone(saved.pendingInputs);
+  super({...options,checkpoint:saved?socialVisitPart(saved):source??undefined});this.socialRules=options.historical&&saved?saved.rulesVersion:SOCIAL_RULES;this.social=saved?structuredClone(saved.social):createSocialState(this.data.tick);this.social.rulesVersion=this.socialRules;if(saved)this.data.pendingInputs=structuredClone(saved.pendingInputs);
   validateSocialCheckpoint(this.checkpoint());if(!fitsCognitionStorage(this.checkpoint()))throw new Error('Checkpoint capacity prevents social activation; existing state preserved');
  }
  protected override supportsSocialInputs():boolean{return true;}
+ protected override currentTownCarePolicy():boolean{return this.socialRules===SOCIAL_RULES;}
+ protected override currentVisitMotorPolicy():boolean{return this.socialRules===SOCIAL_RULES;}
+ protected override visitMovement(dx:number,dz:number):{x:number;z:number;distance:number}|null{return this.currentVisitMotorPolicy()?slideVisitMovement(this.snapshot(),dx,dz):super.visitMovement(dx,dz);}
+ protected override initialVisitHeading(point:{x:number;z:number}):number{return this.currentVisitMotorPolicy()?Math.atan2(2.97-point.x,-3.53-point.z):super.initialVisitHeading(point);}
+ protected override visitSpawnPoint():{x:number;z:number}|null {if(!this.currentVisitMotorPolicy())return super.visitSpawnPoint();const task=townTaskBusy(this.town)?this.town.task:homeTaskBusy(this.home)?this.home.task:null,route=task?.route.slice(task.routeCursor)??[],points=[{x:this.data.character.x,z:this.data.character.z},...route],segments=points.slice(1).map((to,i)=>({from:points[i],to}));return visitLoungeEntrance(this.snapshot(),segments);}
  /** Keep at most the active terminal offer and eating-action receipts, never an
   * accumulating gift history. A later offer/action releases its old reference. */
  protected override retainedConsumedTownItemIds():readonly number[]{return [...new Set([this.social?.offer?.status==='accepted'?this.social.offer.itemId:null,this.social?.giftUse?.itemId??null].filter((id):id is number=>id!==null))];}
@@ -1415,6 +1440,6 @@ export class SocialSimulation extends VisitSimulation<CheckpointV11> {
  }
  socialState():SocialState{return structuredClone(this.social);}
  override experienceRecords():Experience[]{return [...super.experienceRecords(),...structuredClone(this.social?.experiences??[])];}
- override snapshot():WorldState{return {...super.snapshot(),...(this.social?{social:socialPublicView(this.social)}:{})};}
- override checkpoint():CheckpointV11 {const base=super.checkpoint();return this.social?{...base,schemaVersion:11,rulesVersion:SOCIAL_RULES,social:structuredClone(this.social)}:base;}
+ override snapshot():WorldState{return {...super.snapshot(),...(this.social?{social:socialPublicView(this.social),...(this.currentTownCarePolicy()?{town:townPublicView(this.town,this.data.config.hz,true)}:{})}:{})};}
+ override checkpoint():CheckpointV11 {const base=super.checkpoint();return this.social?{...base,schemaVersion:11,rulesVersion:this.socialRules,social:structuredClone(this.social)}:base;}
 }

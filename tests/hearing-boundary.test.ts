@@ -120,7 +120,7 @@ test('active attention-v1 upgrade preserves complete state and queued feedback, 
     const archive='pre-attention-rules-v1-'+manifest.latest.file;assert.ok((await readdir(store.directory)).includes(archive));
     const payload=JSON.parse(await readFile(join(store.directory,archive),'utf8'));assert.equal(hashRuntimeCheckpoint(payload.checkpoint),hashRuntimeCheckpoint(envelope));
     await active.recorder!.flush();const migrated=(await readRun(active.recorder!.runDirectory)).records.find(r=>r.event_type==='STATE_RULES_MIGRATED');
-    assert.equal(migrated?.data.fromRules,'lumi-attention-v1');assert.equal(migrated?.data.toRules,'lumi-social-v1');
+    assert.equal(migrated?.data.fromRules,'lumi-attention-v1');assert.equal(migrated?.data.toRules,'lumi-social-v2');
     assert.equal(replay(old,[],old.tick).checkpoint.rulesVersion,'lumi-attention-v1');
   }finally{await active.close();}
 });
