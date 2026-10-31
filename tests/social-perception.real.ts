@@ -10,7 +10,7 @@ import { CaptureManager } from '../server/vision/capture-manager.js';
 import { AutomaticCaptureCoordinator } from '../server/vision/auto-capture.js';
 
 test('actual badge RGB distinguishes unverified claim, hidden/dark/off-view cues and an unattended readable cue', async () => {
-  const directory=resolve('diagnostics/social-increment3/negative-eyes');await mkdir(directory,{recursive:true});
+  const directory=resolve(process.env.LUMI_SOCIAL_PERCEPTION_OUT??'diagnostics/social-increment3/negative-eyes');await mkdir(directory,{recursive:true});
   const manager=new CaptureManager(()=>true,new ChromiumRenderer());const reports:unknown[]=[];
   try {
     for(const name of ['unverified','hidden','dark','outside_view','unattended','stale_snapshot'] as const){
@@ -19,6 +19,10 @@ test('actual badge RGB distinguishes unverified claim, hidden/dark/off-view cues
       source.enqueue({type:'social_badge',runId:source.state.runId,generation:1,sequence:1,actionId:1,display:true});source.step();
       const seed=source.checkpoint();seed.character.x=0;seed.character.z=0;seed.character.heading=name==='outside_view'?0:Math.PI;
       seed.visit.actor!.x=name==='hidden'?2.97:0;seed.visit.actor!.z=name==='hidden'?-6.5:-1.75;
+      // This labelled pose fixture presents the front-mounted badge to Lumi.
+      // Set the controller target too, so fixed steps retain the chosen pose
+      // rather than turning back toward the new lounge spawn's exit heading.
+      seed.visit.actor!.heading=seed.visit.control.targetYaw=0;
       seed.head.yaw=seed.head.targetYaw=0;seed.head.pitch=seed.head.targetPitch=-.55;seed.head.status='idle';seed.pauseUntilTick=100000;seed.home.controller.searchNextTick=100000;
       if(name==='dark')seed.scene.illumination=0;if(name==='unverified')seed.social.badge.kind='unverified_claim';
       const runtime=new BranchRuntime({worldId:'social-eye',branchId:name,mode:'EXPERIMENT',checkpoint:seed,directory:join(directory,'runs')});

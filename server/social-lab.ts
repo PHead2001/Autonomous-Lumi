@@ -10,7 +10,7 @@ import { CaptureManager } from './vision/capture-manager.js';
 import { ChromiumRenderer } from './vision/renderer.js';
 import { AutomaticCaptureCoordinator } from './vision/auto-capture.js';
 import { canOccupyVisitActor, canSweepVisitActor } from '../shared/visit-geometry.js';
-import { TOWN_GEOMETRY } from '../shared/town-geometry.js';
+import { canChangeTownDoor, TOWN_GEOMETRY } from '../shared/town-geometry.js';
 import { VISIT_LIMITS } from '../shared/visit-protocol.js';
 import { planTownRoute, planHomeRoute } from './home-navigation.js';
 import { exportIncident, replayBundle } from './diagnostics/bundle.js';
@@ -69,7 +69,11 @@ export async function runSocialLab(options:SocialLabOptions) {
   };
   try {
     runtime.applyControl({type:'pause'});runtime.enqueueVisit({type:'visit_start',runId:runtime.target.runId,generation:1});await advance(1);
-    await walk({x:3.76,z:2.72});await walk({x:3.76,z:-2.56});await walk({x:3.12,z:-2.56});await interact('door','home');await walk({x:3.12,z:-5.8});
+    // Open from the clear right-hand approach, before entering the leaf's
+    // reserved sweep. The threshold waypoint itself is safe only once open.
+    await walk({x:3.76,z:2.72});await walk({x:3.76,z:-2.2});
+    assert.ok(canChangeTownDoor(runtime.viewerState(),'home',true),'owner door approach leaves the full physical swing clear');
+    await interact('door','home');await walk({x:3.76,z:-2.56});await walk({x:3.12,z:-2.56});await walk({x:3.12,z:-5.8});
     await walk({x:2.97,z:-8.1});await interact('door','shop');await walk(TOWN_GEOMETRY.checkout);await interact('purchase','fruit');
     const purchased=cp();assert.equal(purchased.visit.balance,17);assert.equal(purchased.town.items.filter(item=>item.owner==='owner'&&item.consumedTick===null).length,1);
     await walk({x:3.12,z:-2.56});await walk({x:0,z:-1.75});await face(0);await control();

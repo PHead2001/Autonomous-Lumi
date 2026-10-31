@@ -193,3 +193,29 @@ The final normal refresh/re-entry preserved the same owner, fruit ×1, 17 credit
 The long normal-browser archive, `diagnostics/review-fixes-v2/browser-final-incomplete.zip`, is **INCOMPLETE for two separate reasons**: normal retention evicted **105,442 records**, and the recorder accumulated **18 real writer failures**. Its export retained 2,996 records through sequence 108,438 with zero dropped records. Later inspection found contiguous retained sequences, advancing checkpoint/metadata writes and a failure counter still at 18. The persisted error is only `diagnostic_write_failed`; no sanitized errno or failing operation stage was retained, so the **exact cause remains unverified**. Internal readers/writers share the directory lock; external-reader or other transient I/O interference is a hypothesis, not a diagnosis or resolved fix. This archive does not establish exact replay acceptance and must not be described as incomplete solely because of retention. Its operational limitation is separate from the three COMPLETE focused V2 artifacts above; no speculative I/O patch or logging framework was added.
 
 The canonical owner app remains stopped at the user's request, with its V1 source generation 2,292 untouched. Offline V1→V2 preservation preflight changed only the matching root/social rules labels and retained every prior field exactly; projected capacity was **1,512,018 / 2,097,152 bytes**. This is preservation/capacity evidence, not runtime activation. Corrective validation used disposable isolated fixtures; no owner login, first meeting, provider call or ordinary-port restart occurred in this follow-up.
+
+### Follow-up review: social evidence fixtures after the lounge-spawn change
+
+Both reported evidence regressions were reproduced before correction: the social lab rejected its home-door interaction as `occupied_sweep`, and the actual badge renderer test failed its expected unverified encounter (`0 !== 1`). Production door collision and perception rules were correct. The lab now opens the door from the clear right-hand approach `(3.76, −2.2)` before entering the threshold, with an explicit full-sweep-clear assertion. The labelled badge-pose fixture sets both actor heading and control target yaw toward Lumi, rather than inheriting the new exit-facing spawn heading. No production logic, recognition threshold or experience-admission rule changed.
+
+Current checks under `diagnostics/new-review-social/`: **464/464 tests PASS** (89.844 seconds), global lint **PASS**, build/typecheck **PASS**, and the actual GPU badge test **PASS** across all six existing positive/negative cases. Both actual-renderer social labs pass purchase, voluntary response, anonymous encounter, separate creator recognition, acceptance-before-consumption and once-only intake/retained-item assertions. Both exports are **COMPLETE**, make **zero provider calls**, and pass independent CLI exact replay. The canonical app stayed stopped; no owner credentials, saved world or first meeting was used. These are disposable fixture checks, not a repeat logged-in browser or audio walkthrough.
+
+```powershell
+npm.cmd run social:lab -- --scenario accept --out diagnostics/new-review-social/accept.zip
+npm.cmd run social:lab -- --scenario decline --out diagnostics/new-review-social/decline.zip
+$env:LUMI_SOCIAL_PERCEPTION_OUT='diagnostics/new-review-social/negative-eyes'
+npx.cmd tsx --test tests/social-perception.real.ts
+Remove-Item Env:LUMI_SOCIAL_PERCEPTION_OUT
+npm.cmd run replay -- --bundle diagnostics/new-review-social/accept.zip
+npm.cmd run replay -- --bundle diagnostics/new-review-social/decline.zip
+npm.cmd test
+npm.cmd run lint
+npm.cmd run build
+```
+
+`LUMI_SOCIAL_PERCEPTION_OUT` changes only the diagnostic image/report directory; it does not alter simulation or renderer settings. Omitting it preserves the previous default output path. Fresh runs use new run identities, so compare replay hashes within the generated bundle rather than expecting a new run to reproduce these identity-dependent hashes.
+
+| Current artifact | Tick / inputs / events | State hash | Event hash | Runtime hash |
+| --- | --- | --- | --- | --- |
+| `accept.zip` | 645 / 107 / 523 | `28b3fa44e731a091639b153dee736f212eb391e2a0f97f24cfd9bc184b09e9ee` | `8b924be957fb42360e3e2d470e31505e1d2507d06528cc4b6f09ccb852b25a03` | `ace4405b59b221b8bbb129a75e5bb5c5133c581981b1e365721d48bc29931e03` |
+| `decline.zip` | 613 / 107 / 515 | `8da4c07082bda1eb736c0001e17fe895d0d4e763339f716d0cd11aa0e5d7150c` | `f8d757c891617d7f3ecea19e1b9b185d43fc2a207e542a7141b1b24a64fac2f1` | `210adc048a51f7648f1a1e0ab0c5898d25c5d344b965ef330d1756a787e53158` |
